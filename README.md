@@ -78,6 +78,7 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
 - Check outdated dependencies:
   - Windows: `scripts\check_updates.bat`
   - Linux/macOS: `./scripts/check_updates.sh`
+- Update check scripts report both Python package updates and GOV.UK frontend pinned/installed/latest versions.
 
 ## Dependency files
 
