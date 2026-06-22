@@ -106,11 +106,20 @@
       <div class="govuk-grid-row">
         <div class="govuk-grid-column-one-half">
           <div class="govuk-form-group">
-            <label class="govuk-label" for="user-role">Role</label>
-            <select id="user-role" name="role" class="govuk-select">
-              <option value="borrower">borrower</option>
-              <option value="administrator">administrator</option>
-            </select>
+            <fieldset class="govuk-fieldset" aria-describedby="user-roles-hint">
+              <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">Roles</legend>
+              <div id="user-roles-hint" class="govuk-hint">Select one or more roles.</div>
+              <div class="govuk-checkboxes" data-module="govuk-checkboxes">
+                <div class="govuk-checkboxes__item">
+                  <input id="user-role-borrower" name="roles" class="govuk-checkboxes__input" type="checkbox" value="borrower" checked>
+                  <label class="govuk-label govuk-checkboxes__label" for="user-role-borrower">borrower</label>
+                </div>
+                <div class="govuk-checkboxes__item">
+                  <input id="user-role-administrator" name="roles" class="govuk-checkboxes__input" type="checkbox" value="administrator">
+                  <label class="govuk-label govuk-checkboxes__label" for="user-role-administrator">administrator</label>
+                </div>
+              </div>
+            </fieldset>
           </div>
         </div>
         <div class="govuk-grid-column-one-half">
@@ -164,11 +173,20 @@
       <div class="govuk-grid-row">
         <div class="govuk-grid-column-one-half">
           <div class="govuk-form-group">
-            <label class="govuk-label" for="edit-user-role">Role</label>
-            <select id="edit-user-role" name="role" class="govuk-select">
-              <option value="borrower">borrower</option>
-              <option value="administrator">administrator</option>
-            </select>
+            <fieldset class="govuk-fieldset" aria-describedby="edit-user-roles-hint">
+              <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">Roles</legend>
+              <div id="edit-user-roles-hint" class="govuk-hint">Select one or more roles.</div>
+              <div class="govuk-checkboxes" data-module="govuk-checkboxes">
+                <div class="govuk-checkboxes__item">
+                  <input id="edit-user-role-borrower" name="roles" class="govuk-checkboxes__input" type="checkbox" value="borrower" checked>
+                  <label class="govuk-label govuk-checkboxes__label" for="edit-user-role-borrower">borrower</label>
+                </div>
+                <div class="govuk-checkboxes__item">
+                  <input id="edit-user-role-administrator" name="roles" class="govuk-checkboxes__input" type="checkbox" value="administrator">
+                  <label class="govuk-label govuk-checkboxes__label" for="edit-user-role-administrator">administrator</label>
+                </div>
+              </div>
+            </fieldset>
           </div>
         </div>
         <div class="govuk-grid-column-one-half">
@@ -316,6 +334,49 @@
           </tr>
         </thead>
         <tbody class="govuk-table__body" id="audit-table-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="govuk-!-margin-top-8" aria-labelledby="loans-heading">
+    <h2 id="loans-heading" class="govuk-heading-l">Loans</h2>
+    <p class="govuk-body">Loan an available jigsaw to an active borrower account.</p>
+    <form id="loan-create-form" class="govuk-!-margin-bottom-4">
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="loan-borrower-user-id">Borrower</label>
+            <select id="loan-borrower-user-id" name="borrower_user_id" class="govuk-select" required>
+              <option value="">Choose borrower</option>
+            </select>
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="loan-jigsaw-id">Available jigsaw</label>
+            <select id="loan-jigsaw-id" name="jigsaw_id" class="govuk-select" required>
+              <option value="">Choose available jigsaw</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <button type="submit" class="govuk-button" data-module="govuk-button">Create loan</button>
+    </form>
+
+    <div class="table-scroll-wrap">
+      <table class="govuk-table" id="loans-table">
+        <caption class="govuk-table__caption govuk-table__caption--m">Current loans</caption>
+        <thead class="govuk-table__head">
+          <tr class="govuk-table__row">
+            <th class="govuk-table__header">ID</th>
+            <th class="govuk-table__header">Borrower</th>
+            <th class="govuk-table__header">Jigsaw</th>
+            <th class="govuk-table__header">Checked out</th>
+            <th class="govuk-table__header">Due</th>
+            <th class="govuk-table__header">Status</th>
+          </tr>
+        </thead>
+        <tbody class="govuk-table__body" id="loans-table-body"></tbody>
       </table>
     </div>
   </section>

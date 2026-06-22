@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 from functools import wraps
 
@@ -7,8 +8,9 @@ from flask import Blueprint, current_app, g, request, session
 from sqlalchemy import select
 
 from app.db import get_session
-from app.models import AuditEvent, Jigsaw, Role, User, UserRole
+from app.models import AuditEvent, Jigsaw, Loan, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
+from app.models.loan import LoanStatus
 
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
@@ -18,6 +20,7 @@ USER_EMAIL_MAX_LENGTH = 255
 DISPLAY_NAME_MAX_LENGTH = 255
 PASSWORD_MAX_LENGTH = 256
 PASSWORD_MIN_LENGTH = 12
+DEFAULT_LOAN_DURATION_DAYS = 28
 
 
 def _success_response(data, status_code=200):
@@ -84,6 +87,18 @@ def _serialize_audit_event(event):
     }
 
 
+def _serialize_loan(loan):
+    return {
+        "id": loan.id,
+        "borrower_user_id": loan.borrower_user_id,
+        "jigsaw_id": loan.jigsaw_id,
+        "checked_out_at": loan.checked_out_at.isoformat() if loan.checked_out_at else None,
+        "due_at": loan.due_at.isoformat() if loan.due_at else None,
+        "returned_at": loan.returned_at.isoformat() if loan.returned_at else None,
+        "status": loan.status.value,
+    }
+
+
 def _record_audit_event(action, entity_type, entity_id, payload=None):
     db_session = get_session()
     forwarded_chain = request.headers.get("Forwarded") or request.headers.get("X-Forwarded-For")
@@ -139,6 +154,35 @@ def _validate_email(value, field_name="email"):
             "Invalid request payload.",
             422,
             [{"field": field_name, "issue": "must be a valid email address"}],
+        )
+
+    return normalized_email, None
+
+
+def _validate_login_email(value):
+    if not isinstance(value, str) or not value.strip():
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "email", "issue": "must be a non-empty string"}],
+        )
+
+    normalized_email = value.strip().lower()
+    if len(normalized_email) > USER_EMAIL_MAX_LENGTH:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "email", "issue": f"must be {USER_EMAIL_MAX_LENGTH} characters or fewer"}],
+        )
+
+    if _contains_control_characters(normalized_email):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "email", "issue": "contains unsupported control characters"}],
         )
 
     return normalized_email, None
@@ -355,6 +399,18 @@ def _parse_jigsaw_status(raw_status):
     return status, None
 
 
+def _parse_positive_integer(value, field_name):
+    if not isinstance(value, int) or value <= 0:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be a positive integer"}],
+        )
+
+    return value, None
+
+
 @api_v1_bp.get("/health")
 def health_check():
     payload = {
@@ -370,7 +426,7 @@ def auth_login():
     if error is not None:
         return error
 
-    email, error = _validate_email(payload.get("email"))
+    email, error = _validate_login_email(payload.get("email"))
     if error is not None:
         return error
 
@@ -761,6 +817,90 @@ def list_jigsaws():
     jigsaws = db_session.execute(stmt.order_by(Jigsaw.id)).scalars().all()
     payload = [_serialize_jigsaw(jigsaw) for jigsaw in jigsaws]
     return _success_response(payload)
+
+
+@api_v1_bp.get("/loans")
+@require_role("administrator")
+def list_loans():
+    db_session = get_session()
+    loans = db_session.execute(select(Loan).order_by(Loan.id.desc())).scalars().all()
+    payload = [_serialize_loan(loan) for loan in loans]
+    return _success_response(payload)
+
+
+@api_v1_bp.post("/loans")
+@require_role("administrator")
+def create_loan():
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    borrower_user_id, error = _parse_positive_integer(payload.get("borrower_user_id"), "borrower_user_id")
+    if error is not None:
+        return error
+
+    jigsaw_id, error = _parse_positive_integer(payload.get("jigsaw_id"), "jigsaw_id")
+    if error is not None:
+        return error
+
+    db_session = get_session()
+    borrower = db_session.get(User, borrower_user_id)
+    if borrower is None:
+        return _error_response("not_found", "Borrower was not found.", 404)
+
+    if not borrower.is_active:
+        return _error_response("conflict", "Borrower account is inactive.", 409)
+
+    borrower_roles = _get_role_names_for_user_id(borrower.id)
+    if "borrower" not in borrower_roles and "administrator" not in borrower_roles:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "borrower_user_id", "issue": "must reference a borrower or administrator user"}],
+        )
+
+    jigsaw = db_session.get(Jigsaw, jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+
+    if jigsaw.status != JigsawStatus.AVAILABLE:
+        return _error_response("conflict", "Jigsaw is not available for loan.", 409)
+
+    existing_active_loan = db_session.execute(
+        select(Loan).where(Loan.jigsaw_id == jigsaw.id, Loan.status.in_([LoanStatus.ACTIVE, LoanStatus.OVERDUE]))
+    ).scalar_one_or_none()
+    if existing_active_loan is not None:
+        return _error_response("conflict", "Jigsaw already has an active loan.", 409)
+
+    checked_out_at = datetime.now(timezone.utc)
+    due_at = checked_out_at + timedelta(days=DEFAULT_LOAN_DURATION_DAYS)
+
+    loan = Loan(
+        borrower_user_id=borrower.id,
+        jigsaw_id=jigsaw.id,
+        checked_out_at=checked_out_at,
+        due_at=due_at,
+        status=LoanStatus.ACTIVE,
+    )
+    db_session.add(loan)
+    jigsaw.status = JigsawStatus.ON_LOAN
+    db_session.flush()
+
+    _record_audit_event(
+        action="loan.created",
+        entity_type="loan",
+        entity_id=loan.id,
+        payload={
+            "borrower_user_id": borrower.id,
+            "jigsaw_id": jigsaw.id,
+            "checked_out_at": loan.checked_out_at.isoformat(),
+            "due_at": loan.due_at.isoformat(),
+        },
+    )
+    db_session.commit()
+
+    return _success_response(_serialize_loan(loan), status_code=201)
 
 
 @api_v1_bp.post("/jigsaws")

@@ -103,10 +103,17 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#account-form button[type='submit']")
         page.wait_for_selector("text=Account updated.")
 
+        long_email = f"{'a' * 250}@example.com"
+        page.fill("#user-email", long_email)
+        page.fill("#user-display-name", "Too Long Email")
+        page.fill("#user-password", "TooLongEmailPass123!")
+        page.click("#user-create-form button[type='submit']")
+        page.wait_for_selector("text=Invalid request payload. email: must be 255 characters or fewer")
+
         page.fill("#user-email", "ui.user@example.com")
         page.fill("#user-display-name", "UI User")
         page.fill("#user-password", "UiUserPassword123!")
-        page.select_option("#user-role", "borrower")
+        page.check("#user-role-administrator")
         with page.expect_response("**/api/v1/users") as create_user_response_info:
             page.click("#user-create-form button[type='submit']")
 
@@ -115,6 +122,7 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
 
         page.wait_for_selector("text=User created.")
         page.wait_for_selector("text=ui.user@example.com")
+        page.wait_for_selector("#users-table-body tr:has-text('ui.user@example.com'):has-text('administrator, borrower')")
 
         page.locator("#users-table-body tr", has_text="ui.user@example.com").locator("button[data-user-edit]").click()
         assert page.locator("#user-edit-form").is_visible()
@@ -127,6 +135,7 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#user-edit-form button[type='submit']")
         page.wait_for_selector("text=User updated.")
         page.wait_for_selector("text=UI User Edited")
+        page.wait_for_selector("#users-table-body tr:has-text('ui.user@example.com'):has-text('administrator, borrower')")
 
         page.fill("#jigsaw-title", "UI Smoke Puzzle")
         page.fill("#jigsaw-piece-count", "500")
@@ -135,6 +144,22 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
 
         page.wait_for_selector("text=Jigsaw created.")
         page.wait_for_selector("text=UI Smoke Puzzle")
+
+        borrower_options = page.locator("#loan-borrower-user-id option")
+        assert borrower_options.filter(has_text="admin@example.com").count() >= 1
+
+        borrower_option_value = borrower_options.filter(has_text="admin@example.com").first.get_attribute("value")
+        jigsaw_option_value = page.locator("#loan-jigsaw-id option").nth(1).get_attribute("value")
+        assert borrower_option_value
+        assert jigsaw_option_value
+
+        page.select_option("#loan-borrower-user-id", borrower_option_value)
+        page.select_option("#loan-jigsaw-id", jigsaw_option_value)
+        page.click("#loan-create-form button[type='submit']")
+
+        page.wait_for_selector("text=Loan created.")
+        page.wait_for_selector("#loans-table-body tr")
+        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("text=on_loan").count() >= 1
 
         page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("button[data-jigsaw-edit]").click()
         assert page.locator("#jigsaw-edit-form").is_visible()

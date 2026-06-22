@@ -36,6 +36,8 @@
 - `PATCH /api/v1/users/{id}`
 - `GET /api/v1/roles`
 - `GET /api/v1/audit-events`
+- `GET /api/v1/loans`
+- `POST /api/v1/loans`
 
 ## Filtering, Sorting, Pagination
 
@@ -139,6 +141,18 @@
 - Audit endpoint notes:
   - `GET /api/v1/audit-events` is admin-only.
   - Optional query param `limit` must be an integer from `1` to `200` (default `50`).
+
+- Loan endpoint notes:
+  - `GET /api/v1/loans` is admin-only in the initial administrative rollout.
+  - `POST /api/v1/loans` is admin-only in the initial administrative rollout.
+  - `POST /api/v1/loans` request body requires:
+    - `borrower_user_id` (positive integer)
+    - `jigsaw_id` (positive integer)
+  - `borrower_user_id` may reference an active user with `borrower` or `administrator` role.
+  - Loan checkout sets `checked_out_at` to current UTC time.
+  - Loan checkout sets `due_at` to four weeks (28 days) after `checked_out_at`.
+  - Loan checkout returns `409` when the target jigsaw is not currently available.
+  - Loan checkout updates jigsaw status to `on_loan`.
 
 ## HTTP Status Rules
 

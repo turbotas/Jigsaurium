@@ -4,6 +4,7 @@
     user: null,
     users: [],
     jigsaws: [],
+    loans: [],
   };
 
   const elements = {
@@ -29,7 +30,10 @@
     editUserId: document.getElementById("edit-user-id"),
     editUserEmail: document.getElementById("edit-user-email"),
     editUserDisplayName: document.getElementById("edit-user-display-name"),
-    editUserRole: document.getElementById("edit-user-role"),
+    userRoleBorrower: document.getElementById("user-role-borrower"),
+    userRoleAdministrator: document.getElementById("user-role-administrator"),
+    editUserRoleBorrower: document.getElementById("edit-user-role-borrower"),
+    editUserRoleAdministrator: document.getElementById("edit-user-role-administrator"),
     editUserActive: document.getElementById("edit-user-active"),
     editUserPassword: document.getElementById("edit-user-password"),
     usersTableBody: document.getElementById("users-table-body"),
@@ -44,6 +48,10 @@
     editJigsawStatus: document.getElementById("edit-jigsaw-status"),
     editJigsawTags: document.getElementById("edit-jigsaw-tags"),
     jigsawsTableBody: document.getElementById("jigsaws-table-body"),
+    loanCreateForm: document.getElementById("loan-create-form"),
+    loanBorrowerUserId: document.getElementById("loan-borrower-user-id"),
+    loanJigsawId: document.getElementById("loan-jigsaw-id"),
+    loansTableBody: document.getElementById("loans-table-body"),
     auditTableBody: document.getElementById("audit-table-body"),
   };
 
@@ -89,7 +97,16 @@
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const message = payload?.error?.message || "Request failed.";
+      const details = Array.isArray(payload?.error?.details) ? payload.error.details : [];
+      const detailMessage = details
+        .map((entry) => {
+          const field = typeof entry?.field === "string" && entry.field ? entry.field : "payload";
+          const issue = typeof entry?.issue === "string" && entry.issue ? entry.issue : "is invalid";
+          return `${field}: ${issue}`;
+        })
+        .join("; ");
+      const baseMessage = payload?.error?.message || "Request failed.";
+      const message = detailMessage ? `${baseMessage} ${detailMessage}` : baseMessage;
       const error = new Error(message);
       error.status = response.status;
       error.payload = payload;
@@ -133,6 +150,83 @@
     return cell;
   }
 
+  function toLocalTimestamp(value) {
+    if (!value) {
+      return "-";
+    }
+
+    const parsedDate = new Date(value);
+    if (Number.isNaN(parsedDate.valueOf())) {
+      return "-";
+    }
+
+    return parsedDate.toLocaleString();
+  }
+
+  function getSelectedRoles(formData) {
+    return formData
+      .getAll("roles")
+      .map((value) => String(value || "").trim())
+      .filter((value, index, values) => value && values.indexOf(value) === index);
+  }
+
+  function populateLoanFormOptions() {
+    if (!elements.loanBorrowerUserId || !elements.loanJigsawId) {
+      return;
+    }
+
+    const currentBorrowerId = elements.loanBorrowerUserId.value;
+    const currentJigsawId = elements.loanJigsawId.value;
+
+    elements.loanBorrowerUserId.innerHTML = "";
+    elements.loanJigsawId.innerHTML = "";
+
+    const borrowerPlaceholder = document.createElement("option");
+    borrowerPlaceholder.value = "";
+    borrowerPlaceholder.textContent = "Choose borrower";
+    elements.loanBorrowerUserId.appendChild(borrowerPlaceholder);
+
+    const borrowers = state.users
+      .filter(
+        (user) =>
+          Boolean(user.is_active) &&
+          Array.isArray(user.roles) &&
+          (user.roles.includes("borrower") || user.roles.includes("administrator")),
+      )
+      .sort((left, right) => String(left.email || "").localeCompare(String(right.email || "")));
+
+    borrowers.forEach((borrower) => {
+      const option = document.createElement("option");
+      option.value = String(borrower.id);
+      option.textContent = `${borrower.email} (id ${borrower.id})`;
+      elements.loanBorrowerUserId.appendChild(option);
+    });
+
+    const jigsawPlaceholder = document.createElement("option");
+    jigsawPlaceholder.value = "";
+    jigsawPlaceholder.textContent = "Choose available jigsaw";
+    elements.loanJigsawId.appendChild(jigsawPlaceholder);
+
+    const availableJigsaws = state.jigsaws
+      .filter((jigsaw) => jigsaw.status === "available")
+      .sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
+
+    availableJigsaws.forEach((jigsaw) => {
+      const option = document.createElement("option");
+      option.value = String(jigsaw.id);
+      option.textContent = `${jigsaw.title} (id ${jigsaw.id})`;
+      elements.loanJigsawId.appendChild(option);
+    });
+
+    if (currentBorrowerId && borrowers.some((borrower) => String(borrower.id) === currentBorrowerId)) {
+      elements.loanBorrowerUserId.value = currentBorrowerId;
+    }
+
+    if (currentJigsawId && availableJigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
+      elements.loanJigsawId.value = currentJigsawId;
+    }
+  }
+
   function setSessionSummary() {
     if (!elements.sessionSummary) {
       return;
@@ -161,6 +255,7 @@
       if (elements.authCredentialsWrap) {
         elements.authCredentialsWrap.hidden = false;
       }
+      populateLoanFormOptions();
       return;
     }
 
@@ -210,8 +305,11 @@
     if (elements.editUserDisplayName) {
       elements.editUserDisplayName.value = "";
     }
-    if (elements.editUserRole) {
-      elements.editUserRole.value = "borrower";
+    if (elements.editUserRoleBorrower) {
+      elements.editUserRoleBorrower.checked = true;
+    }
+    if (elements.editUserRoleAdministrator) {
+      elements.editUserRoleAdministrator.checked = false;
     }
     if (elements.editUserActive) {
       elements.editUserActive.checked = false;
@@ -368,6 +466,39 @@
     });
   }
 
+  function renderLoans(loans) {
+    const tableBody = elements.loansTableBody;
+    clearTableBody(tableBody);
+
+    if (!Array.isArray(loans) || loans.length === 0) {
+      appendEmptyRow(tableBody, 6, "No loans found.");
+      return;
+    }
+
+    const usersById = new Map(state.users.map((user) => [Number(user.id), user]));
+    const jigsawsById = new Map(state.jigsaws.map((jigsaw) => [Number(jigsaw.id), jigsaw]));
+
+    loans.forEach((loan) => {
+      const row = document.createElement("tr");
+      row.className = "govuk-table__row";
+
+      const borrower = usersById.get(Number(loan.borrower_user_id));
+      const jigsaw = jigsawsById.get(Number(loan.jigsaw_id));
+
+      const borrowerLabel = borrower ? `${borrower.email} (id ${borrower.id})` : `id ${loan.borrower_user_id}`;
+      const jigsawLabel = jigsaw ? `${jigsaw.title} (id ${jigsaw.id})` : `id ${loan.jigsaw_id}`;
+
+      row.appendChild(buildCell(String(loan.id)));
+      row.appendChild(buildCell(borrowerLabel));
+      row.appendChild(buildCell(jigsawLabel));
+      row.appendChild(buildCell(toLocalTimestamp(loan.checked_out_at)));
+      row.appendChild(buildCell(toLocalTimestamp(loan.due_at)));
+      row.appendChild(buildCell(String(loan.status || "-")));
+
+      tableBody.appendChild(row);
+    });
+  }
+
   async function refreshSession() {
     try {
       const payload = await apiRequest("/api/v1/auth/me");
@@ -398,11 +529,13 @@
       const payload = await apiRequest("/api/v1/users");
       state.users = Array.isArray(payload.data) ? payload.data : [];
       renderUsers(state.users);
+      populateLoanFormOptions();
     } catch (error) {
       if (error.status === 403) {
         state.users = [];
         renderUsers([]);
         closeUserEditor();
+        populateLoanFormOptions();
         return;
       }
       showFeedback(error.message, true);
@@ -421,10 +554,33 @@
       const payload = await apiRequest("/api/v1/jigsaws");
       state.jigsaws = Array.isArray(payload.data) ? payload.data : [];
       renderJigsaws(state.jigsaws);
+      populateLoanFormOptions();
     } catch (error) {
       state.jigsaws = [];
       renderJigsaws([]);
       closeJigsawEditor();
+      populateLoanFormOptions();
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function loadLoans() {
+    if (!state.user) {
+      state.loans = [];
+      renderLoans([]);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest("/api/v1/loans");
+      state.loans = Array.isArray(payload.data) ? payload.data : [];
+      renderLoans(state.loans);
+    } catch (error) {
+      if (error.status === 403) {
+        state.loans = [];
+        renderLoans([]);
+        return;
+      }
       showFeedback(error.message, true);
     }
   }
@@ -471,7 +627,7 @@
       state.csrfToken = payload.data.csrf_token;
       setSessionSummary();
       showFeedback("Signed in successfully.");
-      await Promise.all([loadUsers(), loadJigsaws(), loadAuditEvents()]);
+      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents()]);
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -492,10 +648,13 @@
       setSessionSummary();
       state.users = [];
       state.jigsaws = [];
+      state.loans = [];
       renderUsers([]);
       closeUserEditor();
       renderJigsaws([]);
       closeJigsawEditor();
+      renderLoans([]);
+      populateLoanFormOptions();
       renderAuditEvents([]);
       showFeedback("Signed out.");
     } catch (error) {
@@ -512,8 +671,13 @@
     const email = String(formData.get("email") || "").trim();
     const displayName = String(formData.get("display_name") || "").trim();
     const password = String(formData.get("password") || "");
-    const role = String(formData.get("role") || "borrower");
+    const roles = getSelectedRoles(formData);
     const isActive = formData.get("is_active") === "on";
+
+    if (roles.length === 0) {
+      showFeedback("Select at least one role.", true);
+      return;
+    }
 
     if (!password) {
       showFeedback("Initial password is required.", true);
@@ -528,7 +692,7 @@
           password,
           display_name: displayName || null,
           is_active: isActive,
-          roles: [role],
+          roles,
         }),
       });
       form.reset();
@@ -555,9 +719,13 @@
     if (elements.editUserDisplayName) {
       elements.editUserDisplayName.value = selectedUser.display_name || "";
     }
-    if (elements.editUserRole) {
+    if (elements.editUserRoleBorrower) {
       const roles = Array.isArray(selectedUser.roles) ? selectedUser.roles : [];
-      elements.editUserRole.value = roles.includes("administrator") ? "administrator" : "borrower";
+      elements.editUserRoleBorrower.checked = roles.includes("borrower");
+    }
+    if (elements.editUserRoleAdministrator) {
+      const roles = Array.isArray(selectedUser.roles) ? selectedUser.roles : [];
+      elements.editUserRoleAdministrator.checked = roles.includes("administrator");
     }
     if (elements.editUserActive) {
       elements.editUserActive.checked = Boolean(selectedUser.is_active);
@@ -575,12 +743,17 @@
     const userId = Number(formData.get("user_id") || "0");
     const email = String(formData.get("email") || "").trim();
     const displayName = String(formData.get("display_name") || "").trim();
-    const role = String(formData.get("role") || "borrower");
+    const roles = getSelectedRoles(formData);
     const isActive = formData.get("is_active") === "on";
     const password = String(formData.get("password") || "");
 
     if (!userId) {
       showFeedback("Select a user to edit first.", true);
+      return;
+    }
+
+    if (roles.length === 0) {
+      showFeedback("Select at least one role.", true);
       return;
     }
 
@@ -591,7 +764,7 @@
     const payload = {
       email,
       display_name: displayName || null,
-      roles: [role],
+      roles,
       is_active: isActive,
     };
     if (password) {
@@ -712,7 +885,38 @@
       });
       form.reset();
       showFeedback("Jigsaw created.");
-      await Promise.all([loadJigsaws(), loadAuditEvents()]);
+      await Promise.all([loadJigsaws(), loadLoans(), loadAuditEvents()]);
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function handleCreateLoan(event) {
+    event.preventDefault();
+    clearFeedback();
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const borrowerUserId = Number(formData.get("borrower_user_id") || "0");
+    const jigsawId = Number(formData.get("jigsaw_id") || "0");
+
+    if (!borrowerUserId || !jigsawId) {
+      showFeedback("Select a borrower and an available jigsaw.", true);
+      return;
+    }
+
+    try {
+      await apiRequest("/api/v1/loans", {
+        method: "POST",
+        body: JSON.stringify({
+          borrower_user_id: borrowerUserId,
+          jigsaw_id: jigsawId,
+        }),
+      });
+
+      showFeedback("Loan created.");
+      form.reset();
+      await Promise.all([loadJigsaws(), loadLoans(), loadAuditEvents()]);
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -774,7 +978,7 @@
         body: JSON.stringify(payload),
       });
       showFeedback("Jigsaw updated.");
-      await Promise.all([loadJigsaws(), loadAuditEvents()]);
+      await Promise.all([loadJigsaws(), loadLoans(), loadAuditEvents()]);
       openJigsawEditor(jigsawId);
     } catch (error) {
       showFeedback(error.message, true);
@@ -841,7 +1045,7 @@
       try {
         await apiRequest(`/api/v1/jigsaws/${jigsawId}`, { method: "DELETE" });
         showFeedback("Jigsaw retired.");
-        await Promise.all([loadJigsaws(), loadAuditEvents()]);
+        await Promise.all([loadJigsaws(), loadLoans(), loadAuditEvents()]);
       } catch (error) {
         showFeedback(error.message, true);
       }
@@ -867,6 +1071,10 @@
 
     if (elements.jigsawCreateForm) {
       elements.jigsawCreateForm.addEventListener("submit", handleCreateJigsaw);
+    }
+
+    if (elements.loanCreateForm) {
+      elements.loanCreateForm.addEventListener("submit", handleCreateLoan);
     }
 
     if (elements.jigsawEditForm) {
@@ -898,11 +1106,13 @@
     attachEvents();
     const isAuthenticated = await refreshSession();
     if (isAuthenticated) {
-      await Promise.all([loadUsers(), loadJigsaws(), loadAuditEvents()]);
+      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents()]);
     } else {
       renderUsers([]);
       renderJigsaws([]);
+      renderLoans([]);
       renderAuditEvents([]);
+      populateLoanFormOptions();
     }
   }
 

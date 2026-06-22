@@ -39,4 +39,4 @@ This folder defines the product, architecture, and delivery rules for Jigsaurium
 
 - Confirm SPA framework choice (React, Vue, Svelte, or other).
 - Confirm trusted proxy policy model (CIDR allowlist and/or fixed proxy depth).
-- Confirm borrowing policy defaults (loan duration, renewal count, max active loans).
+- Confirm borrowing policy caps (renewal rules, max active loans) when borrower self-service lending is introduced.

@@ -1,8 +1,11 @@
+from datetime import datetime
+
 import pytest
 
 from app.db import Base, get_engine, get_session
-from app.models import AuditEvent, Jigsaw, Role, User, UserRole
+from app.models import AuditEvent, Jigsaw, Loan, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
+from app.models.loan import LoanStatus
 
 
 @pytest.fixture()
@@ -98,6 +101,7 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
     [
         ("GET", "/api/v1/roles", None),
         ("GET", "/api/v1/jigsaws", None),
+        ("GET", "/api/v1/loans", None),
         ("GET", "/api/v1/jigsaws/1", None),
         ("PATCH", "/api/v1/auth/me", {"display_name": "No Session"}),
         (
@@ -116,6 +120,7 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
             "/api/v1/jigsaws",
             {"title": "Locked", "piece_count": 200, "status": "available"},
         ),
+        ("POST", "/api/v1/loans", {"borrower_user_id": 1, "jigsaw_id": 1}),
         ("PATCH", "/api/v1/jigsaws/1", {"title": "Updated title"}),
         ("DELETE", "/api/v1/jigsaws/1", None),
     ],
@@ -214,6 +219,28 @@ def test_api_create_user_creates_roles_and_audit_event(app, client, seeded_ident
 
 
 @pytest.mark.functional
+def test_api_create_user_accepts_multiple_roles(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    response = client.post(
+        "/api/v1/users",
+        headers=_csrf_headers(),
+        json={
+            "email": "dual.role@example.com",
+            "password": "DualRolePass123!",
+            "display_name": "Dual Role",
+            "is_active": True,
+            "roles": ["administrator", "borrower"],
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["data"]["email"] == "dual.role@example.com"
+    assert payload["data"]["roles"] == ["administrator", "borrower"]
+
+
+@pytest.mark.functional
 def test_api_update_user_updates_roles_and_active_flag(app, client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["admin_user_id"])
     before_count = _count_audit_events(app)
@@ -308,6 +335,144 @@ def test_api_jigsaw_crud_and_retire_flow_records_audit(app, client, seeded_ident
     assert delete_response.get_json()["data"]["status"] == "retired"
 
     assert _count_audit_events(app) == before_count + 3
+
+
+@pytest.mark.functional
+def test_api_loans_forbidden_for_borrower_role(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["borrower_user_id"])
+
+    response = client.get("/api/v1/loans")
+
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "forbidden"
+
+
+@pytest.mark.functional
+def test_admin_can_create_loan_sets_due_date_and_updates_jigsaw(app, client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    before_count = _count_audit_events(app)
+
+    response = client.post(
+        "/api/v1/loans",
+        headers=_csrf_headers(),
+        json={
+            "borrower_user_id": seeded_identity_data["borrower_user_id"],
+            "jigsaw_id": seeded_identity_data["available_jigsaw_id"],
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()["data"]
+    assert payload["borrower_user_id"] == seeded_identity_data["borrower_user_id"]
+    assert payload["jigsaw_id"] == seeded_identity_data["available_jigsaw_id"]
+    assert payload["status"] == "active"
+
+    checked_out_at = payload["checked_out_at"]
+    due_at = payload["due_at"]
+    assert checked_out_at is not None
+    assert due_at is not None
+
+    checked_out_timestamp = checked_out_at.replace("Z", "+00:00")
+    due_timestamp = due_at.replace("Z", "+00:00")
+    checked_out_dt = datetime.fromisoformat(checked_out_timestamp)
+    due_dt = datetime.fromisoformat(due_timestamp)
+    assert (due_dt - checked_out_dt).days == 28
+
+    with app.app_context():
+        db_session = get_session()
+        loan = db_session.get(Loan, payload["id"])
+        assert loan is not None
+        assert loan.status == LoanStatus.ACTIVE
+
+        jigsaw = db_session.get(Jigsaw, seeded_identity_data["available_jigsaw_id"])
+        assert jigsaw.status == JigsawStatus.ON_LOAN
+
+    assert _count_audit_events(app) == before_count + 1
+
+
+@pytest.mark.functional
+def test_admin_user_can_be_loan_borrower(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    response = client.post(
+        "/api/v1/loans",
+        headers=_csrf_headers(),
+        json={
+            "borrower_user_id": seeded_identity_data["admin_user_id"],
+            "jigsaw_id": seeded_identity_data["available_jigsaw_id"],
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()["data"]
+    assert payload["borrower_user_id"] == seeded_identity_data["admin_user_id"]
+
+
+@pytest.mark.functional
+def test_create_loan_rejects_non_available_jigsaw(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    response = client.post(
+        "/api/v1/loans",
+        headers=_csrf_headers(),
+        json={
+            "borrower_user_id": seeded_identity_data["borrower_user_id"],
+            "jigsaw_id": seeded_identity_data["retired_jigsaw_id"],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "conflict"
+
+
+@pytest.mark.functional
+def test_create_loan_rejects_jigsaw_with_existing_active_loan(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    create_first = client.post(
+        "/api/v1/loans",
+        headers=_csrf_headers(),
+        json={
+            "borrower_user_id": seeded_identity_data["borrower_user_id"],
+            "jigsaw_id": seeded_identity_data["available_jigsaw_id"],
+        },
+    )
+    assert create_first.status_code == 201
+
+    create_second = client.post(
+        "/api/v1/loans",
+        headers=_csrf_headers(),
+        json={
+            "borrower_user_id": seeded_identity_data["borrower_user_id"],
+            "jigsaw_id": seeded_identity_data["available_jigsaw_id"],
+        },
+    )
+
+    assert create_second.status_code == 409
+    assert create_second.get_json()["error"]["code"] == "conflict"
+
+
+@pytest.mark.functional
+def test_api_loans_returns_created_loan_for_administrator(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    create_response = client.post(
+        "/api/v1/loans",
+        headers=_csrf_headers(),
+        json={
+            "borrower_user_id": seeded_identity_data["borrower_user_id"],
+            "jigsaw_id": seeded_identity_data["available_jigsaw_id"],
+        },
+    )
+    assert create_response.status_code == 201
+    created_loan_id = create_response.get_json()["data"]["id"]
+
+    list_response = client.get("/api/v1/loans")
+    assert list_response.status_code == 200
+
+    loans = list_response.get_json()["data"]
+    returned_ids = [loan["id"] for loan in loans]
+    assert created_loan_id in returned_ids
 
 
 @pytest.mark.functional
@@ -507,6 +672,29 @@ def test_auth_login_rejects_wrong_password(client, seeded_identity_data):
 
 
 @pytest.mark.functional
+def test_auth_login_accepts_existing_user_email_without_dot_domain(app, client, seeded_identity_data):
+    with app.app_context():
+        db_session = get_session()
+        borrower_role = db_session.query(Role).filter_by(name="borrower").one()
+
+        local_domain_user = User(email="borrower@localhost", display_name="Borrower Local", is_active=True)
+        local_domain_user.set_password("BorrowerLocal123!")
+        db_session.add(local_domain_user)
+        db_session.flush()
+        db_session.add(UserRole(user_id=local_domain_user.id, role_id=borrower_role.id))
+        db_session.commit()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "borrower@localhost", "password": "BorrowerLocal123!"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["data"]["user"]["email"] == "borrower@localhost"
+
+
+@pytest.mark.functional
 def test_audit_events_requires_admin_role(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["borrower_user_id"])
 
@@ -569,7 +757,10 @@ def test_create_user_rejects_overlong_email(client, seeded_identity_data):
     )
 
     assert response.status_code == 422
-    assert response.get_json()["error"]["code"] == "validation_error"
+    payload = response.get_json()
+    assert payload["error"]["code"] == "validation_error"
+    assert payload["error"]["details"][0]["field"] == "email"
+    assert "255 characters or fewer" in payload["error"]["details"][0]["issue"]
 
 
 @pytest.mark.functional
@@ -589,7 +780,10 @@ def test_create_user_rejects_invalid_email_injection_pattern(client, seeded_iden
     )
 
     assert response.status_code == 422
-    assert response.get_json()["error"]["code"] == "validation_error"
+    payload = response.get_json()
+    assert payload["error"]["code"] == "validation_error"
+    assert payload["error"]["details"][0]["field"] == "email"
+    assert payload["error"]["details"][0]["issue"] == "must be a valid email address"
 
 
 @pytest.mark.functional

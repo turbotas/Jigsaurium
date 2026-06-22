@@ -1,9 +1,13 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 
 class AuditEvent(Base):
@@ -21,4 +25,4 @@ class AuditEvent(Base):
     scheme: Mapped[str | None] = mapped_column(String(16), nullable=True)
     host: Mapped[str | None] = mapped_column(String(255), nullable=True)
     payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

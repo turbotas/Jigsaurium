@@ -53,3 +53,12 @@
 - Why: avoids passwordless impersonation by email and keeps credential storage aligned with basic security expectations.
 - Decision: Bootstrap the first admin account through a local script (`scripts/bootstrap_admin.py`) with secure password prompt.
 - Why: keeps first-credential setup out of public endpoints and avoids hardcoded bootstrap secrets.
+
+## 2026-06-22 - Initial Lending Policy Scope
+
+- Decision: implement administrative loan checkout first via the existing admin SPA.
+- Why: delivers core circulation capability with minimal UI/API surface before borrower self-service flows.
+- Decision: set default `due_at` to four weeks (28 days) from checkout time.
+- Why: provides consistent due-date behavior without adding configurable policy controls yet.
+- Decision: defer max active loan caps, renewal limits, and grace-period enforcement.
+- Why: project direction is intentionally low-friction for initial rollout; policy controls can be layered in later.
