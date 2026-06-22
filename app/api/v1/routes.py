@@ -1,4 +1,5 @@
 import json
+import re
 from secrets import token_urlsafe
 from functools import wraps
 
@@ -11,6 +12,12 @@ from app.models.jigsaw import JigsawStatus
 
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
+
+EMAIL_REGEX = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$")
+USER_EMAIL_MAX_LENGTH = 255
+DISPLAY_NAME_MAX_LENGTH = 255
+PASSWORD_MAX_LENGTH = 256
+PASSWORD_MIN_LENGTH = 12
 
 
 def _success_response(data, status_code=200):
@@ -59,6 +66,24 @@ def _serialize_jigsaw(jigsaw):
     }
 
 
+def _serialize_audit_event(event):
+    return {
+        "id": event.id,
+        "actor_user_id": event.actor_user_id,
+        "action": event.action,
+        "entity_type": event.entity_type,
+        "entity_id": event.entity_id,
+        "request_id": event.request_id,
+        "remote_addr": event.remote_addr,
+        "client_ip_resolved": event.client_ip_resolved,
+        "forwarded_chain": event.forwarded_chain,
+        "scheme": event.scheme,
+        "host": event.host,
+        "payload_json": event.payload_json,
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+    }
+
+
 def _record_audit_event(action, entity_type, entity_id, payload=None):
     db_session = get_session()
     forwarded_chain = request.headers.get("Forwarded") or request.headers.get("X-Forwarded-For")
@@ -84,6 +109,118 @@ def _get_role_names_for_user_id(user_id):
     return db_session.execute(
         select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user_id)
     ).scalars().all()
+
+
+def _contains_control_characters(value):
+    return any((ord(character) < 32 or ord(character) == 127) for character in value)
+
+
+def _validate_email(value, field_name="email"):
+    if not isinstance(value, str) or not value.strip():
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be a non-empty string"}],
+        )
+
+    normalized_email = value.strip().lower()
+    if len(normalized_email) > USER_EMAIL_MAX_LENGTH:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": f"must be {USER_EMAIL_MAX_LENGTH} characters or fewer"}],
+        )
+
+    if not EMAIL_REGEX.fullmatch(normalized_email):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be a valid email address"}],
+        )
+
+    return normalized_email, None
+
+
+def _validate_display_name(value):
+    if value is None:
+        return None, None
+
+    if not isinstance(value, str):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "display_name", "issue": "must be a string or null"}],
+        )
+
+    normalized_value = value.strip()
+    if not normalized_value:
+        return None, None
+
+    if len(normalized_value) > DISPLAY_NAME_MAX_LENGTH:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "display_name", "issue": f"must be {DISPLAY_NAME_MAX_LENGTH} characters or fewer"}],
+        )
+
+    if _contains_control_characters(normalized_value):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "display_name", "issue": "contains unsupported control characters"}],
+        )
+
+    if "<" in normalized_value or ">" in normalized_value:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "display_name", "issue": "must not contain angle brackets"}],
+        )
+
+    return normalized_value, None
+
+
+def _validate_password(value, *, require_min_length=False):
+    if not isinstance(value, str) or not value:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "password", "issue": "must be a non-empty string"}],
+        )
+
+    if len(value) > PASSWORD_MAX_LENGTH:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "password", "issue": f"must be {PASSWORD_MAX_LENGTH} characters or fewer"}],
+        )
+
+    if _contains_control_characters(value):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "password", "issue": "contains unsupported control characters"}],
+        )
+
+    if require_min_length and len(value) < PASSWORD_MIN_LENGTH:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "password", "issue": f"must be at least {PASSWORD_MIN_LENGTH} characters"}],
+        )
+
+    return value, None
 
 
 def _load_current_user():
@@ -233,26 +370,16 @@ def auth_login():
     if error is not None:
         return error
 
-    email = payload.get("email")
-    if not isinstance(email, str) or not email.strip():
-        return _error_response(
-            "validation_error",
-            "Invalid request payload.",
-            422,
-            [{"field": "email", "issue": "must be a non-empty string"}],
-        )
+    email, error = _validate_email(payload.get("email"))
+    if error is not None:
+        return error
 
-    password = payload.get("password")
-    if not isinstance(password, str) or not password:
-        return _error_response(
-            "validation_error",
-            "Invalid request payload.",
-            422,
-            [{"field": "password", "issue": "must be a non-empty string"}],
-        )
+    password, error = _validate_password(payload.get("password"))
+    if error is not None:
+        return error
 
     db_session = get_session()
-    user = db_session.execute(select(User).where(User.email == email.strip().lower())).scalar_one_or_none()
+    user = db_session.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if user is None or not user.is_active or not user.check_password(password):
         return _error_response("authentication_failed", "Invalid credentials.", 401)
 
@@ -283,7 +410,91 @@ def auth_login():
 @api_v1_bp.get("/auth/me")
 @require_auth
 def auth_me():
-    return _success_response({"user": _serialize_user(g.current_user, g.current_user_roles)})
+    csrf_token = session.get("csrf_token")
+    if not csrf_token:
+        csrf_token = token_urlsafe(24)
+        session["csrf_token"] = csrf_token
+
+    return _success_response(
+        {
+            "user": _serialize_user(g.current_user, g.current_user_roles),
+            "csrf_token": csrf_token,
+        }
+    )
+
+
+@api_v1_bp.patch("/auth/me")
+@require_auth
+def update_auth_me():
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    if "email" in payload:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "email", "issue": "cannot be changed via this endpoint"}],
+        )
+
+    if not any(field in payload for field in {"display_name", "current_password", "new_password"}):
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "payload", "issue": "must include display_name or password fields"}],
+        )
+
+    updated_fields = []
+
+    if "display_name" in payload:
+        display_name, error = _validate_display_name(payload.get("display_name"))
+        if error is not None:
+            return error
+        g.current_user.display_name = display_name
+        updated_fields.append("display_name")
+
+    password_change_requested = "current_password" in payload or "new_password" in payload
+    if password_change_requested:
+        current_password, error = _validate_password(payload.get("current_password"))
+        if error is not None:
+            return error
+
+        new_password, error = _validate_password(payload.get("new_password"), require_min_length=True)
+        if error is not None:
+            return error
+
+        if not g.current_user.check_password(current_password):
+            return _error_response("forbidden", "Current password is incorrect.", 403)
+
+        if current_password == new_password:
+            return _error_response(
+                "validation_error",
+                "Invalid request payload.",
+                422,
+                [{"field": "new_password", "issue": "must be different from current_password"}],
+            )
+
+        g.current_user.set_password(new_password)
+        updated_fields.append("password")
+
+    db_session = get_session()
+    _record_audit_event(
+        action="auth.profile_updated",
+        entity_type="user",
+        entity_id=g.current_user.id,
+        payload={"updated_fields": sorted(updated_fields)},
+    )
+    db_session.commit()
+
+    csrf_token = session.get("csrf_token")
+    return _success_response(
+        {
+            "user": _serialize_user(g.current_user, g.current_user_roles),
+            "csrf_token": csrf_token,
+        }
+    )
 
 
 @api_v1_bp.post("/auth/logout")
@@ -314,6 +525,34 @@ def list_roles():
     return _success_response(payload)
 
 
+@api_v1_bp.get("/audit-events")
+@require_role("administrator")
+def list_audit_events():
+    raw_limit = request.args.get("limit", "50")
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        return _error_response(
+            "validation_error",
+            "Invalid request query.",
+            422,
+            [{"field": "limit", "issue": "must be an integer"}],
+        )
+
+    if limit < 1 or limit > 200:
+        return _error_response(
+            "validation_error",
+            "Invalid request query.",
+            422,
+            [{"field": "limit", "issue": "must be between 1 and 200"}],
+        )
+
+    db_session = get_session()
+    events = db_session.execute(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(limit)).scalars().all()
+    payload = [_serialize_audit_event(event) for event in events]
+    return _success_response(payload)
+
+
 @api_v1_bp.get("/users")
 @require_role("administrator")
 def list_users():
@@ -339,24 +578,17 @@ def create_user():
     if error is not None:
         return error
 
-    email = payload.get("email")
-    if not isinstance(email, str) or not email.strip():
-        return _error_response(
-            "validation_error",
-            "Invalid request payload.",
-            422,
-            [{"field": "email", "issue": "must be a non-empty string"}],
-        )
-    email = email.strip().lower()
+    email, error = _validate_email(payload.get("email"))
+    if error is not None:
+        return error
 
-    display_name = payload.get("display_name")
-    if display_name is not None and not isinstance(display_name, str):
-        return _error_response(
-            "validation_error",
-            "Invalid request payload.",
-            422,
-            [{"field": "display_name", "issue": "must be a string or null"}],
-        )
+    password, error = _validate_password(payload.get("password"), require_min_length=True)
+    if error is not None:
+        return error
+
+    display_name, error = _validate_display_name(payload.get("display_name"))
+    if error is not None:
+        return error
 
     is_active = payload.get("is_active", True)
     if not isinstance(is_active, bool):
@@ -377,6 +609,7 @@ def create_user():
         return _error_response("conflict", "A user with this email already exists.", 409)
 
     user = User(email=email, display_name=display_name, is_active=is_active)
+    user.set_password(password)
     db_session.add(user)
     db_session.flush()
 
@@ -401,7 +634,7 @@ def update_user(user_id):
     if error is not None:
         return error
 
-    updatable_fields = {"email", "display_name", "is_active", "roles"}
+    updatable_fields = {"email", "display_name", "is_active", "roles", "password"}
     if not any(field in payload for field in updatable_fields):
         return _error_response(
             "validation_error",
@@ -416,29 +649,18 @@ def update_user(user_id):
         return _error_response("not_found", "User was not found.", 404)
 
     if "email" in payload:
-        email = payload.get("email")
-        if not isinstance(email, str) or not email.strip():
-            return _error_response(
-                "validation_error",
-                "Invalid request payload.",
-                422,
-                [{"field": "email", "issue": "must be a non-empty string"}],
-            )
-        normalized_email = email.strip().lower()
+        normalized_email, error = _validate_email(payload.get("email"))
+        if error is not None:
+            return error
         existing_user = db_session.execute(select(User).where(User.email == normalized_email, User.id != user.id)).scalar_one_or_none()
         if existing_user is not None:
             return _error_response("conflict", "A user with this email already exists.", 409)
         user.email = normalized_email
 
     if "display_name" in payload:
-        display_name = payload.get("display_name")
-        if display_name is not None and not isinstance(display_name, str):
-            return _error_response(
-                "validation_error",
-                "Invalid request payload.",
-                422,
-                [{"field": "display_name", "issue": "must be a string or null"}],
-            )
+        display_name, error = _validate_display_name(payload.get("display_name"))
+        if error is not None:
+            return error
         user.display_name = display_name
 
     if "is_active" in payload:
@@ -450,6 +672,10 @@ def update_user(user_id):
                 422,
                 [{"field": "is_active", "issue": "must be a boolean"}],
             )
+
+        if user.id == g.current_user.id and is_active is False:
+            return _error_response("conflict", "You cannot deactivate your own account.", 409)
+
         user.is_active = is_active
 
     updated_roles = None
@@ -462,6 +688,12 @@ def update_user(user_id):
         for role in roles:
             db_session.add(UserRole(user_id=user.id, role_id=role.id))
         updated_roles = [role.name for role in roles]
+
+    if "password" in payload:
+        password, error = _validate_password(payload.get("password"), require_min_length=True)
+        if error is not None:
+            return error
+        user.set_password(password)
 
     if updated_roles is None:
         updated_roles = db_session.execute(

@@ -17,7 +17,7 @@
   <section class="govuk-!-margin-bottom-8" aria-labelledby="auth-heading">
     <h2 id="auth-heading" class="govuk-heading-l">Authentication</h2>
     <form id="login-form" class="govuk-!-margin-bottom-4">
-      <div class="govuk-grid-row">
+      <div id="auth-credentials-wrap" class="govuk-grid-row">
         <div class="govuk-grid-column-one-half">
           <div class="govuk-form-group">
             <label class="govuk-label" for="login-email">Email</label>
@@ -31,11 +31,50 @@
           </div>
         </div>
       </div>
-      <button type="submit" class="govuk-button" data-module="govuk-button">Sign in</button>
-      <button id="logout-button" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Sign out</button>
+      <div id="sign-in-controls">
+        <button type="submit" class="govuk-button" data-module="govuk-button">Sign in</button>
+      </div>
+      <div id="sign-out-controls" hidden>
+        <button id="logout-button" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Sign out</button>
+      </div>
     </form>
     <p class="govuk-body" id="session-summary">Not signed in.</p>
-    <p class="govuk-hint">Tip: bootstrap the first admin with <code>python scripts/bootstrap_admin.py --email admin@example.com</code>.</p>
+  </section>
+
+  <section id="account-section" class="govuk-!-margin-bottom-8" aria-labelledby="account-heading" hidden>
+    <h2 id="account-heading" class="govuk-heading-l">My account</h2>
+    <form id="account-form" class="govuk-!-margin-bottom-4">
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="account-username">Username</label>
+            <input id="account-username" name="display_name" class="govuk-input" type="text" maxlength="255">
+          </div>
+        </div>
+      </div>
+      <p class="govuk-hint">To change password, provide current and new values.</p>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-third">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="account-current-password">Current password</label>
+            <input id="account-current-password" name="current_password" class="govuk-input" type="password" maxlength="256">
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-third">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="account-new-password">New password</label>
+            <input id="account-new-password" name="new_password" class="govuk-input" type="password" minlength="12" maxlength="256">
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-third">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="account-confirm-password">Confirm new password</label>
+            <input id="account-confirm-password" name="confirm_password" class="govuk-input" type="password" minlength="12" maxlength="256">
+          </div>
+        </div>
+      </div>
+      <button type="submit" class="govuk-button" data-module="govuk-button">Update my account</button>
+    </form>
   </section>
 
   <div id="admin-sections" hidden>
@@ -53,6 +92,14 @@
           <div class="govuk-form-group">
             <label class="govuk-label" for="user-display-name">Display name</label>
             <input id="user-display-name" name="display_name" class="govuk-input" type="text">
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="user-password">Initial password</label>
+            <input id="user-password" name="password" class="govuk-input" type="password" minlength="12" required>
           </div>
         </div>
       </div>
@@ -96,6 +143,56 @@
         <tbody class="govuk-table__body" id="users-table-body"></tbody>
       </table>
     </div>
+
+    <form id="user-edit-form" class="govuk-!-margin-top-6" hidden>
+      <h3 class="govuk-heading-m">Edit selected user</h3>
+      <input id="edit-user-id" name="user_id" type="hidden">
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-user-email">Email</label>
+            <input id="edit-user-email" name="email" class="govuk-input" type="email" maxlength="255" required>
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-user-display-name">Display name</label>
+            <input id="edit-user-display-name" name="display_name" class="govuk-input" type="text" maxlength="255">
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-user-role">Role</label>
+            <select id="edit-user-role" name="role" class="govuk-select">
+              <option value="borrower">borrower</option>
+              <option value="administrator">administrator</option>
+            </select>
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group govuk-!-margin-top-6">
+            <div class="govuk-checkboxes" data-module="govuk-checkboxes">
+              <div class="govuk-checkboxes__item">
+                <input id="edit-user-active" name="is_active" class="govuk-checkboxes__input" type="checkbox">
+                <label class="govuk-label govuk-checkboxes__label" for="edit-user-active">Active user</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-user-password">Reset password (optional)</label>
+            <input id="edit-user-password" name="password" class="govuk-input" type="password" minlength="12" maxlength="256">
+          </div>
+        </div>
+      </div>
+      <button id="user-edit-save" type="submit" class="govuk-button" data-module="govuk-button">Save user changes</button>
+      <button id="user-edit-cancel" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Cancel edit</button>
+    </form>
   </section>
 
   <section aria-labelledby="jigsaws-heading">
@@ -155,6 +252,70 @@
           </tr>
         </thead>
         <tbody class="govuk-table__body" id="jigsaws-table-body"></tbody>
+      </table>
+    </div>
+
+    <form id="jigsaw-edit-form" class="govuk-!-margin-top-6" hidden>
+      <h3 class="govuk-heading-m">Edit selected jigsaw</h3>
+      <input id="edit-jigsaw-id" name="jigsaw_id" type="hidden">
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-jigsaw-title">Title</label>
+            <input id="edit-jigsaw-title" name="title" class="govuk-input" type="text" required>
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-jigsaw-piece-count">Piece count</label>
+            <input id="edit-jigsaw-piece-count" name="piece_count" class="govuk-input govuk-input--width-10" type="number" min="1" required>
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-jigsaw-condition">Condition</label>
+            <input id="edit-jigsaw-condition" name="condition" class="govuk-input" type="text">
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-jigsaw-status">Status</label>
+            <select id="edit-jigsaw-status" name="status" class="govuk-select">
+              <option value="available">available</option>
+              <option value="on_loan">on_loan</option>
+              <option value="maintenance">maintenance</option>
+              <option value="retired">retired</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="govuk-form-group">
+        <label class="govuk-label" for="edit-jigsaw-tags">Tags</label>
+        <input id="edit-jigsaw-tags" name="tags" class="govuk-input" type="text">
+      </div>
+      <button id="jigsaw-edit-save" type="submit" class="govuk-button" data-module="govuk-button">Save jigsaw changes</button>
+      <button id="jigsaw-edit-cancel" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Cancel edit</button>
+    </form>
+  </section>
+
+  <section class="govuk-!-margin-top-8" aria-labelledby="audit-heading">
+    <h2 id="audit-heading" class="govuk-heading-l">Audit events</h2>
+    <p class="govuk-body">Recent administrative and authentication events.</p>
+    <div class="table-scroll-wrap">
+      <table class="govuk-table" id="audit-table">
+        <caption class="govuk-table__caption govuk-table__caption--m">Latest activity</caption>
+        <thead class="govuk-table__head">
+          <tr class="govuk-table__row">
+            <th class="govuk-table__header">ID</th>
+            <th class="govuk-table__header">Action</th>
+            <th class="govuk-table__header">Entity</th>
+            <th class="govuk-table__header">Actor</th>
+            <th class="govuk-table__header">Timestamp</th>
+          </tr>
+        </thead>
+        <tbody class="govuk-table__body" id="audit-table-body"></tbody>
       </table>
     </div>
   </section>
