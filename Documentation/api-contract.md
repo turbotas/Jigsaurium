@@ -12,10 +12,12 @@
 - API access requires authenticated user context.
 - Role checks are enforced server-side for all protected routes.
 - Admin-only routes return `403` for authenticated non-admin callers.
+- Operational health endpoint `GET /api/v1/health` is allowed without authentication.
 
 ## Resource Endpoints (initial)
 
 - `GET /api/v1/jigsaws`
+- `GET /api/v1/health`
 - `POST /api/v1/jigsaws`
 - `GET /api/v1/jigsaws/{id}`
 - `PATCH /api/v1/jigsaws/{id}`

@@ -36,10 +36,24 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
    - Linux/macOS (dev profile): `./scripts/setup_venv.sh dev`
    - Windows (prod profile): `scripts\setup_venv.bat prod`
    - Linux/macOS (prod profile): `./scripts/setup_venv.sh prod`
-3. Create local environment file:
+2. Create local environment file:
    - Copy `.env.example` to `.env`, or
    - Copy `environments/dev.env.example` to `environments/dev.env.local`.
-4. Run the app: `.venv/bin/python run.py` (Linux/macOS) or `.venv\Scripts\python.exe run.py` (Windows)
+3. Run the app:
+   - Windows: `run.bat`
+   - Linux/macOS: `./run.sh`
+   - Direct Python alternative: `.venv/bin/python run.py` (Linux/macOS) or `.venv\Scripts\python.exe run.py` (Windows)
+
+## GOV.UK Frontend assets
+
+- Vendored assets are stored under `app/static/vendor/govuk`.
+- Local style overrides must stay in `app/static/css/styles.css`.
+- Update vendored GOV.UK assets:
+  - Windows: `scripts\update_govuk_assets.bat`
+  - Linux/macOS: `./scripts/update_govuk_assets.sh`
+  - Optional explicit version: `scripts\update_govuk_assets.bat 6.2.0` or `./scripts/update_govuk_assets.sh 6.2.0`
+- Dev startup performs a GOV.UK version freshness check and warns if npm has a newer release.
+- Set `GOVUK_VERSION_CHECK=0` to disable the startup warning check.
 
 ## Environment configuration
 

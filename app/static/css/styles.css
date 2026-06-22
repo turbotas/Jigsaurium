@@ -1,9 +1,11 @@
-body {
-  margin: 0;
-  font-family: Georgia, "Times New Roman", serif;
-  padding: 2rem;
+.govuk-header {
+  border-bottom: 8px solid #1d70b8;
 }
 
-h1 {
-  margin: 0 0 0.75rem;
+.govuk-main-wrapper {
+  padding-top: 32px;
+}
+
+.govuk-caption-l {
+  color: #505a5f;
 }

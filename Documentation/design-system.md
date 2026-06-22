@@ -22,9 +22,11 @@ Use GOV.UK Design System components and interaction patterns by default.
 
 - Pin a `govuk-frontend` version.
 - Keep vendor and custom code separated.
+- Vendor files are copied from `node_modules/govuk-frontend/dist/govuk` into `app/static/vendor/govuk`.
+- Keep local branding/customizations in `app/static/css/styles.css` only.
 - Upgrade process:
-  - bump pinned version
-  - rebuild frontend assets
+  - run `scripts/update_govuk_assets.bat` (Windows) or `./scripts/update_govuk_assets.sh` (Linux/macOS)
+  - commit updated vendored files and lock file
   - run UI regression and accessibility checks
   - record outcome in `decisions.md`
 

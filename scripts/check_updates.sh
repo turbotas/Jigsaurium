@@ -10,3 +10,9 @@ else
 fi
 
 "$PYTHON_BIN" -m pip list --outdated
+
+if command -v npm >/dev/null 2>&1; then
+  echo
+  echo "GOV.UK frontend npm update status:"
+  npm outdated govuk-frontend || true
+fi

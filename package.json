@@ -1,0 +1,14 @@
+{
+  "name": "jigsaurium",
+  "version": "1.0.0",
+  "description": "Starter Flask project scaffold using the app factory pattern.",
+  "scripts": {
+    "govuk:vendor": "python scripts/vendor_govuk_assets.py",
+    "govuk:update": "python scripts/vendor_govuk_assets.py --update latest"
+  },
+  "private": true,
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "govuk-frontend": "6.2.0"
+  }
+}

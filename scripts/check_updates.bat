@@ -15,5 +15,13 @@ if exist ".venv\Scripts\python.exe" (
 
 %PYTHON_CMD% -m pip list --outdated
 set "UPDATES_EXIT=%ERRORLEVEL%"
+
+where npm >nul 2>&1
+if not errorlevel 1 (
+  echo.
+  echo GOV.UK frontend npm update status:
+  npm outdated govuk-frontend
+)
+
 popd
 exit /b %UPDATES_EXIT%

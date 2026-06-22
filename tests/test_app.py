@@ -46,8 +46,8 @@ def test_unknown_route_returns_404(client):
 def test_home_route_renders_expected_content(client):
     response = client.get("/")
 
-    assert b"Jigsaurium Flask App" in response.data
-    assert b"Your project scaffold is ready." in response.data
+    assert b"Lending library foundation is running" in response.data
+    assert b"/api/v1/health" in response.data
 
 
 @pytest.mark.functional
@@ -55,3 +55,15 @@ def test_home_route_returns_html(client):
     response = client.get("/")
 
     assert response.content_type.startswith("text/html")
+
+
+@pytest.mark.functional
+def test_api_health_returns_contract_shape(client):
+    response = client.get("/api/v1/health")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+
+    assert payload["data"]["status"] == "ok"
+    assert payload["data"]["environment"] == "dev"
+    assert payload["meta"]["request_id"].startswith("req_")
