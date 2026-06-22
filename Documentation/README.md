@@ -29,6 +29,5 @@ This folder defines the product, architecture, and delivery rules for Jigsaurium
 ## Pending Decisions Checklist
 
 - Confirm SPA framework choice (React, Vue, Svelte, or other).
-- Confirm auth mechanism for SPA (secure cookie session vs token-based).
 - Confirm trusted proxy policy model (CIDR allowlist and/or fixed proxy depth).
 - Confirm borrowing policy defaults (loan duration, renewal count, max active loans).

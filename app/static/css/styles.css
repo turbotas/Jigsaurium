@@ -9,3 +9,28 @@
 .govuk-caption-l {
   color: #505a5f;
 }
+
+.table-scroll-wrap {
+  overflow-x: auto;
+}
+
+#app-feedback {
+  margin-bottom: 24px;
+}
+
+#app-feedback.is-error {
+  border-color: #d4351c;
+}
+
+#app-feedback.is-error .govuk-notification-banner__header {
+  background: #d4351c;
+}
+
+.app-action-link {
+  border: 0;
+  background: transparent;
+  color: #1d70b8;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}

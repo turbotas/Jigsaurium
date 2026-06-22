@@ -46,8 +46,10 @@ def test_unknown_route_returns_404(client):
 def test_home_route_renders_expected_content(client):
     response = client.get("/")
 
-    assert b"Lending library foundation is running" in response.data
-    assert b"/api/v1/health" in response.data
+    assert b"Admin control panel" in response.data
+    assert b"id=\"login-form\"" in response.data
+    assert b"id=\"admin-sections\" hidden" in response.data
+    assert b"/static/js/app.js" in response.data
 
 
 @pytest.mark.functional

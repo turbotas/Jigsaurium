@@ -40,3 +40,16 @@
 - Why: preserves clean upgrade boundaries and aligns with design-system policy.
 - Decision: Add dev startup warning when vendored GOV.UK version is behind npm latest.
 - Why: makes dependency drift visible during normal development flow.
+
+## 2026-06-22 - SPA Authentication Approach
+
+- Decision: Use secure cookie session authentication for the SPA/API flow.
+- Why: aligns with Flask runtime defaults and keeps server-side authorization context simple for Milestone 1.
+- Decision: Expose `POST /api/v1/auth/login`, `GET /api/v1/auth/me`, and `POST /api/v1/auth/logout` as the initial auth endpoints.
+- Why: provides explicit login state bootstrap, identity check, and session teardown.
+- Decision: Require `X-CSRF-Token` on authenticated mutating endpoints.
+- Why: enforces CSRF protection for cookie-based API calls as required by operations/security rules.
+- Decision: Require password verification on login and store only password hashes in the `users` table.
+- Why: avoids passwordless impersonation by email and keeps credential storage aligned with basic security expectations.
+- Decision: Bootstrap the first admin account through a local script (`scripts/bootstrap_admin.py`) with secure password prompt.
+- Why: keeps first-credential setup out of public endpoints and avoids hardcoded bootstrap secrets.

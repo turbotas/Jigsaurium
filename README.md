@@ -71,7 +71,33 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
   - Linux/macOS: `./scripts/run_tests.sh`
 - Run functional tests only: `python -m pytest -m functional`
 - Run non-functional tests only: `python -m pytest -m nonfunctional`
+- GUI smoke tests are included in pytest as marker `ui`.
+- Install browser runtime once per machine for GUI tests:
+  - Windows: `.venv\Scripts\python.exe -m playwright install chromium`
+  - Linux/macOS: `.venv/bin/python -m playwright install chromium`
+- Run GUI tests only: `python -m pytest -m ui`
+- CI runs automatically with GitHub Actions:
+  - `API and Core Tests` runs `pytest -m "not ui"` on pushes and pull requests.
+  - `UI Smoke Tests` runs `pytest -m ui` on pull requests and pushes to `main`.
 - Note: test scripts disable pytest cache provider (`-p no:cacheprovider`) to avoid Windows network-share permission issues at test finalization.
+
+## Admin credential bootstrap
+
+- The bootstrap script mirrors app runtime loading by reading root `.env` when present.
+- Set `DATABASE_URL` to your persistent target database (not `:memory:`), or pass it directly with `--database-url`.
+- Apply schema migrations before bootstrapping:
+  - `.venv\Scripts\python.exe -m alembic upgrade head` (Windows)
+  - `.venv/bin/python -m alembic upgrade head` (Linux/macOS)
+  - Important: run migrations with the same `DATABASE_URL` that bootstrap will use.
+- Create the first admin account:
+  - `.venv\Scripts\python.exe scripts\bootstrap_admin.py --email admin@example.com` (Windows)
+  - `.venv/bin/python scripts/bootstrap_admin.py --email admin@example.com` (Linux/macOS)
+- Direct DB override example:
+  - `.venv\Scripts\python.exe scripts\bootstrap_admin.py --email admin@example.com --database-url "sqlite+pysqlite:///instance/jigsaurium.db"`
+- Optional explicit env file example:
+  - `.venv\Scripts\python.exe scripts\bootstrap_admin.py --email admin@example.com --env-file "environments/dev.env.local"`
+- Password is prompted securely and must be at least 12 characters.
+- To rotate an existing admin password, re-run with `--reset-password`.
 
 ## Dependency updates
 

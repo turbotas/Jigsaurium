@@ -10,14 +10,22 @@
 ## Auth and Authorization
 
 - API access requires authenticated user context.
+- Session authentication endpoints:
+  - `POST /api/v1/auth/login` (public, expects `email` + `password`)
+  - `GET /api/v1/auth/me` (authenticated)
+  - `POST /api/v1/auth/logout` (authenticated)
 - Role checks are enforced server-side for all protected routes.
 - Admin-only routes return `403` for authenticated non-admin callers.
 - Operational health endpoint `GET /api/v1/health` is allowed without authentication.
+- Mutating authenticated endpoints (`POST`, `PATCH`, `DELETE`) require an `X-CSRF-Token` header that matches the session CSRF token.
 
 ## Resource Endpoints (initial)
 
 - `GET /api/v1/jigsaws`
 - `GET /api/v1/health`
+- `POST /api/v1/auth/login`
+- `GET /api/v1/auth/me`
+- `POST /api/v1/auth/logout`
 - `POST /api/v1/jigsaws`
 - `GET /api/v1/jigsaws/{id}`
 - `PATCH /api/v1/jigsaws/{id}`
@@ -76,6 +84,37 @@
         "issue": "must be greater than zero"
       }
     ]
+  },
+  "meta": {
+    "request_id": "req_abc123"
+  }
+}
+```
+
+## Authentication Payload Notes
+
+- Login request body:
+
+```json
+{
+  "email": "admin@example.com",
+  "password": "example-credential"
+}
+```
+
+- Login success includes user context and a CSRF token:
+
+```json
+{
+  "data": {
+    "user": {
+      "id": 1,
+      "email": "admin@example.com",
+      "display_name": "Administrator",
+      "is_active": true,
+      "roles": ["administrator"]
+    },
+    "csrf_token": "generated-token"
   },
   "meta": {
     "request_id": "req_abc123"

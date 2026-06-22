@@ -2,10 +2,165 @@
 
 {% block content %}
   <span class="govuk-caption-l">Jigsaurium</span>
-  <h1 class="govuk-heading-xl">Lending library foundation is running</h1>
-  <p class="govuk-body">The Flask app, MariaDB schema, and GOV.UK Frontend assets are wired for development.</p>
-  <p class="govuk-body">
-    API health endpoint:
-    <a class="govuk-link" href="/api/v1/health">/api/v1/health</a>
-  </p>
+  <h1 class="govuk-heading-xl">Admin control panel</h1>
+  <p class="govuk-body">Sign in, then manage users and jigsaw stock from this single page.</p>
+
+  <div id="app-feedback" class="govuk-notification-banner govuk-notification-banner--success" hidden>
+    <div class="govuk-notification-banner__header">
+      <h2 class="govuk-notification-banner__title">Status</h2>
+    </div>
+    <div class="govuk-notification-banner__content">
+      <p id="app-feedback-text" class="govuk-notification-banner__heading"></p>
+    </div>
+  </div>
+
+  <section class="govuk-!-margin-bottom-8" aria-labelledby="auth-heading">
+    <h2 id="auth-heading" class="govuk-heading-l">Authentication</h2>
+    <form id="login-form" class="govuk-!-margin-bottom-4">
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="login-email">Email</label>
+            <input id="login-email" name="email" class="govuk-input" type="email" required>
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="login-password">Password</label>
+            <input id="login-password" name="password" class="govuk-input" type="password" required>
+          </div>
+        </div>
+      </div>
+      <button type="submit" class="govuk-button" data-module="govuk-button">Sign in</button>
+      <button id="logout-button" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Sign out</button>
+    </form>
+    <p class="govuk-body" id="session-summary">Not signed in.</p>
+    <p class="govuk-hint">Tip: bootstrap the first admin with <code>python scripts/bootstrap_admin.py --email admin@example.com</code>.</p>
+  </section>
+
+  <div id="admin-sections" hidden>
+  <section class="govuk-!-margin-bottom-8" aria-labelledby="users-heading">
+    <h2 id="users-heading" class="govuk-heading-l">Users</h2>
+    <form id="user-create-form" class="govuk-!-margin-bottom-4">
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="user-email">Email</label>
+            <input id="user-email" name="email" class="govuk-input" type="email" required>
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="user-display-name">Display name</label>
+            <input id="user-display-name" name="display_name" class="govuk-input" type="text">
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="user-role">Role</label>
+            <select id="user-role" name="role" class="govuk-select">
+              <option value="borrower">borrower</option>
+              <option value="administrator">administrator</option>
+            </select>
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group govuk-!-margin-top-6">
+            <div class="govuk-checkboxes" data-module="govuk-checkboxes">
+              <div class="govuk-checkboxes__item">
+                <input id="user-active" name="is_active" class="govuk-checkboxes__input" type="checkbox" checked>
+                <label class="govuk-label govuk-checkboxes__label" for="user-active">Active user</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <button type="submit" class="govuk-button" data-module="govuk-button">Create user</button>
+    </form>
+
+    <div class="table-scroll-wrap">
+      <table class="govuk-table" id="users-table">
+        <caption class="govuk-table__caption govuk-table__caption--m">Current users</caption>
+        <thead class="govuk-table__head">
+          <tr class="govuk-table__row">
+            <th class="govuk-table__header">ID</th>
+            <th class="govuk-table__header">Email</th>
+            <th class="govuk-table__header">Name</th>
+            <th class="govuk-table__header">Roles</th>
+            <th class="govuk-table__header">Status</th>
+            <th class="govuk-table__header">Action</th>
+          </tr>
+        </thead>
+        <tbody class="govuk-table__body" id="users-table-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="jigsaws-heading">
+    <h2 id="jigsaws-heading" class="govuk-heading-l">Jigsaw stock</h2>
+    <form id="jigsaw-create-form" class="govuk-!-margin-bottom-4">
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="jigsaw-title">Title</label>
+            <input id="jigsaw-title" name="title" class="govuk-input" type="text" required>
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="jigsaw-piece-count">Piece count</label>
+            <input id="jigsaw-piece-count" name="piece_count" class="govuk-input govuk-input--width-10" type="number" min="1" required>
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="jigsaw-condition">Condition</label>
+            <input id="jigsaw-condition" name="condition" class="govuk-input" type="text">
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="jigsaw-status">Status</label>
+            <select id="jigsaw-status" name="status" class="govuk-select">
+              <option value="available">available</option>
+              <option value="maintenance">maintenance</option>
+              <option value="retired">retired</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="govuk-form-group">
+        <label class="govuk-label" for="jigsaw-tags">Tags</label>
+        <input id="jigsaw-tags" name="tags" class="govuk-input" type="text" placeholder="landscape, animals">
+      </div>
+      <button type="submit" class="govuk-button" data-module="govuk-button">Create jigsaw</button>
+    </form>
+
+    <div class="table-scroll-wrap">
+      <table class="govuk-table" id="jigsaws-table">
+        <caption class="govuk-table__caption govuk-table__caption--m">Jigsaw inventory</caption>
+        <thead class="govuk-table__head">
+          <tr class="govuk-table__row">
+            <th class="govuk-table__header">ID</th>
+            <th class="govuk-table__header">Title</th>
+            <th class="govuk-table__header">Pieces</th>
+            <th class="govuk-table__header">Condition</th>
+            <th class="govuk-table__header">Status</th>
+            <th class="govuk-table__header">Tags</th>
+            <th class="govuk-table__header">Action</th>
+          </tr>
+        </thead>
+        <tbody class="govuk-table__body" id="jigsaws-table-body"></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 {% endblock %}

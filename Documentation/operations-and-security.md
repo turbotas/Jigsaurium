@@ -62,6 +62,8 @@
 - HTTPS-only in test and production.
 - Secure cookie attributes enabled in non-dev environments.
 - CSRF protection required for cookie-based auth flows.
+- Login returns a session CSRF token; clients must send it in `X-CSRF-Token` for authenticated mutating API calls.
+- Bootstrap initial admin credentials via `scripts/bootstrap_admin.py`; do not hardcode credentials in source or env templates.
 - Input validation at API boundary and domain service layers.
 - Least-privilege role enforcement at API/service layer.
 
