@@ -89,6 +89,7 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
   - `.venv\Scripts\python.exe -m alembic upgrade head` (Windows)
   - `.venv/bin/python -m alembic upgrade head` (Linux/macOS)
   - Important: run migrations with the same `DATABASE_URL` that bootstrap will use.
+  - If `DATABASE_URL` is missing, Alembic now fails fast instead of migrating in-memory SQLite.
 - Create the first admin account:
   - `.venv\Scripts\python.exe scripts\bootstrap_admin.py --email admin@example.com` (Windows)
   - `.venv/bin/python scripts/bootstrap_admin.py --email admin@example.com` (Linux/macOS)

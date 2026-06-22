@@ -6,6 +6,11 @@ from sqlalchemy import pool
 
 from alembic import context
 
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover
+    load_dotenv = None
+
 from app import models  # noqa: F401
 from app.db import Base
 from config import Config
@@ -25,11 +30,28 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 target_metadata = Base.metadata
 
-database_url = os.getenv("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
-elif not config.get_main_option("sqlalchemy.url"):
-    config.set_main_option("sqlalchemy.url", Config.DATABASE_URL)
+if load_dotenv is not None:
+    load_dotenv()
+
+configured_database_url = config.get_main_option("sqlalchemy.url")
+env_database_url = os.getenv("DATABASE_URL")
+
+if configured_database_url and configured_database_url != "sqlite+pysqlite:///:memory:":
+    resolved_database_url = configured_database_url
+elif env_database_url:
+    resolved_database_url = env_database_url
+elif configured_database_url:
+    resolved_database_url = configured_database_url
+else:
+    resolved_database_url = Config.DATABASE_URL
+
+config.set_main_option("sqlalchemy.url", resolved_database_url)
+
+if resolved_database_url == "sqlite+pysqlite:///:memory:":
+    raise RuntimeError(
+        "Alembic is targeting in-memory SQLite. Set DATABASE_URL (or provide --sqlalchemy-url) "
+        "to run migrations against your actual environment database."
+    )
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

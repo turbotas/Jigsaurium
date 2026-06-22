@@ -220,13 +220,41 @@
         <div class="govuk-grid-column-one-half">
           <div class="govuk-form-group">
             <label class="govuk-label" for="jigsaw-title">Title</label>
-            <input id="jigsaw-title" name="title" class="govuk-input" type="text" required>
+            <input id="jigsaw-title" name="title" class="govuk-input" type="text">
           </div>
         </div>
         <div class="govuk-grid-column-one-half">
           <div class="govuk-form-group">
             <label class="govuk-label" for="jigsaw-piece-count">Piece count</label>
-            <input id="jigsaw-piece-count" name="piece_count" class="govuk-input govuk-input--width-10" type="number" min="1" required>
+            <input id="jigsaw-piece-count" name="piece_count" class="govuk-input govuk-input--width-10" type="number" min="1">
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="jigsaw-manufacturer">Manufacturer</label>
+            <input id="jigsaw-manufacturer" name="manufacturer" class="govuk-input" type="text" maxlength="255" placeholder="Gibsons, Ravensburger">
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="jigsaw-artist">Artist</label>
+            <input id="jigsaw-artist" name="artist" class="govuk-input" type="text" maxlength="255">
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="jigsaw-dimensions-cm">Dimensions (cm)</label>
+            <input id="jigsaw-dimensions-cm" name="dimensions_cm" class="govuk-input" type="text" maxlength="64" placeholder="68 x 49 cm">
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="jigsaw-last-completed-at">Last completed</label>
+            <input id="jigsaw-last-completed-at" name="last_completed_at" class="govuk-input" type="datetime-local">
           </div>
         </div>
       </div>
@@ -252,6 +280,10 @@
         <label class="govuk-label" for="jigsaw-tags">Tags</label>
         <input id="jigsaw-tags" name="tags" class="govuk-input" type="text" placeholder="landscape, animals">
       </div>
+      <div class="govuk-form-group">
+        <label class="govuk-label" for="jigsaw-description">Description</label>
+        <textarea id="jigsaw-description" name="description" class="govuk-textarea" rows="4" maxlength="4000"></textarea>
+      </div>
       <button type="submit" class="govuk-button" data-module="govuk-button">Create jigsaw</button>
     </form>
 
@@ -262,10 +294,13 @@
           <tr class="govuk-table__row">
             <th class="govuk-table__header">ID</th>
             <th class="govuk-table__header">Title</th>
+            <th class="govuk-table__header">Maker</th>
+            <th class="govuk-table__header">Artist</th>
+            <th class="govuk-table__header">Dimensions</th>
             <th class="govuk-table__header">Pieces</th>
             <th class="govuk-table__header">Condition</th>
             <th class="govuk-table__header">Status</th>
-            <th class="govuk-table__header">Tags</th>
+            <th class="govuk-table__header">Last completed</th>
             <th class="govuk-table__header">Action</th>
           </tr>
         </thead>
@@ -293,6 +328,34 @@
       <div class="govuk-grid-row">
         <div class="govuk-grid-column-one-half">
           <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-jigsaw-manufacturer">Manufacturer</label>
+            <input id="edit-jigsaw-manufacturer" name="manufacturer" class="govuk-input" type="text" maxlength="255">
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-jigsaw-artist">Artist</label>
+            <input id="edit-jigsaw-artist" name="artist" class="govuk-input" type="text" maxlength="255">
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-jigsaw-dimensions-cm">Dimensions (cm)</label>
+            <input id="edit-jigsaw-dimensions-cm" name="dimensions_cm" class="govuk-input" type="text" maxlength="64">
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-jigsaw-last-completed-at">Last completed</label>
+            <input id="edit-jigsaw-last-completed-at" name="last_completed_at" class="govuk-input" type="datetime-local">
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
             <label class="govuk-label" for="edit-jigsaw-condition">Condition</label>
             <input id="edit-jigsaw-condition" name="condition" class="govuk-input" type="text">
           </div>
@@ -313,9 +376,59 @@
         <label class="govuk-label" for="edit-jigsaw-tags">Tags</label>
         <input id="edit-jigsaw-tags" name="tags" class="govuk-input" type="text">
       </div>
+      <div class="govuk-form-group">
+        <label class="govuk-label" for="edit-jigsaw-description">Description</label>
+        <textarea id="edit-jigsaw-description" name="description" class="govuk-textarea" rows="4" maxlength="4000"></textarea>
+      </div>
       <button id="jigsaw-edit-save" type="submit" class="govuk-button" data-module="govuk-button">Save jigsaw changes</button>
       <button id="jigsaw-edit-cancel" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Cancel edit</button>
     </form>
+
+    <section class="govuk-!-margin-top-6" aria-labelledby="jigsaw-images-heading">
+      <h3 id="jigsaw-images-heading" class="govuk-heading-m">Jigsaw images</h3>
+      <p class="govuk-body">Store tagged images in the database (for example completed puzzle, box front, box side).</p>
+      <form id="jigsaw-image-form" class="govuk-!-margin-bottom-4">
+        <div class="govuk-grid-row">
+          <div class="govuk-grid-column-one-third">
+            <div class="govuk-form-group">
+              <label class="govuk-label" for="jigsaw-image-jigsaw-id">Jigsaw</label>
+              <select id="jigsaw-image-jigsaw-id" name="jigsaw_id" class="govuk-select" required>
+                <option value="">Choose jigsaw</option>
+              </select>
+            </div>
+          </div>
+          <div class="govuk-grid-column-one-third">
+            <div class="govuk-form-group">
+              <label class="govuk-label" for="jigsaw-image-tag">Image tag</label>
+              <input id="jigsaw-image-tag" name="tag" class="govuk-input" type="text" maxlength="64" placeholder="completed puzzle">
+            </div>
+          </div>
+          <div class="govuk-grid-column-one-third">
+            <div class="govuk-form-group">
+              <label class="govuk-label" for="jigsaw-image-file">Image file</label>
+              <input id="jigsaw-image-file" name="image" class="govuk-file-upload" type="file" accept="image/*" required>
+            </div>
+          </div>
+        </div>
+        <button type="submit" class="govuk-button" data-module="govuk-button">Upload image</button>
+      </form>
+
+      <div class="table-scroll-wrap">
+        <table class="govuk-table" id="jigsaw-images-table">
+          <caption class="govuk-table__caption govuk-table__caption--m">Tagged images for selected jigsaw</caption>
+          <thead class="govuk-table__head">
+            <tr class="govuk-table__row">
+              <th class="govuk-table__header">ID</th>
+              <th class="govuk-table__header">Tag</th>
+              <th class="govuk-table__header">Filename</th>
+              <th class="govuk-table__header">Uploaded</th>
+              <th class="govuk-table__header">View</th>
+            </tr>
+          </thead>
+          <tbody class="govuk-table__body" id="jigsaw-images-table-body"></tbody>
+        </table>
+      </div>
+    </section>
   </section>
 
   <section class="govuk-!-margin-top-8" aria-labelledby="audit-heading">

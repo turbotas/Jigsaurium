@@ -4,8 +4,9 @@ import pytest
 from werkzeug.serving import make_server
 
 from app import create_app
-from app.db import Base, get_engine, get_session
+from app.db import get_session
 from app.models import Role, User, UserRole
+from tests.migration_utils import upgrade_database_to_head
 
 
 playwright_sync_api = pytest.importorskip("playwright.sync_api")
@@ -29,16 +30,11 @@ def ui_server(tmp_path):
         PREFERRED_URL_SCHEME = "http"
 
     app = create_app(UITestConfig)
+    upgrade_database_to_head(UITestConfig.DATABASE_URL)
 
     with app.app_context():
-        engine = get_engine()
-        Base.metadata.create_all(bind=engine)
-
         db_session = get_session()
-        admin_role = Role(name="administrator", description="Administrator")
-        borrower_role = Role(name="borrower", description="Borrower")
-        db_session.add_all([admin_role, borrower_role])
-        db_session.flush()
+        admin_role = db_session.query(Role).filter_by(name="administrator").one()
 
         admin_user = User(email="admin@example.com", display_name="Admin User", is_active=True)
         admin_user.set_password("AdminPassword123!")
@@ -138,8 +134,14 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("#users-table-body tr:has-text('ui.user@example.com'):has-text('administrator, borrower')")
 
         page.fill("#jigsaw-title", "UI Smoke Puzzle")
+        page.evaluate("() => { document.querySelector('#jigsaw-title').value = 'T'.repeat(256); }")
         page.fill("#jigsaw-piece-count", "500")
         page.select_option("#jigsaw-status", "available")
+        page.click("#jigsaw-create-form button[type='submit']")
+        page.wait_for_selector("text=Invalid request payload. title: must be 255 characters or fewer")
+
+        page.fill("#jigsaw-title", "UI Smoke Puzzle")
+        page.fill("#jigsaw-manufacturer", "Ravensburger")
         page.click("#jigsaw-create-form button[type='submit']")
 
         page.wait_for_selector("text=Jigsaw created.")
@@ -160,6 +162,33 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("text=Loan created.")
         page.wait_for_selector("#loans-table-body tr")
         assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("text=on_loan").count() >= 1
+
+        page.select_option("#jigsaw-image-jigsaw-id", jigsaw_option_value)
+        page.fill("#jigsaw-image-tag", "completed puzzle")
+        page.set_input_files(
+            "#jigsaw-image-file",
+            {
+                "name": "notes.txt",
+                "mimeType": "text/plain",
+                "buffer": b"this-is-not-an-image",
+            },
+        )
+        page.click("#jigsaw-image-form button[type='submit']")
+        page.wait_for_selector("text=Invalid request payload. image: must be an image content type")
+
+        page.fill("#jigsaw-image-tag", "")
+        page.set_input_files(
+            "#jigsaw-image-file",
+            {
+                "name": "completed.png",
+                "mimeType": "image/png",
+                "buffer": b"\x89PNG\r\n\x1a\n" + (b"x" * 120_000),
+            },
+        )
+        page.click("#jigsaw-image-form button[type='submit']")
+        page.wait_for_selector("text=Jigsaw image uploaded.")
+        page.wait_for_selector("#jigsaw-images-table-body tr")
+        assert page.locator("#jigsaw-images-table-body tr", has_text="untagged").count() >= 1
 
         page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("button[data-jigsaw-edit]").click()
         assert page.locator("#jigsaw-edit-form").is_visible()

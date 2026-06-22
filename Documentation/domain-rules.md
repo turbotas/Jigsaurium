@@ -8,14 +8,22 @@
 
 ## Jigsaw Rules
 
-- Required fields: title, piece count, status.
-- `piece_count` must be a positive integer.
+- Jigsaw create accepts empty values for all user-entered fields in v1 (to support future image-driven creation workflows).
+- Optional metadata fields: manufacturer, artist, dimensions (cm), description, and last-completed timestamp.
+- When provided, `piece_count` must be a positive integer.
+- Duplicate jigsaw titles are allowed.
 - Status values in v1:
   - `available`
   - `on_loan`
   - `maintenance`
   - `retired`
 - Retired jigsaws are hidden from borrower browse views by default.
+
+## Jigsaw Image Rules
+
+- Jigsaw images are stored in the database in v1.
+- Each image record includes a tag (for example `completed puzzle`, `box front`, `box side`) and binary image content.
+- Image create/list endpoints are administrator-only in the initial rollout.
 
 ## Jigsaw State Transitions
 

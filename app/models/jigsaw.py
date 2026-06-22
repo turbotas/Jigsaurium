@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, Integer, String
+from sqlalchemy import DateTime, Enum, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -22,8 +22,12 @@ class Jigsaw(Base):
     __tablename__ = "jigsaws"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    piece_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    manufacturer: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    artist: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    dimensions_cm: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    piece_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     condition: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[JigsawStatus] = mapped_column(
         Enum(JigsawStatus, native_enum=False, length=32),
@@ -31,6 +35,7 @@ class Jigsaw(Base):
         default=JigsawStatus.AVAILABLE,
     )
     tags: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    last_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow

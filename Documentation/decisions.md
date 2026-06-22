@@ -62,3 +62,10 @@
 - Why: provides consistent due-date behavior without adding configurable policy controls yet.
 - Decision: defer max active loan caps, renewal limits, and grace-period enforcement.
 - Why: project direction is intentionally low-friction for initial rollout; policy controls can be layered in later.
+
+## 2026-06-22 - Jigsaw Metadata and Image Storage
+
+- Decision: extend jigsaw records with manufacturer, dimensions in cm, artist, description, and last-completed timestamp.
+- Why: operational catalog data needs richer descriptive fields for stock management.
+- Decision: store jigsaw image binaries in the application database for v1.
+- Why: projected media volume is modest and database-backed storage keeps backups and portability simple in early phases.

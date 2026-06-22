@@ -1,8 +1,9 @@
 from datetime import datetime
+from io import BytesIO
 
 import pytest
 
-from app.db import Base, get_engine, get_session
+from app.db import get_session
 from app.models import AuditEvent, Jigsaw, Loan, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
@@ -11,15 +12,10 @@ from app.models.loan import LoanStatus
 @pytest.fixture()
 def seeded_identity_data(app):
     with app.app_context():
-        engine = get_engine()
-        Base.metadata.create_all(bind=engine)
-
         db_session = get_session()
 
-        admin_role = Role(name="administrator", description="Administrator")
-        borrower_role = Role(name="borrower", description="Borrower")
-        db_session.add_all([admin_role, borrower_role])
-        db_session.flush()
+        admin_role = db_session.query(Role).filter_by(name="administrator").one()
+        borrower_role = db_session.query(Role).filter_by(name="borrower").one()
 
         admin_user = User(email="admin@example.com", display_name="Admin User")
         borrower_user = User(email="borrower@example.com", display_name="Borrower User")
@@ -62,7 +58,6 @@ def seeded_identity_data(app):
         }
 
         db_session.remove()
-        Base.metadata.drop_all(bind=engine)
 
 
 def _set_user_session(client, user_id, csrf_token="test-csrf-token"):
@@ -102,6 +97,7 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
         ("GET", "/api/v1/roles", None),
         ("GET", "/api/v1/jigsaws", None),
         ("GET", "/api/v1/loans", None),
+        ("GET", "/api/v1/jigsaws/1/images", None),
         ("GET", "/api/v1/jigsaws/1", None),
         ("PATCH", "/api/v1/auth/me", {"display_name": "No Session"}),
         (
@@ -501,6 +497,338 @@ def test_admin_can_edit_existing_jigsaw_fields(client, seeded_identity_data):
 
 
 @pytest.mark.functional
+def test_admin_can_create_jigsaw_with_extended_metadata(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    response = client.post(
+        "/api/v1/jigsaws",
+        headers=_csrf_headers(),
+        json={
+            "title": "English Harbour",
+            "manufacturer": "Gibsons",
+            "artist": "Trevor Mitchell",
+            "dimensions_cm": "68 x 49 cm",
+            "description": "A coastal harbour scene with vintage cars and boats.",
+            "piece_count": 1000,
+            "condition": "excellent",
+            "status": "available",
+            "tags": "harbour,coast",
+            "last_completed_at": "2026-06-20T14:00:00+00:00",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()["data"]
+    assert payload["manufacturer"] == "Gibsons"
+    assert payload["artist"] == "Trevor Mitchell"
+    assert payload["dimensions_cm"] == "68 x 49 cm"
+    assert payload["description"] == "A coastal harbour scene with vintage cars and boats."
+    assert payload["last_completed_at"] is not None
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    ("override_payload", "expected_field", "expected_issue_fragment"),
+    [
+        ({"title": "x" * 256}, "title", "255 characters or fewer"),
+        ({"piece_count": "1000a"}, "piece_count", "positive integer or empty"),
+        ({"piece_count": 0}, "piece_count", "greater than zero when provided"),
+        ({"status": "unknown"}, "status", "must be one of"),
+        ({"manufacturer": "m" * 256}, "manufacturer", "255 characters or fewer"),
+        ({"artist": "a" * 256}, "artist", "255 characters or fewer"),
+        ({"dimensions_cm": "d" * 65}, "dimensions_cm", "64 characters or fewer"),
+        ({"description": "z" * 4001}, "description", "4000 characters or fewer"),
+        ({"condition": "c" * 65}, "condition", "64 characters or fewer"),
+        ({"tags": "t" * 513}, "tags", "512 characters or fewer"),
+        ({"last_completed_at": "not-a-datetime"}, "last_completed_at", "valid ISO 8601 datetime"),
+    ],
+)
+def test_create_jigsaw_validates_all_displayed_fields(
+    client, seeded_identity_data, override_payload, expected_field, expected_issue_fragment
+):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    payload = {
+        "title": "Validation Base",
+        "manufacturer": "Ravensburger",
+        "artist": "Art Poulin",
+        "dimensions_cm": "70x50",
+        "description": "Base description",
+        "piece_count": 1000,
+        "condition": "Used",
+        "status": "available",
+        "tags": "base",
+        "last_completed_at": "2026-06-20T14:00:00+00:00",
+    }
+    payload.update(override_payload)
+
+    response = client.post("/api/v1/jigsaws", headers=_csrf_headers(), json=payload)
+
+    assert response.status_code == 422
+    error_payload = response.get_json()
+    assert error_payload["error"]["code"] == "validation_error"
+    assert error_payload["error"]["details"][0]["field"] == expected_field
+    assert expected_issue_fragment in error_payload["error"]["details"][0]["issue"]
+
+
+@pytest.mark.functional
+def test_admin_can_create_jigsaw_with_all_empty_fields(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    response = client.post(
+        "/api/v1/jigsaws",
+        headers=_csrf_headers(),
+        json={
+            "title": "",
+            "manufacturer": "",
+            "artist": "",
+            "dimensions_cm": "",
+            "description": "",
+            "piece_count": "",
+            "condition": "",
+            "status": "",
+            "tags": "",
+            "last_completed_at": "",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()["data"]
+    assert payload["title"] is None
+    assert payload["manufacturer"] is None
+    assert payload["artist"] is None
+    assert payload["dimensions_cm"] is None
+    assert payload["description"] is None
+    assert payload["piece_count"] is None
+    assert payload["condition"] is None
+    assert payload["status"] == "available"
+    assert payload["tags"] is None
+    assert payload["last_completed_at"] is None
+
+
+@pytest.mark.functional
+def test_admin_can_create_duplicate_jigsaw_titles(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    create_one = client.post(
+        "/api/v1/jigsaws",
+        headers=_csrf_headers(),
+        json={"title": "Duplicate Allowed", "piece_count": 500, "status": "available"},
+    )
+    assert create_one.status_code == 201
+
+    create_two = client.post(
+        "/api/v1/jigsaws",
+        headers=_csrf_headers(),
+        json={"title": "Duplicate Allowed", "piece_count": 750, "status": "available"},
+    )
+    assert create_two.status_code == 201
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    ("patch_payload", "expected_field", "expected_issue_fragment"),
+    [
+        ({"piece_count": "letters"}, "piece_count", "must be greater than zero"),
+        ({"manufacturer": "m" * 256}, "manufacturer", "255 characters or fewer"),
+        ({"artist": "a" * 256}, "artist", "255 characters or fewer"),
+        ({"dimensions_cm": "d" * 65}, "dimensions_cm", "64 characters or fewer"),
+        ({"description": "z" * 4001}, "description", "4000 characters or fewer"),
+        ({"condition": "c" * 65}, "condition", "64 characters or fewer"),
+        ({"tags": "t" * 513}, "tags", "512 characters or fewer"),
+        ({"last_completed_at": "2026/06/20"}, "last_completed_at", "valid ISO 8601 datetime"),
+    ],
+)
+def test_update_jigsaw_validates_displayed_fields(
+    client, seeded_identity_data, patch_payload, expected_field, expected_issue_fragment
+):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    response = client.patch(
+        f"/api/v1/jigsaws/{seeded_identity_data['available_jigsaw_id']}",
+        headers=_csrf_headers(),
+        json=patch_payload,
+    )
+
+    assert response.status_code == 422
+    error_payload = response.get_json()
+    assert error_payload["error"]["code"] == "validation_error"
+    assert error_payload["error"]["details"][0]["field"] == expected_field
+    assert expected_issue_fragment in error_payload["error"]["details"][0]["issue"]
+
+
+@pytest.mark.functional
+def test_admin_can_upload_and_list_jigsaw_images(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    upload_response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "box front",
+            "image": (BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), "box-front.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert upload_response.status_code == 201
+    uploaded = upload_response.get_json()["data"]
+    assert uploaded["tag"] == "box front"
+    assert uploaded["mime_type"] == "image/png"
+    assert uploaded["content_url"].endswith("/content")
+
+    list_response = client.get(f"/api/v1/jigsaws/{jigsaw_id}/images")
+    assert list_response.status_code == 200
+    images = list_response.get_json()["data"]
+    assert len(images) == 1
+    assert images[0]["id"] == uploaded["id"]
+
+    content_response = client.get(uploaded["content_url"])
+    assert content_response.status_code == 200
+    assert content_response.mimetype == "image/png"
+
+
+@pytest.mark.functional
+def test_admin_can_upload_jigsaw_image_without_tag(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "image": (BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), "untagged.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()["data"]
+    assert payload["tag"] == "untagged"
+
+
+@pytest.mark.functional
+def test_admin_can_upload_larger_jigsaw_image_payload(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+    large_png_payload = b"\x89PNG\r\n\x1a\n" + (b"x" * 200_000)
+
+    response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "completed puzzle",
+            "image": (BytesIO(large_png_payload), "completed.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()["data"]
+    assert payload["mime_type"] == "image/png"
+
+
+@pytest.mark.functional
+def test_upload_jigsaw_image_rejects_non_image_mime_type(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "notes",
+            "image": (BytesIO(b"not-an-image"), "notes.txt", "text/plain"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["code"] == "validation_error"
+    assert payload["error"]["details"][0]["field"] == "image"
+    assert payload["error"]["details"][0]["issue"] == "must be an image content type"
+
+
+@pytest.mark.functional
+def test_upload_jigsaw_image_rejects_empty_file(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "empty",
+            "image": (BytesIO(b""), "empty.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["code"] == "validation_error"
+    assert payload["error"]["details"][0]["field"] == "image"
+    assert payload["error"]["details"][0]["issue"] == "file must not be empty"
+
+
+@pytest.mark.functional
+def test_upload_jigsaw_image_rejects_payload_larger_than_limit(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+    too_large_payload = b"\x89PNG\r\n\x1a\n" + (b"x" * (8 * 1024 * 1024 + 1))
+
+    response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "too large",
+            "image": (BytesIO(too_large_payload), "too-large.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["code"] == "validation_error"
+    assert payload["error"]["details"][0]["field"] == "image"
+    assert "bytes or fewer" in payload["error"]["details"][0]["issue"]
+
+
+@pytest.mark.functional
+def test_upload_jigsaw_image_rejects_tag_that_is_too_long(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "t" * 65,
+            "image": (BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), "tag-too-long.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["code"] == "validation_error"
+    assert payload["error"]["details"][0]["field"] == "tag"
+    assert "64 characters or fewer" in payload["error"]["details"][0]["issue"]
+
+
+@pytest.mark.functional
+def test_borrower_cannot_list_jigsaw_images(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["borrower_user_id"])
+
+    response = client.get(f"/api/v1/jigsaws/{seeded_identity_data['available_jigsaw_id']}/images")
+
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "forbidden"
+
+
+@pytest.mark.functional
 def test_api_get_jigsaw_hides_retired_from_borrower(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["borrower_user_id"])
 
@@ -860,6 +1188,29 @@ def test_create_user_requires_password(client, seeded_identity_data):
 
 
 @pytest.mark.functional
+def test_create_user_rejects_password_shorter_than_minimum(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    response = client.post(
+        "/api/v1/users",
+        headers=_csrf_headers(),
+        json={
+            "email": "short.password@example.com",
+            "password": "TooShort1!",
+            "display_name": "Short Password",
+            "is_active": True,
+            "roles": ["borrower"],
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["code"] == "validation_error"
+    assert payload["error"]["details"][0]["field"] == "password"
+    assert "at least 12 characters" in payload["error"]["details"][0]["issue"]
+
+
+@pytest.mark.functional
 def test_update_user_rejects_self_deactivation(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["admin_user_id"])
 
@@ -962,3 +1313,27 @@ def test_auth_me_patch_rejects_incorrect_current_password(client, seeded_identit
 
     assert response.status_code == 403
     assert response.get_json()["error"]["code"] == "forbidden"
+
+
+@pytest.mark.functional
+def test_auth_me_patch_rejects_new_password_shorter_than_minimum(client, seeded_identity_data):
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "borrower@example.com", "password": "BorrowerPassword123!"},
+    )
+    csrf_token = login_response.get_json()["data"]["csrf_token"]
+
+    response = client.patch(
+        "/api/v1/auth/me",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "current_password": "BorrowerPassword123!",
+            "new_password": "short1!",
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["code"] == "validation_error"
+    assert payload["error"]["details"][0]["field"] == "password"
+    assert "at least 12 characters" in payload["error"]["details"][0]["issue"]

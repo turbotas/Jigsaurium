@@ -6,9 +6,10 @@ from functools import wraps
 
 from flask import Blueprint, current_app, g, request, session
 from sqlalchemy import select
+from sqlalchemy.exc import DataError
 
 from app.db import get_session
-from app.models import AuditEvent, Jigsaw, Loan, Role, User, UserRole
+from app.models import AuditEvent, Jigsaw, JigsawImage, Loan, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
 
@@ -21,6 +22,15 @@ DISPLAY_NAME_MAX_LENGTH = 255
 PASSWORD_MAX_LENGTH = 256
 PASSWORD_MIN_LENGTH = 12
 DEFAULT_LOAN_DURATION_DAYS = 28
+JIGSAW_TITLE_MAX_LENGTH = 255
+JIGSAW_MANUFACTURER_MAX_LENGTH = 255
+JIGSAW_ARTIST_MAX_LENGTH = 255
+JIGSAW_DIMENSIONS_MAX_LENGTH = 64
+JIGSAW_TAGS_MAX_LENGTH = 512
+JIGSAW_DESCRIPTION_MAX_LENGTH = 4000
+JIGSAW_IMAGE_TAG_MAX_LENGTH = 64
+JIGSAW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+DEFAULT_JIGSAW_IMAGE_TAG = "untagged"
 
 
 def _success_response(data, status_code=200):
@@ -62,10 +72,27 @@ def _serialize_jigsaw(jigsaw):
     return {
         "id": jigsaw.id,
         "title": jigsaw.title,
+        "manufacturer": jigsaw.manufacturer,
+        "artist": jigsaw.artist,
+        "dimensions_cm": jigsaw.dimensions_cm,
+        "description": jigsaw.description,
         "piece_count": jigsaw.piece_count,
         "condition": jigsaw.condition,
         "status": jigsaw.status.value,
         "tags": jigsaw.tags,
+        "last_completed_at": jigsaw.last_completed_at.isoformat() if jigsaw.last_completed_at else None,
+    }
+
+
+def _serialize_jigsaw_image(image):
+    return {
+        "id": image.id,
+        "jigsaw_id": image.jigsaw_id,
+        "tag": image.tag,
+        "filename": image.filename,
+        "mime_type": image.mime_type,
+        "content_url": f"/api/v1/jigsaws/{image.jigsaw_id}/images/{image.id}/content",
+        "created_at": image.created_at.isoformat() if image.created_at else None,
     }
 
 
@@ -229,6 +256,78 @@ def _validate_display_name(value):
         )
 
     return normalized_value, None
+
+
+def _validate_optional_text_field(value, *, field_name, max_length):
+    if value is None:
+        return None, None
+
+    if not isinstance(value, str):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be a string or null"}],
+        )
+
+    normalized = value.strip()
+    if not normalized:
+        return None, None
+
+    if len(normalized) > max_length:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": f"must be {max_length} characters or fewer"}],
+        )
+
+    if _contains_control_characters(normalized):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "contains unsupported control characters"}],
+        )
+
+    return normalized, None
+
+
+def _parse_optional_iso_datetime(value, field_name):
+    if value is None:
+        return None, None
+
+    if isinstance(value, str) and not value.strip():
+        return None, None
+
+    if not isinstance(value, str):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be an ISO 8601 datetime string or null"}],
+        )
+
+    raw_value = value.strip()
+    if raw_value.endswith("Z"):
+        raw_value = raw_value[:-1] + "+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(raw_value)
+    except ValueError:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be a valid ISO 8601 datetime"}],
+        )
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+
+    return parsed, None
 
 
 def _validate_password(value, *, require_min_length=False):
@@ -406,6 +505,51 @@ def _parse_positive_integer(value, field_name):
             "Invalid request payload.",
             422,
             [{"field": field_name, "issue": "must be a positive integer"}],
+        )
+
+    return value, None
+
+
+def _parse_optional_positive_integer(value, field_name):
+    if value is None:
+        return None, None
+
+    if isinstance(value, bool):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be a positive integer or empty"}],
+        )
+
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None, None
+        try:
+            parsed = int(normalized)
+        except ValueError:
+            return None, _error_response(
+                "validation_error",
+                "Invalid request payload.",
+                422,
+                [{"field": field_name, "issue": "must be a positive integer or empty"}],
+            )
+        if parsed <= 0:
+            return None, _error_response(
+                "validation_error",
+                "Invalid request payload.",
+                422,
+                [{"field": field_name, "issue": "must be greater than zero when provided"}],
+            )
+        return parsed, None
+
+    if not isinstance(value, int) or value <= 0:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be greater than zero when provided"}],
         )
 
     return value, None
@@ -812,7 +956,12 @@ def list_jigsaws():
     query_text = request.args.get("q")
     if query_text:
         pattern = f"%{query_text.strip()}%"
-        stmt = stmt.where(Jigsaw.title.ilike(pattern) | Jigsaw.tags.ilike(pattern))
+        stmt = stmt.where(
+            Jigsaw.title.ilike(pattern)
+            | Jigsaw.tags.ilike(pattern)
+            | Jigsaw.manufacturer.ilike(pattern)
+            | Jigsaw.artist.ilike(pattern)
+        )
 
     jigsaws = db_session.execute(stmt.order_by(Jigsaw.id)).scalars().all()
     payload = [_serialize_jigsaw(jigsaw) for jigsaw in jigsaws]
@@ -910,54 +1059,70 @@ def create_jigsaw():
     if error is not None:
         return error
 
-    title = payload.get("title")
-    if not isinstance(title, str) or not title.strip():
-        return _error_response(
-            "validation_error",
-            "Invalid request payload.",
-            422,
-            [{"field": "title", "issue": "must be a non-empty string"}],
-        )
-
-    piece_count = payload.get("piece_count")
-    if not isinstance(piece_count, int) or piece_count <= 0:
-        return _error_response(
-            "validation_error",
-            "Invalid request payload.",
-            422,
-            [{"field": "piece_count", "issue": "must be greater than zero"}],
-        )
-
-    raw_status = payload.get("status", JigsawStatus.AVAILABLE.value)
-    status, error = _parse_jigsaw_status(raw_status)
+    title, error = _validate_optional_text_field(payload.get("title"), field_name="title", max_length=JIGSAW_TITLE_MAX_LENGTH)
     if error is not None:
         return error
 
-    condition = payload.get("condition")
-    if condition is not None and not isinstance(condition, str):
-        return _error_response(
-            "validation_error",
-            "Invalid request payload.",
-            422,
-            [{"field": "condition", "issue": "must be a string or null"}],
-        )
+    piece_count, error = _parse_optional_positive_integer(payload.get("piece_count"), "piece_count")
+    if error is not None:
+        return error
 
-    tags = payload.get("tags")
-    if tags is not None and not isinstance(tags, str):
-        return _error_response(
-            "validation_error",
-            "Invalid request payload.",
-            422,
-            [{"field": "tags", "issue": "must be a string or null"}],
-        )
+    raw_status = payload.get("status")
+    if raw_status is None or (isinstance(raw_status, str) and not raw_status.strip()):
+        status = JigsawStatus.AVAILABLE
+    else:
+        status, error = _parse_jigsaw_status(raw_status)
+        if error is not None:
+            return error
+
+    manufacturer, error = _validate_optional_text_field(
+        payload.get("manufacturer"), field_name="manufacturer", max_length=JIGSAW_MANUFACTURER_MAX_LENGTH
+    )
+    if error is not None:
+        return error
+
+    artist, error = _validate_optional_text_field(
+        payload.get("artist"), field_name="artist", max_length=JIGSAW_ARTIST_MAX_LENGTH
+    )
+    if error is not None:
+        return error
+
+    dimensions_cm, error = _validate_optional_text_field(
+        payload.get("dimensions_cm"), field_name="dimensions_cm", max_length=JIGSAW_DIMENSIONS_MAX_LENGTH
+    )
+    if error is not None:
+        return error
+
+    description, error = _validate_optional_text_field(
+        payload.get("description"), field_name="description", max_length=JIGSAW_DESCRIPTION_MAX_LENGTH
+    )
+    if error is not None:
+        return error
+
+    condition, error = _validate_optional_text_field(payload.get("condition"), field_name="condition", max_length=64)
+    if error is not None:
+        return error
+
+    tags, error = _validate_optional_text_field(payload.get("tags"), field_name="tags", max_length=JIGSAW_TAGS_MAX_LENGTH)
+    if error is not None:
+        return error
+
+    last_completed_at, error = _parse_optional_iso_datetime(payload.get("last_completed_at"), "last_completed_at")
+    if error is not None:
+        return error
 
     db_session = get_session()
     jigsaw = Jigsaw(
-        title=title.strip(),
+        title=title,
+        manufacturer=manufacturer,
+        artist=artist,
+        dimensions_cm=dimensions_cm,
+        description=description,
         piece_count=piece_count,
         condition=condition,
         status=status,
         tags=tags,
+        last_completed_at=last_completed_at,
     )
     db_session.add(jigsaw)
     db_session.flush()
@@ -966,7 +1131,15 @@ def create_jigsaw():
         action="jigsaw.created",
         entity_type="jigsaw",
         entity_id=jigsaw.id,
-        payload={"title": jigsaw.title, "piece_count": piece_count, "status": status.value},
+        payload={
+            "title": jigsaw.title,
+            "piece_count": piece_count,
+            "status": status.value,
+            "manufacturer": jigsaw.manufacturer,
+            "artist": jigsaw.artist,
+            "dimensions_cm": jigsaw.dimensions_cm,
+            "last_completed_at": jigsaw.last_completed_at.isoformat() if jigsaw.last_completed_at else None,
+        },
     )
     db_session.commit()
 
@@ -994,7 +1167,18 @@ def update_jigsaw(jigsaw_id):
     if error is not None:
         return error
 
-    updatable_fields = {"title", "piece_count", "condition", "status", "tags"}
+    updatable_fields = {
+        "title",
+        "manufacturer",
+        "artist",
+        "dimensions_cm",
+        "description",
+        "piece_count",
+        "condition",
+        "status",
+        "tags",
+        "last_completed_at",
+    }
     if not any(field in payload for field in updatable_fields):
         return _error_response(
             "validation_error",
@@ -1019,7 +1203,46 @@ def update_jigsaw(jigsaw_id):
                 422,
                 [{"field": "title", "issue": "must be a non-empty string"}],
             )
+        if len(title.strip()) > JIGSAW_TITLE_MAX_LENGTH:
+            return _error_response(
+                "validation_error",
+                "Invalid request payload.",
+                422,
+                [{"field": "title", "issue": f"must be {JIGSAW_TITLE_MAX_LENGTH} characters or fewer"}],
+            )
         jigsaw.title = title.strip()
+
+    if "manufacturer" in payload:
+        manufacturer, error = _validate_optional_text_field(
+            payload.get("manufacturer"), field_name="manufacturer", max_length=JIGSAW_MANUFACTURER_MAX_LENGTH
+        )
+        if error is not None:
+            return error
+        jigsaw.manufacturer = manufacturer
+
+    if "artist" in payload:
+        artist, error = _validate_optional_text_field(
+            payload.get("artist"), field_name="artist", max_length=JIGSAW_ARTIST_MAX_LENGTH
+        )
+        if error is not None:
+            return error
+        jigsaw.artist = artist
+
+    if "dimensions_cm" in payload:
+        dimensions_cm, error = _validate_optional_text_field(
+            payload.get("dimensions_cm"), field_name="dimensions_cm", max_length=JIGSAW_DIMENSIONS_MAX_LENGTH
+        )
+        if error is not None:
+            return error
+        jigsaw.dimensions_cm = dimensions_cm
+
+    if "description" in payload:
+        description, error = _validate_optional_text_field(
+            payload.get("description"), field_name="description", max_length=JIGSAW_DESCRIPTION_MAX_LENGTH
+        )
+        if error is not None:
+            return error
+        jigsaw.description = description
 
     if "piece_count" in payload:
         piece_count = payload.get("piece_count")
@@ -1033,14 +1256,9 @@ def update_jigsaw(jigsaw_id):
         jigsaw.piece_count = piece_count
 
     if "condition" in payload:
-        condition = payload.get("condition")
-        if condition is not None and not isinstance(condition, str):
-            return _error_response(
-                "validation_error",
-                "Invalid request payload.",
-                422,
-                [{"field": "condition", "issue": "must be a string or null"}],
-            )
+        condition, error = _validate_optional_text_field(payload.get("condition"), field_name="condition", max_length=64)
+        if error is not None:
+            return error
         jigsaw.condition = condition
 
     if "status" in payload:
@@ -1050,15 +1268,16 @@ def update_jigsaw(jigsaw_id):
         jigsaw.status = status
 
     if "tags" in payload:
-        tags = payload.get("tags")
-        if tags is not None and not isinstance(tags, str):
-            return _error_response(
-                "validation_error",
-                "Invalid request payload.",
-                422,
-                [{"field": "tags", "issue": "must be a string or null"}],
-            )
+        tags, error = _validate_optional_text_field(payload.get("tags"), field_name="tags", max_length=JIGSAW_TAGS_MAX_LENGTH)
+        if error is not None:
+            return error
         jigsaw.tags = tags
+
+    if "last_completed_at" in payload:
+        last_completed_at, error = _parse_optional_iso_datetime(payload.get("last_completed_at"), "last_completed_at")
+        if error is not None:
+            return error
+        jigsaw.last_completed_at = last_completed_at
 
     action = "jigsaw.updated"
     if jigsaw.status != original_status:
@@ -1072,6 +1291,133 @@ def update_jigsaw(jigsaw_id):
     )
     db_session.commit()
     return _success_response(_serialize_jigsaw(jigsaw))
+
+
+@api_v1_bp.get("/jigsaws/<int:jigsaw_id>/images")
+@require_role("administrator")
+def list_jigsaw_images(jigsaw_id):
+    db_session = get_session()
+    jigsaw = db_session.get(Jigsaw, jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+
+    images = db_session.execute(select(JigsawImage).where(JigsawImage.jigsaw_id == jigsaw.id).order_by(JigsawImage.id.desc())).scalars().all()
+    payload = [_serialize_jigsaw_image(image) for image in images]
+    return _success_response(payload)
+
+
+@api_v1_bp.post("/jigsaws/<int:jigsaw_id>/images")
+@require_role("administrator")
+def create_jigsaw_image(jigsaw_id):
+    db_session = get_session()
+    jigsaw = db_session.get(Jigsaw, jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+
+    tag, error = _validate_optional_text_field(
+        request.form.get("tag"), field_name="tag", max_length=JIGSAW_IMAGE_TAG_MAX_LENGTH
+    )
+    if error is not None:
+        return error
+    if tag is None:
+        tag = DEFAULT_JIGSAW_IMAGE_TAG
+
+    upload = request.files.get("image")
+    if upload is None:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": "file is required"}],
+        )
+
+    mime_type = (upload.mimetype or "").strip().lower()
+    if not mime_type.startswith("image/"):
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": "must be an image content type"}],
+        )
+
+    image_data = upload.read()
+    if not image_data:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": "file must not be empty"}],
+        )
+
+    if len(image_data) > JIGSAW_IMAGE_MAX_BYTES:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": f"must be {JIGSAW_IMAGE_MAX_BYTES} bytes or fewer"}],
+        )
+
+    filename, error = _validate_optional_text_field(
+        upload.filename, field_name="filename", max_length=255
+    )
+    if error is not None:
+        return error
+
+    image = JigsawImage(
+        jigsaw_id=jigsaw.id,
+        tag=tag,
+        filename=filename,
+        mime_type=mime_type,
+        image_data=image_data,
+    )
+    db_session.add(image)
+
+    try:
+        db_session.flush()
+
+        _record_audit_event(
+            action="jigsaw.image_created",
+            entity_type="jigsaw_image",
+            entity_id=image.id,
+            payload={
+                "jigsaw_id": jigsaw.id,
+                "tag": image.tag,
+                "mime_type": image.mime_type,
+                "size_bytes": len(image_data),
+            },
+        )
+        db_session.commit()
+    except DataError:
+        db_session.rollback()
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": "is too large to store"}],
+        )
+
+    return _success_response(_serialize_jigsaw_image(image), status_code=201)
+
+
+@api_v1_bp.get("/jigsaws/<int:jigsaw_id>/images/<int:image_id>/content")
+@require_auth
+def get_jigsaw_image_content(jigsaw_id, image_id):
+    db_session = get_session()
+    image = db_session.get(JigsawImage, image_id)
+    if image is None or image.jigsaw_id != jigsaw_id:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    jigsaw = db_session.get(Jigsaw, jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    response = current_app.response_class(image.image_data, mimetype=image.mime_type)
+    if image.filename:
+        response.headers["Content-Disposition"] = f'inline; filename="{image.filename}"'
+    return response
 
 
 @api_v1_bp.delete("/jigsaws/<int:jigsaw_id>")

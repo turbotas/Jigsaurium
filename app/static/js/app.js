@@ -5,6 +5,7 @@
     users: [],
     jigsaws: [],
     loans: [],
+    jigsawImages: [],
   };
 
   const elements = {
@@ -43,11 +44,26 @@
     jigsawEditCancelButton: document.getElementById("jigsaw-edit-cancel"),
     editJigsawId: document.getElementById("edit-jigsaw-id"),
     editJigsawTitle: document.getElementById("edit-jigsaw-title"),
+    jigsawManufacturer: document.getElementById("jigsaw-manufacturer"),
+    jigsawArtist: document.getElementById("jigsaw-artist"),
+    jigsawDimensionsCm: document.getElementById("jigsaw-dimensions-cm"),
+    jigsawDescription: document.getElementById("jigsaw-description"),
+    jigsawLastCompletedAt: document.getElementById("jigsaw-last-completed-at"),
     editJigsawPieceCount: document.getElementById("edit-jigsaw-piece-count"),
+    editJigsawManufacturer: document.getElementById("edit-jigsaw-manufacturer"),
+    editJigsawArtist: document.getElementById("edit-jigsaw-artist"),
+    editJigsawDimensionsCm: document.getElementById("edit-jigsaw-dimensions-cm"),
+    editJigsawDescription: document.getElementById("edit-jigsaw-description"),
+    editJigsawLastCompletedAt: document.getElementById("edit-jigsaw-last-completed-at"),
     editJigsawCondition: document.getElementById("edit-jigsaw-condition"),
     editJigsawStatus: document.getElementById("edit-jigsaw-status"),
     editJigsawTags: document.getElementById("edit-jigsaw-tags"),
     jigsawsTableBody: document.getElementById("jigsaws-table-body"),
+    jigsawImageForm: document.getElementById("jigsaw-image-form"),
+    jigsawImageJigsawId: document.getElementById("jigsaw-image-jigsaw-id"),
+    jigsawImageTag: document.getElementById("jigsaw-image-tag"),
+    jigsawImageFile: document.getElementById("jigsaw-image-file"),
+    jigsawImagesTableBody: document.getElementById("jigsaw-images-table-body"),
     loanCreateForm: document.getElementById("loan-create-form"),
     loanBorrowerUserId: document.getElementById("loan-borrower-user-id"),
     loanJigsawId: document.getElementById("loan-jigsaw-id"),
@@ -79,7 +95,7 @@
     const headers = new Headers(options.headers || {});
     headers.set("Accept", "application/json");
 
-    if (options.body && !headers.has("Content-Type")) {
+    if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
 
@@ -95,7 +111,16 @@
       headers,
     });
 
-    const payload = await response.json().catch(() => ({}));
+    const responseText = await response.text();
+    let payload = {};
+    if (responseText) {
+      try {
+        payload = JSON.parse(responseText);
+      } catch (_error) {
+        payload = {};
+      }
+    }
+
     if (!response.ok) {
       const details = Array.isArray(payload?.error?.details) ? payload.error.details : [];
       const detailMessage = details
@@ -106,7 +131,9 @@
         })
         .join("; ");
       const baseMessage = payload?.error?.message || "Request failed.";
-      const message = detailMessage ? `${baseMessage} ${detailMessage}` : baseMessage;
+      const fallbackSnippet = responseText ? responseText.replace(/\s+/g, " ").trim().slice(0, 180) : "";
+      const fallbackMessage = fallbackSnippet ? `HTTP ${response.status}: ${fallbackSnippet}` : `HTTP ${response.status}`;
+      const message = detailMessage ? `${baseMessage} ${detailMessage}` : payload?.error?.message ? baseMessage : fallbackMessage;
       const error = new Error(message);
       error.status = response.status;
       error.payload = payload;
@@ -161,6 +188,46 @@
     }
 
     return parsedDate.toLocaleString();
+  }
+
+  function toDatetimeLocalValue(value) {
+    if (!value) {
+      return "";
+    }
+
+    const parsedDate = new Date(value);
+    if (Number.isNaN(parsedDate.valueOf())) {
+      return "";
+    }
+
+    const year = parsedDate.getFullYear();
+    const month = String(parsedDate.getMonth() + 1).padStart(2, "0");
+    const day = String(parsedDate.getDate()).padStart(2, "0");
+    const hours = String(parsedDate.getHours()).padStart(2, "0");
+    const minutes = String(parsedDate.getMinutes()).padStart(2, "0");
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  }
+
+  function normalizeDatetimeLocal(value) {
+    const rawValue = String(value || "").trim();
+    if (!rawValue) {
+      return null;
+    }
+    return rawValue;
+  }
+
+  function parseOptionalIntegerFormValue(value) {
+    const rawValue = String(value || "").trim();
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) {
+      return rawValue;
+    }
+
+    return Math.trunc(parsed);
   }
 
   function getSelectedRoles(formData) {
@@ -227,6 +294,32 @@
     }
   }
 
+  function populateJigsawImageOptions() {
+    if (!elements.jigsawImageJigsawId) {
+      return;
+    }
+
+    const currentJigsawId = elements.jigsawImageJigsawId.value;
+    elements.jigsawImageJigsawId.innerHTML = "";
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Choose jigsaw";
+    elements.jigsawImageJigsawId.appendChild(placeholder);
+
+    const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
+    sortedJigsaws.forEach((jigsaw) => {
+      const option = document.createElement("option");
+      option.value = String(jigsaw.id);
+      option.textContent = `${jigsaw.title} (id ${jigsaw.id})`;
+      elements.jigsawImageJigsawId.appendChild(option);
+    });
+
+    if (currentJigsawId && sortedJigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
+      elements.jigsawImageJigsawId.value = currentJigsawId;
+    }
+  }
+
   function setSessionSummary() {
     if (!elements.sessionSummary) {
       return;
@@ -256,6 +349,7 @@
         elements.authCredentialsWrap.hidden = false;
       }
       populateLoanFormOptions();
+      populateJigsawImageOptions();
       return;
     }
 
@@ -332,6 +426,21 @@
     if (elements.editJigsawTitle) {
       elements.editJigsawTitle.value = "";
     }
+    if (elements.editJigsawManufacturer) {
+      elements.editJigsawManufacturer.value = "";
+    }
+    if (elements.editJigsawArtist) {
+      elements.editJigsawArtist.value = "";
+    }
+    if (elements.editJigsawDimensionsCm) {
+      elements.editJigsawDimensionsCm.value = "";
+    }
+    if (elements.editJigsawDescription) {
+      elements.editJigsawDescription.value = "";
+    }
+    if (elements.editJigsawLastCompletedAt) {
+      elements.editJigsawLastCompletedAt.value = "";
+    }
     if (elements.editJigsawPieceCount) {
       elements.editJigsawPieceCount.value = "";
     }
@@ -402,7 +511,7 @@
     clearTableBody(tableBody);
 
     if (!Array.isArray(jigsaws) || jigsaws.length === 0) {
-      appendEmptyRow(tableBody, 7, "No jigsaws found.");
+      appendEmptyRow(tableBody, 10, "No jigsaws found.");
       return;
     }
 
@@ -412,10 +521,13 @@
 
       row.appendChild(buildCell(String(jigsaw.id)));
       row.appendChild(buildCell(String(jigsaw.title || "-")));
+      row.appendChild(buildCell(String(jigsaw.manufacturer || "-")));
+      row.appendChild(buildCell(String(jigsaw.artist || "-")));
+      row.appendChild(buildCell(String(jigsaw.dimensions_cm || "-")));
       row.appendChild(buildCell(String(jigsaw.piece_count || "-")));
       row.appendChild(buildCell(String(jigsaw.condition || "-")));
       row.appendChild(buildCell(String(jigsaw.status || "-")));
-      row.appendChild(buildCell(String(jigsaw.tags || "-")));
+      row.appendChild(buildCell(toLocalTimestamp(jigsaw.last_completed_at)));
 
       const actionCell = document.createElement("td");
       actionCell.className = "govuk-table__cell";
@@ -499,6 +611,39 @@
     });
   }
 
+  function renderJigsawImages(images) {
+    const tableBody = elements.jigsawImagesTableBody;
+    clearTableBody(tableBody);
+
+    if (!Array.isArray(images) || images.length === 0) {
+      appendEmptyRow(tableBody, 5, "No images found.");
+      return;
+    }
+
+    images.forEach((image) => {
+      const row = document.createElement("tr");
+      row.className = "govuk-table__row";
+
+      row.appendChild(buildCell(String(image.id)));
+      row.appendChild(buildCell(String(image.tag || "-")));
+      row.appendChild(buildCell(String(image.filename || "-")));
+      row.appendChild(buildCell(toLocalTimestamp(image.created_at)));
+
+      const actionCell = document.createElement("td");
+      actionCell.className = "govuk-table__cell";
+      const link = document.createElement("a");
+      link.className = "govuk-link";
+      link.href = String(image.content_url || "#");
+      link.textContent = "Open";
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      actionCell.appendChild(link);
+      row.appendChild(actionCell);
+
+      tableBody.appendChild(row);
+    });
+  }
+
   async function refreshSession() {
     try {
       const payload = await apiRequest("/api/v1/auth/me");
@@ -555,11 +700,32 @@
       state.jigsaws = Array.isArray(payload.data) ? payload.data : [];
       renderJigsaws(state.jigsaws);
       populateLoanFormOptions();
+      populateJigsawImageOptions();
     } catch (error) {
       state.jigsaws = [];
       renderJigsaws([]);
       closeJigsawEditor();
       populateLoanFormOptions();
+      populateJigsawImageOptions();
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function loadJigsawImagesForSelected() {
+    const selectedJigsawId = Number(elements.jigsawImageJigsawId?.value || "0");
+    if (!selectedJigsawId) {
+      state.jigsawImages = [];
+      renderJigsawImages([]);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest(`/api/v1/jigsaws/${selectedJigsawId}/images`);
+      state.jigsawImages = Array.isArray(payload.data) ? payload.data : [];
+      renderJigsawImages(state.jigsawImages);
+    } catch (error) {
+      state.jigsawImages = [];
+      renderJigsawImages([]);
       showFeedback(error.message, true);
     }
   }
@@ -628,6 +794,7 @@
       setSessionSummary();
       showFeedback("Signed in successfully.");
       await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents()]);
+      await loadJigsawImagesForSelected();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -649,12 +816,15 @@
       state.users = [];
       state.jigsaws = [];
       state.loans = [];
+      state.jigsawImages = [];
       renderUsers([]);
       closeUserEditor();
       renderJigsaws([]);
       closeJigsawEditor();
       renderLoans([]);
+      renderJigsawImages([]);
       populateLoanFormOptions();
+      populateJigsawImageOptions();
       renderAuditEvents([]);
       showFeedback("Signed out.");
     } catch (error) {
@@ -872,9 +1042,14 @@
     const formData = new FormData(form);
     const payload = {
       title: String(formData.get("title") || "").trim(),
-      piece_count: Number(formData.get("piece_count") || "0"),
+      manufacturer: String(formData.get("manufacturer") || "").trim() || null,
+      artist: String(formData.get("artist") || "").trim() || null,
+      dimensions_cm: String(formData.get("dimensions_cm") || "").trim() || null,
+      description: String(formData.get("description") || "").trim() || null,
+      last_completed_at: normalizeDatetimeLocal(formData.get("last_completed_at")),
+      piece_count: parseOptionalIntegerFormValue(formData.get("piece_count")),
       condition: String(formData.get("condition") || "").trim() || null,
-      status: String(formData.get("status") || "available"),
+      status: String(formData.get("status") || "").trim() || null,
       tags: String(formData.get("tags") || "").trim() || null,
     };
 
@@ -885,7 +1060,38 @@
       });
       form.reset();
       showFeedback("Jigsaw created.");
-      await Promise.all([loadJigsaws(), loadLoans(), loadAuditEvents()]);
+      await Promise.all([loadJigsaws(), loadJigsawImagesForSelected(), loadLoans(), loadAuditEvents()]);
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function handleCreateJigsawImage(event) {
+    event.preventDefault();
+    clearFeedback();
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const jigsawId = Number(formData.get("jigsaw_id") || "0");
+
+    if (!jigsawId) {
+      showFeedback("Select a jigsaw before uploading an image.", true);
+      return;
+    }
+
+    try {
+      await apiRequest(`/api/v1/jigsaws/${jigsawId}/images`, {
+        method: "POST",
+        body: formData,
+      });
+      showFeedback("Jigsaw image uploaded.");
+      if (elements.jigsawImageTag) {
+        elements.jigsawImageTag.value = "";
+      }
+      if (elements.jigsawImageFile) {
+        elements.jigsawImageFile.value = "";
+      }
+      await Promise.all([loadJigsawImagesForSelected(), loadAuditEvents()]);
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -935,6 +1141,21 @@
     if (elements.editJigsawTitle) {
       elements.editJigsawTitle.value = selectedJigsaw.title || "";
     }
+    if (elements.editJigsawManufacturer) {
+      elements.editJigsawManufacturer.value = selectedJigsaw.manufacturer || "";
+    }
+    if (elements.editJigsawArtist) {
+      elements.editJigsawArtist.value = selectedJigsaw.artist || "";
+    }
+    if (elements.editJigsawDimensionsCm) {
+      elements.editJigsawDimensionsCm.value = selectedJigsaw.dimensions_cm || "";
+    }
+    if (elements.editJigsawDescription) {
+      elements.editJigsawDescription.value = selectedJigsaw.description || "";
+    }
+    if (elements.editJigsawLastCompletedAt) {
+      elements.editJigsawLastCompletedAt.value = toDatetimeLocalValue(selectedJigsaw.last_completed_at);
+    }
     if (elements.editJigsawPieceCount) {
       elements.editJigsawPieceCount.value = String(selectedJigsaw.piece_count || "");
     }
@@ -966,6 +1187,11 @@
 
     const payload = {
       title: String(formData.get("title") || "").trim(),
+      manufacturer: String(formData.get("manufacturer") || "").trim() || null,
+      artist: String(formData.get("artist") || "").trim() || null,
+      dimensions_cm: String(formData.get("dimensions_cm") || "").trim() || null,
+      description: String(formData.get("description") || "").trim() || null,
+      last_completed_at: normalizeDatetimeLocal(formData.get("last_completed_at")),
       piece_count: Number(formData.get("piece_count") || "0"),
       condition: String(formData.get("condition") || "").trim() || null,
       status: String(formData.get("status") || "available"),
@@ -978,7 +1204,7 @@
         body: JSON.stringify(payload),
       });
       showFeedback("Jigsaw updated.");
-      await Promise.all([loadJigsaws(), loadLoans(), loadAuditEvents()]);
+      await Promise.all([loadJigsaws(), loadJigsawImagesForSelected(), loadLoans(), loadAuditEvents()]);
       openJigsawEditor(jigsawId);
     } catch (error) {
       showFeedback(error.message, true);
@@ -1045,11 +1271,16 @@
       try {
         await apiRequest(`/api/v1/jigsaws/${jigsawId}`, { method: "DELETE" });
         showFeedback("Jigsaw retired.");
-        await Promise.all([loadJigsaws(), loadLoans(), loadAuditEvents()]);
+        await Promise.all([loadJigsaws(), loadJigsawImagesForSelected(), loadLoans(), loadAuditEvents()]);
       } catch (error) {
         showFeedback(error.message, true);
       }
     }
+  }
+
+  function handleJigsawImageSelectionChange() {
+    clearFeedback();
+    loadJigsawImagesForSelected();
   }
 
   function attachEvents() {
@@ -1075,6 +1306,14 @@
 
     if (elements.loanCreateForm) {
       elements.loanCreateForm.addEventListener("submit", handleCreateLoan);
+    }
+
+    if (elements.jigsawImageForm) {
+      elements.jigsawImageForm.addEventListener("submit", handleCreateJigsawImage);
+    }
+
+    if (elements.jigsawImageJigsawId) {
+      elements.jigsawImageJigsawId.addEventListener("change", handleJigsawImageSelectionChange);
     }
 
     if (elements.jigsawEditForm) {
@@ -1107,12 +1346,15 @@
     const isAuthenticated = await refreshSession();
     if (isAuthenticated) {
       await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents()]);
+      await loadJigsawImagesForSelected();
     } else {
       renderUsers([]);
       renderJigsaws([]);
       renderLoans([]);
+      renderJigsawImages([]);
       renderAuditEvents([]);
       populateLoanFormOptions();
+      populateJigsawImageOptions();
     }
   }
 

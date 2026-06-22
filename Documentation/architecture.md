@@ -45,7 +45,9 @@
 - `user_roles`
   - many-to-many assignment
 - `jigsaws`
-  - title, piece_count, condition, status, metadata
+  - title, manufacturer, artist, dimensions_cm, description, piece_count, condition, status, metadata
+- `jigsaw_images`
+  - jigsaw_id, tag, filename, mime_type, image_data, timestamp
 - `loans`
   - borrower, jigsaw, checkout date, due date, return date, status
 - `audit_events`

@@ -67,5 +67,5 @@ def test_api_health_returns_contract_shape(client):
     payload = response.get_json()
 
     assert payload["data"]["status"] == "ok"
-    assert payload["data"]["environment"] == "dev"
+    assert payload["data"]["environment"] == "test"
     assert payload["meta"]["request_id"].startswith("req_")

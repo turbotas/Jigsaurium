@@ -38,6 +38,9 @@
 - `GET /api/v1/audit-events`
 - `GET /api/v1/loans`
 - `POST /api/v1/loans`
+- `GET /api/v1/jigsaws/{id}/images`
+- `POST /api/v1/jigsaws/{id}/images`
+- `GET /api/v1/jigsaws/{id}/images/{image_id}/content`
 
 ## Filtering, Sorting, Pagination
 
@@ -153,6 +156,21 @@
   - Loan checkout sets `due_at` to four weeks (28 days) after `checked_out_at`.
   - Loan checkout returns `409` when the target jigsaw is not currently available.
   - Loan checkout updates jigsaw status to `on_loan`.
+
+- Jigsaw metadata notes:
+  - `POST /api/v1/jigsaws` allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.
+  - Duplicate `title` values are allowed.
+  - Jigsaw payloads now support optional fields: `manufacturer`, `artist`, `dimensions_cm`, `description`, `last_completed_at`.
+  - `last_completed_at` uses UTC ISO 8601 format.
+
+- Jigsaw image endpoint notes:
+  - `GET /api/v1/jigsaws/{id}/images` is admin-only.
+  - `POST /api/v1/jigsaws/{id}/images` is admin-only.
+  - `POST /api/v1/jigsaws/{id}/images` expects multipart form data:
+    - `tag` (optional string, defaults to `untagged` when omitted)
+    - `image` (required file, image MIME type)
+  - Uploaded images are stored in the database for v1.
+  - `GET /api/v1/jigsaws/{id}/images/{image_id}/content` returns binary image content for authenticated users.
 
 ## HTTP Status Rules
 
