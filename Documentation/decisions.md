@@ -69,3 +69,17 @@
 - Why: operational catalog data needs richer descriptive fields for stock management.
 - Decision: store jigsaw image binaries in the application database for v1.
 - Why: projected media volume is modest and database-backed storage keeps backups and portability simple in early phases.
+
+## 2026-06-22 - Migration Safety Guardrail
+
+- Decision: load `.env` in Alembic env and fail fast if the resolved migration target is in-memory SQLite.
+- Why: prevents migrations from "succeeding" against `sqlite+pysqlite:///:memory:` while runtime databases remain out of date.
+- Decision: run functional/UI tests against Alembic-migrated databases rather than ORM `create_all`.
+- Why: reduces drift between test schema behavior and real application environments.
+
+## 2026-06-22 - Relaxed Jigsaw Create Input
+
+- Decision: allow blank values for all jigsaw create inputs in v1, with default `status=available` when omitted/blank.
+- Why: supports planned image-driven creation workflows where structured metadata may be populated later.
+- Decision: allow duplicate jigsaw titles.
+- Why: title uniqueness is not a current domain requirement and cannot be assumed in manual/image-assisted entry.

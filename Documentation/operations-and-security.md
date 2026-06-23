@@ -74,3 +74,10 @@
 - Run `alembic upgrade head` in a clean environment.
 - Validate API health endpoint and key admin workflow.
 - Validate proxy header parsing behavior in each environment.
+
+## CI/Test Execution Notes
+
+- CI runs API/core tests on pushes and pull requests.
+- CI runs UI smoke tests on pull requests and pushes to `main`/`master`.
+- Functional and UI tests use Alembic-migrated test databases (not ORM `create_all`) to keep schema behavior aligned with runtime environments.
+- Alembic migration execution fails fast if target URL resolves to in-memory SQLite (`sqlite+pysqlite:///:memory:`) to avoid false-positive migration runs.
