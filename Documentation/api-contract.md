@@ -45,6 +45,7 @@
 - `GET /api/v1/jigsaws/{id}/images/{image_id}/content`
 - `GET /api/v1/image-library/images`
 - `POST /api/v1/image-library/uploads`
+- `DELETE /api/v1/image-library/images/{image_id}`
 - `PATCH /api/v1/image-library/images/{image_id}/assign`
 - `PATCH /api/v1/image-library/images/{image_id}/tag`
 - `PUT /api/v1/image-library/images/{image_id}/content`
@@ -186,6 +187,7 @@
     - `image` (required file, image MIME type)
   - Uploaded images are stored in the database for v1.
   - Image content hash (`SHA-256`) is used for duplicate suppression; uploading identical bytes returns the existing image instead of creating a duplicate row.
+  - Image payloads include optional capture metadata: `captured_at` (UTC ISO 8601) and `captured_at_source`.
   - `GET /api/v1/jigsaws/{id}/images/{image_id}/content` remains supported for jigsaw-associated images.
 
 - Image library endpoint notes:
@@ -196,10 +198,12 @@
     - `jigsaw_id` (optional positive integer association)
     - `tag` (optional string, defaults to `untagged`)
   - Images uploaded through the image-library endpoint may be unassigned (`jigsaw_id = null`).
-  - `POST /api/v1/image-library/uploads` returns a summary: `created_count`, `skipped_count`, and per-item `created` / `skipped` details.
+  - `POST /api/v1/image-library/uploads` returns a summary: `created_count`, `skipped_count`, `metadata_backfilled_count`, and per-item `created` / `skipped` details.
   - Hash duplicate handling applies to bulk imports too: duplicate image bytes are skipped and reported in `skipped`.
+  - Duplicate-image skips may still backfill missing capture metadata on the existing image record when newly uploaded bytes include EXIF capture time.
   - `PATCH /api/v1/image-library/images/{image_id}/assign` is admin-only and requires JSON body `{ "jigsaw_id": <positive integer> }`.
   - `PATCH /api/v1/image-library/images/{image_id}/assign` assigns an image to one jigsaw; reassignment to a different jigsaw returns `409`.
+  - `DELETE /api/v1/image-library/images/{image_id}` is admin-only and permanently deletes the image record.
   - `PATCH /api/v1/image-library/images/{image_id}/tag` is admin-only and updates image tag/classification (for example `Box`, `Completed`) even when image is unassigned.
   - `PUT /api/v1/image-library/images/{image_id}/content` is admin-only and overwrites the stored image bytes in-place (used by rotate/crop workflows).
   - Overwrite operations preserve the original dedupe hash so future uploads of the original source bytes still clash as duplicates.
@@ -225,6 +229,8 @@
     - `difficulty` (integer 1-5, or empty)
     - `notes` (string up to 4000 characters, no control characters)
   - Creating an entry moves the parent jigsaw's `last_completed_at` forward when the entry is newer.
+  - Tagging an assigned image as `Completed` auto-creates one diary entry (idempotent per image) using the image `captured_at` when available; fallback is current UTC time.
+  - Assigning an already-`Completed` image to a jigsaw triggers the same auto-diary behavior.
   - `DELETE /api/v1/diary-entries/{id}` is admin-only and returns the deleted entry; the parent jigsaw's `last_completed_at` is recomputed from remaining entries.
   - Diary entry create/delete write audit events (`jigsaw.diary_entry_created`, `jigsaw.diary_entry_deleted`).
 

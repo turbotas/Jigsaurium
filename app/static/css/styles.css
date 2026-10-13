@@ -53,6 +53,26 @@
   overflow-wrap: anywhere;
 }
 
+.app-image-library-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.app-image-library-table .govuk-table__cell,
+.app-image-library-table .govuk-table__header {
+  overflow-wrap: anywhere;
+}
+
+.app-image-library-table .govuk-table__header:nth-child(1),
+.app-image-library-table .govuk-table__cell:nth-child(1) {
+  width: 56px;
+}
+
+.app-image-library-table .govuk-table__header:nth-child(6),
+.app-image-library-table .govuk-table__cell:nth-child(6) {
+  width: 30%;
+}
+
 .app-cell-actions {
   white-space: normal;
 }
@@ -71,6 +91,29 @@
 
 .app-inline-button {
   margin-bottom: 0;
+}
+
+.app-image-actions {
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 6px;
+  width: 100%;
+}
+
+.app-image-actions .govuk-select {
+  min-width: 0;
+  width: min(100%, 12rem);
+}
+
+.app-image-actions .govuk-button {
+  white-space: nowrap;
+}
+
+.app-image-actions__row {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  width: 100%;
 }
 
 .app-dropzone {

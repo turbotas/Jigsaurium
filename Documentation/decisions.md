@@ -133,3 +133,12 @@
 - Why: box text often mixes branding and title; explicit fields improve downstream normalization and editing.
 - Decision: add admin enrich-from-images flow that analyzes all assigned images and fills only empty fields by default.
 - Why: back/side images often contain missing metadata (dimensions, artist, publisher), and non-destructive behavior prevents accidental overwrites.
+
+## 2026-10-14 - Capture-Time Backfill and Completed-Image Diary Automation
+
+- Decision: extract and persist image capture time metadata (`captured_at`) from EXIF on upload/import, and treat timezone-less EXIF datetimes as UTC.
+- Why: browser-based crop/rotate rewrites may strip EXIF in image bytes; storing capture time in DB preserves diary-relevant metadata.
+- Decision: when duplicate image bytes are re-uploaded, skip creating a new image but backfill missing capture metadata on the existing record.
+- Why: enables low-risk metadata backfill in dev/prod without content overwrite.
+- Decision: automatically create one diary entry per image when an assigned image is tagged `Completed` or a `Completed` image is assigned.
+- Why: removes repetitive manual completion logging and ties diary provenance to source images.

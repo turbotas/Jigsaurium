@@ -241,6 +241,17 @@
     return parsedDate.toLocaleString();
   }
 
+  function toCapturedLabel(image) {
+    if (!image || !image.captured_at) {
+      return "-";
+    }
+    const parsedDate = new Date(image.captured_at);
+    if (Number.isNaN(parsedDate.valueOf())) {
+      return "-";
+    }
+    return parsedDate.toLocaleDateString();
+  }
+
   function toDatetimeLocalValue(value) {
     if (!value) {
       return "";
@@ -583,7 +594,7 @@
 
     users.forEach((user) => {
       const row = document.createElement("tr");
-      row.className = "govuk-table__row";
+      row.className = "govuk-table__row app-image-library-data-row";
 
       const isActive = Boolean(user.is_active);
       const roleNames = Array.isArray(user.roles) ? user.roles.join(", ") : "-";
@@ -790,7 +801,7 @@
     clearTableBody(tableBody);
 
     if (!Array.isArray(images) || images.length === 0) {
-      appendEmptyRow(tableBody, 7, "No image library items found.");
+      appendEmptyRow(tableBody, 6, "No image library items found.");
       return;
     }
 
@@ -811,14 +822,19 @@
       row.appendChild(buildCell(String(image.filename || "-")));
       row.appendChild(buildCell(associationLabel));
       row.appendChild(buildCell(String(image.tag || "-")));
-      row.appendChild(buildCell(toLocalTimestamp(image.created_at)));
+      row.appendChild(buildCell(toCapturedLabel(image)));
 
-      const assignCell = document.createElement("td");
-      assignCell.className = "govuk-table__cell";
+      const actionCell = document.createElement("td");
+      actionCell.className = "govuk-table__cell";
+
+      const controlsWrap = document.createElement("div");
+      controlsWrap.className = "app-inline-controls app-image-actions";
+      const assignControls = document.createElement("div");
+      assignControls.className = "app-inline-controls app-image-actions__row";
+      const actionButtons = document.createElement("div");
+      actionButtons.className = "app-inline-controls app-image-actions__row";
+
       if (!image.jigsaw_id && sortedJigsaws.length > 0) {
-        const controlsWrap = document.createElement("div");
-        controlsWrap.className = "app-inline-controls";
-
         const select = document.createElement("select");
         select.className = "govuk-select";
         select.dataset.imageAssignSelect = String(image.id);
@@ -842,41 +858,28 @@
         button.dataset.imageAssign = String(image.id);
         button.textContent = "Assign";
 
-        const createButton = document.createElement("button");
-        createButton.type = "button";
-        createButton.className = "govuk-button govuk-button--secondary app-inline-button";
-        createButton.setAttribute("data-module", "govuk-button");
-        createButton.dataset.imageCreate = String(image.id);
-        createButton.textContent = "Create jigsaw";
-
-        controlsWrap.appendChild(select);
-        controlsWrap.appendChild(button);
-        controlsWrap.appendChild(createButton);
-        assignCell.appendChild(controlsWrap);
+        assignControls.appendChild(select);
+        assignControls.appendChild(button);
       } else if (!image.jigsaw_id) {
-        const controlsWrap = document.createElement("div");
-        controlsWrap.className = "app-inline-controls";
-
         const note = document.createElement("span");
         note.textContent = "No jigsaws available";
+        assignControls.appendChild(note);
+      } else {
+        const assignedNote = document.createElement("span");
+        assignedNote.textContent = "Assigned";
+        assignControls.appendChild(assignedNote);
+      }
 
+      if (!image.jigsaw_id) {
         const createButton = document.createElement("button");
         createButton.type = "button";
         createButton.className = "govuk-button govuk-button--secondary app-inline-button";
         createButton.setAttribute("data-module", "govuk-button");
         createButton.dataset.imageCreate = String(image.id);
-        createButton.textContent = "Create jigsaw";
-
-        controlsWrap.appendChild(note);
-        controlsWrap.appendChild(createButton);
-        assignCell.appendChild(controlsWrap);
-      } else {
-        assignCell.textContent = "Assigned";
+        createButton.textContent = "Create";
+        actionButtons.appendChild(createButton);
       }
-      row.appendChild(assignCell);
 
-      const actionCell = document.createElement("td");
-      actionCell.className = "govuk-table__cell";
       const link = document.createElement("a");
       link.className = "govuk-button govuk-button--secondary app-inline-button";
       link.setAttribute("role", "button");
@@ -885,8 +888,20 @@
       link.textContent = "Open";
       link.target = "_blank";
       link.rel = "noopener noreferrer";
-      actionCell.appendChild(link);
+      actionButtons.appendChild(link);
 
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "govuk-button govuk-button--warning app-inline-button";
+      deleteButton.setAttribute("data-module", "govuk-button");
+      deleteButton.dataset.imageDelete = String(image.id);
+      deleteButton.textContent = "Delete";
+      actionButtons.appendChild(deleteButton);
+
+      controlsWrap.appendChild(assignControls);
+      controlsWrap.appendChild(actionButtons);
+
+      actionCell.appendChild(controlsWrap);
       row.appendChild(actionCell);
       tableBody.appendChild(row);
     });
@@ -1053,8 +1068,10 @@
     const total = state.imageLibraryImages.length;
     const index = state.imageBrowser.index + 1;
     const association = item.jigsaw_id ? `assigned to jigsaw ${item.jigsaw_id}` : "unassigned";
+    const capturedAtLabel = item.captured_at ? toLocalTimestamp(item.captured_at) : "-";
+    const captureSourceLabel = item.captured_at_source || "unknown";
     const dirty = browserHasPendingEdits() ? " | unsaved edits" : "";
-    elements.imageBrowserStatus.textContent = `Image ${index}/${total}: ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association}${dirty}`;
+    elements.imageBrowserStatus.textContent = `Image ${index}/${total}: ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association} | captured: ${capturedAtLabel} (${captureSourceLabel})${dirty}`;
   }
 
   function clearImageBrowserWorkingState() {
@@ -2067,7 +2084,21 @@
 
       const createdCount = Number(payload?.data?.created_count || 0);
       const skippedCount = Number(payload?.data?.skipped_count || 0);
-      showFeedback(`Image library upload complete. Added ${createdCount} image(s), skipped ${skippedCount}.`);
+      const metadataBackfilledCount = Number(payload?.data?.metadata_backfilled_count || 0);
+      let metadataSuffix = "";
+      if (metadataBackfilledCount > 0) {
+        const skippedItems = Array.isArray(payload?.data?.skipped) ? payload.data.skipped : [];
+        const backfilledNames = skippedItems
+          .filter((item) => Boolean(item?.metadata_backfilled))
+          .map((item) => String(item?.filename || "(unnamed)"));
+        const previewNames = backfilledNames.slice(0, 4).join(", ");
+        const overflow = Math.max(0, backfilledNames.length - 4);
+        const namesSuffix = previewNames
+          ? ` (${previewNames}${overflow > 0 ? ` +${overflow} more` : ""})`
+          : "";
+        metadataSuffix = ` Backfilled metadata on ${metadataBackfilledCount} existing image(s)${namesSuffix}.`;
+      }
+      showFeedback(`Image library upload complete. Added ${createdCount} image(s), skipped ${skippedCount}.${metadataSuffix}`);
       clearBulkUploadFiles();
       await Promise.all([loadImageLibraryImages(), loadJigsaws(), loadAuditEvents()]);
     } catch (error) {
@@ -2415,6 +2446,35 @@
       } catch (error) {
         showFeedback(error.message, true);
       }
+    }
+
+    const imageDeleteButton = event.target.closest("[data-image-delete]");
+    if (imageDeleteButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const imageId = Number(imageDeleteButton.getAttribute("data-image-delete"));
+      const image = Array.isArray(state.imageLibraryImages)
+        ? state.imageLibraryImages.find((entry) => Number(entry.id) === imageId)
+        : null;
+
+      if (image && image.jigsaw_id) {
+        const shouldDelete = window.confirm(
+          "This image is assigned to a jigsaw. Delete it anyway? This cannot be undone.",
+        );
+        if (!shouldDelete) {
+          return;
+        }
+      }
+
+      try {
+        await apiRequest(`/api/v1/image-library/images/${imageId}`, { method: "DELETE" });
+        showFeedback("Image deleted.");
+        await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+      return;
     }
   }
 

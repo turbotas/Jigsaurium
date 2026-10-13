@@ -1,10 +1,11 @@
+from datetime import datetime, timezone
 from io import BytesIO
 import zipfile
 
 import pytest
 
 from app.db import get_session
-from app.models import AiUsageEvent, Jigsaw, Role, User, UserRole
+from app.models import AiUsageEvent, Jigsaw, JigsawImage, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
 
 
@@ -76,6 +77,7 @@ def _make_zip_file(entries):
         ("POST", "/api/v1/image-library/uploads", "multipart/form-data", None),
         ("PATCH", "/api/v1/image-library/images/1/assign", None, {"jigsaw_id": 1}),
         ("PATCH", "/api/v1/image-library/images/1/tag", None, {"tag": "Box"}),
+        ("DELETE", "/api/v1/image-library/images/1", None, None),
         ("GET", "/api/v1/images/1/content", None, None),
     ],
 )
@@ -127,6 +129,12 @@ def test_borrower_cannot_use_image_library_admin_endpoints(client, seeded_image_
     )
     assert tag_response.status_code == 403
 
+    delete_response = client.delete(
+        "/api/v1/image-library/images/1",
+        headers=_csrf_headers(),
+    )
+    assert delete_response.status_code == 403
+
     enrich_response = client.post(
         f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/enrich-from-images",
         headers=_csrf_headers(),
@@ -163,6 +171,35 @@ def test_admin_can_bulk_upload_multiple_unassigned_images(client, seeded_image_l
     assert list_response.status_code == 200
     images = list_response.get_json()["data"]
     assert len(images) >= 2
+
+
+@pytest.mark.functional
+def test_admin_can_delete_image_library_item(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"d" * 24), "delete-me.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    delete_response = client.delete(
+        f"/api/v1/image-library/images/{image_id}",
+        headers=_csrf_headers(),
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.get_json()["data"]["deleted"] is True
+
+    list_response = client.get("/api/v1/image-library/images")
+    assert list_response.status_code == 200
+    ids = [item["id"] for item in list_response.get_json()["data"]]
+    assert image_id not in ids
 
 
 @pytest.mark.functional
@@ -413,6 +450,136 @@ def test_admin_can_set_image_tag_before_assignment(client, seeded_image_library_
 
     assert tag_response.status_code == 200
     assert tag_response.get_json()["data"]["tag"] == "Completed"
+
+
+@pytest.mark.functional
+def test_completed_tag_on_assigned_image_creates_diary_entry(client, seeded_image_library_data, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    captured_at = datetime(2024, 4, 5, 12, 30, 0, tzinfo=timezone.utc)
+
+    def fake_capture(_image_data):
+        return captured_at, "exif_datetime_original", "2024:04:05 12:30:00"
+
+    monkeypatch.setattr("app.api.v1.routes._extract_image_captured_at", fake_capture)
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"x" * 24), "done.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    tag_response = client.patch(
+        f"/api/v1/image-library/images/{image_id}/tag",
+        headers=_csrf_headers(),
+        json={"tag": "Completed"},
+    )
+    assert tag_response.status_code == 200
+
+    diary_response = client.get(f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/diary-entries")
+    assert diary_response.status_code == 200
+    entries = diary_response.get_json()["data"]
+    assert len(entries) == 1
+    assert entries[0]["source_image_id"] == image_id
+    assert entries[0]["completed_at"].startswith("2024-04-05T12:30:00")
+
+
+@pytest.mark.functional
+def test_assigning_completed_image_creates_diary_entry(client, seeded_image_library_data, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    captured_at = datetime(2022, 9, 10, 8, 45, 0, tzinfo=timezone.utc)
+
+    def fake_capture(_image_data):
+        return captured_at, "exif_datetime_original", "2022:09:10 08:45:00"
+
+    monkeypatch.setattr("app.api.v1.routes._extract_image_captured_at", fake_capture)
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "tag": "Completed",
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"y" * 24), "completed-first.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    assign_response = client.patch(
+        f"/api/v1/image-library/images/{image_id}/assign",
+        headers=_csrf_headers(),
+        json={"jigsaw_id": seeded_image_library_data["jigsaw_id"]},
+    )
+    assert assign_response.status_code == 200
+
+    diary_response = client.get(f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/diary-entries")
+    assert diary_response.status_code == 200
+    entries = diary_response.get_json()["data"]
+    assert len(entries) == 1
+    assert entries[0]["source_image_id"] == image_id
+    assert entries[0]["completed_at"].startswith("2022-09-10T08:45:00")
+
+
+@pytest.mark.functional
+def test_duplicate_upload_backfills_capture_metadata_when_missing(client, seeded_image_library_data, app, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    image_bytes = b"\x89PNG\r\n\x1a\n" + b"z" * 24
+
+    def no_capture(_image_data):
+        return None, None, None
+
+    monkeypatch.setattr("app.api.v1.routes._extract_image_captured_at", no_capture)
+
+    first_upload = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(image_bytes), "no-meta.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert first_upload.status_code == 201
+    image_id = first_upload.get_json()["data"]["created"][0]["id"]
+
+    captured_at = datetime(2020, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+    def with_capture(_image_data):
+        return captured_at, "exif_datetime_original", "2020:01:02 03:04:05"
+
+    monkeypatch.setattr("app.api.v1.routes._extract_image_captured_at", with_capture)
+
+    second_upload = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(image_bytes), "with-meta.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert second_upload.status_code == 201
+    payload = second_upload.get_json()["data"]
+    assert payload["created_count"] == 0
+    assert payload["skipped_count"] == 1
+    assert payload["metadata_backfilled_count"] == 1
+    assert payload["skipped"][0]["metadata_backfilled"] is True
+
+    with app.app_context():
+        db_session = get_session()
+        image = db_session.get(JigsawImage, image_id)
+        assert image is not None
+        stored_captured_at = image.captured_at
+        if stored_captured_at is not None and stored_captured_at.tzinfo is None:
+            stored_captured_at = stored_captured_at.replace(tzinfo=timezone.utc)
+        assert stored_captured_at == captured_at
 
 
 @pytest.mark.functional

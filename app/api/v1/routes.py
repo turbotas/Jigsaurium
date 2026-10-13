@@ -22,6 +22,14 @@ from app.models import AiUsageEvent, AuditEvent, Jigsaw, JigsawDiaryEntry, Jigsa
 from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
 
+try:  # pragma: no cover - optional dependency fallback
+    from PIL import Image, UnidentifiedImageError
+except ImportError:  # pragma: no cover
+    Image = None
+
+    class UnidentifiedImageError(Exception):
+        pass
+
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 
@@ -120,6 +128,8 @@ def _serialize_jigsaw_image(image):
         "filename": image.filename,
         "mime_type": image.mime_type,
         "content_url": f"/api/v1/images/{image.id}/content",
+        "captured_at": image.captured_at.isoformat() if image.captured_at else None,
+        "captured_at_source": image.captured_at_source,
         "created_at": image.created_at.isoformat() if image.created_at else None,
     }
 
@@ -128,6 +138,7 @@ def _serialize_diary_entry(entry):
     return {
         "id": entry.id,
         "jigsaw_id": entry.jigsaw_id,
+        "source_image_id": entry.source_image_id,
         "completed_at": entry.completed_at.isoformat() if entry.completed_at else None,
         "difficulty": entry.difficulty,
         "notes": entry.notes,
@@ -662,7 +673,186 @@ def _resolve_optional_jigsaw_reference(db_session, raw_value):
     return jigsaw_id, jigsaw, None
 
 
-def _create_jigsaw_image_record(db_session, *, jigsaw_id, tag, filename, mime_type, image_data, image_sha256):
+def _parse_exif_datetime_value(value):
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+
+    if not isinstance(value, str):
+        return None
+
+    stripped = value.replace("\x00", "").strip()
+    if not stripped:
+        return None
+
+    exif_pattern = re.compile(
+        r"^(\d{4})[:\-](\d{2})[:\-](\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:\s*(Z|[+-]\d{2}:?\d{2}))?$"
+    )
+    match = exif_pattern.match(stripped)
+    if match:
+        year, month, day, hour, minute, second, fractional, offset_text = match.groups()
+        microsecond = int((fractional or "0").ljust(6, "0")[:6])
+        parsed = datetime(
+            int(year),
+            int(month),
+            int(day),
+            int(hour),
+            int(minute),
+            int(second),
+            microsecond,
+        )
+        if offset_text:
+            if offset_text == "Z":
+                return parsed.replace(tzinfo=timezone.utc).astimezone(timezone.utc)
+            normalized_offset = offset_text.replace(":", "")
+            sign = 1 if normalized_offset[0] == "+" else -1
+            offset_hours = int(normalized_offset[1:3])
+            offset_minutes = int(normalized_offset[3:5])
+            offset_delta = timedelta(hours=offset_hours, minutes=offset_minutes)
+            tz = timezone(sign * offset_delta)
+            return parsed.replace(tzinfo=tz).astimezone(timezone.utc)
+        return parsed.replace(tzinfo=timezone.utc)
+
+    for fmt in (
+        "%Y:%m:%d %H:%M:%S",
+        "%Y:%m:%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+    ):
+        try:
+            parsed = datetime.strptime(stripped, fmt)
+            return parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _extract_image_captured_at(image_data):
+    if Image is None:
+        return None, None, None
+
+    try:
+        with Image.open(BytesIO(image_data)) as image_file:
+            exif = image_file.getexif()
+            info_items = dict(image_file.info or {})
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None, None, None
+
+    if not exif:
+        return None, None, None
+
+    date_tag_candidates = (
+        (36867, "exif_datetime_original"),
+        (36868, "exif_datetime_digitized"),
+        (306, "exif_datetime"),
+    )
+    for tag_id, source in date_tag_candidates:
+        raw_value = exif.get(tag_id)
+        parsed = _parse_exif_datetime_value(raw_value)
+        if parsed is not None:
+            raw_text = raw_value.decode("utf-8", errors="ignore") if isinstance(raw_value, bytes) else str(raw_value)
+            return parsed, source, raw_text[:64]
+
+    info_date_candidates = (
+        ("creation_time", "image_info_creation_time"),
+        ("Creation Time", "image_info_creation_time"),
+        ("date:create", "image_info_date_create"),
+        ("date:modify", "image_info_date_modify"),
+    )
+    for key, source in info_date_candidates:
+        raw_value = info_items.get(key)
+        parsed = _parse_exif_datetime_value(raw_value)
+        if parsed is not None:
+            raw_text = raw_value.decode("utf-8", errors="ignore") if isinstance(raw_value, bytes) else str(raw_value)
+            return parsed, source, raw_text[:64]
+
+    return None, None, None
+
+
+def _backfill_image_capture_metadata(image, captured_at, captured_at_source, captured_at_raw):
+    if captured_at is None or image.captured_at is not None:
+        return False
+    image.captured_at = captured_at
+    image.captured_at_source = captured_at_source
+    image.captured_at_raw = captured_at_raw
+    return True
+
+
+def _is_completed_image_tag(tag_value):
+    normalized = str(tag_value or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized == IMAGE_BROWSER_TAG_COMPLETED.lower():
+        return True
+    normalized = normalized.replace("_", " ").replace("-", " ")
+    return normalized.startswith("completed")
+
+
+def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger):
+    if jigsaw is None or image is None:
+        return None
+    if image.jigsaw_id != jigsaw.id:
+        return None
+    if not _is_completed_image_tag(image.tag):
+        return None
+
+    existing_entry = db_session.execute(
+        select(JigsawDiaryEntry.id).where(JigsawDiaryEntry.source_image_id == image.id).limit(1)
+    ).scalar_one_or_none()
+    if existing_entry is not None:
+        return None
+
+    completed_at = image.captured_at or datetime.now(timezone.utc)
+    source_label = "image_exif" if image.captured_at is not None else "fallback_now"
+    notes = f"Auto-created from completed image ({source_label})."
+
+    entry = JigsawDiaryEntry(
+        jigsaw_id=jigsaw.id,
+        source_image_id=image.id,
+        completed_at=completed_at,
+        difficulty=None,
+        notes=notes,
+    )
+    db_session.add(entry)
+    db_session.flush()
+
+    existing_last_completed_at = jigsaw.last_completed_at
+    if existing_last_completed_at is not None and existing_last_completed_at.tzinfo is None:
+        existing_last_completed_at = existing_last_completed_at.replace(tzinfo=timezone.utc)
+    if existing_last_completed_at is None or completed_at > existing_last_completed_at:
+        jigsaw.last_completed_at = completed_at
+
+    _record_audit_event(
+        action="jigsaw.diary_entry_created_from_image",
+        entity_type="jigsaw_diary_entry",
+        entity_id=entry.id,
+        payload={
+            "jigsaw_id": jigsaw.id,
+            "image_id": image.id,
+            "trigger": trigger,
+            "completed_at": completed_at.isoformat(),
+            "captured_at_source": image.captured_at_source,
+        },
+    )
+    return entry
+
+
+def _create_jigsaw_image_record(
+    db_session,
+    *,
+    jigsaw_id,
+    tag,
+    filename,
+    mime_type,
+    image_data,
+    image_sha256,
+    captured_at=None,
+    captured_at_source=None,
+    captured_at_raw=None,
+):
     image = JigsawImage(
         jigsaw_id=jigsaw_id,
         tag=tag,
@@ -670,6 +860,9 @@ def _create_jigsaw_image_record(db_session, *, jigsaw_id, tag, filename, mime_ty
         mime_type=mime_type,
         image_data=image_data,
         image_sha256=image_sha256,
+        captured_at=captured_at,
+        captured_at_source=captured_at_source,
+        captured_at_raw=captured_at_raw,
     )
     db_session.add(image)
     db_session.flush()
@@ -732,12 +925,17 @@ def _extract_zip_image_items(upload):
                     issues.append({"filename": filename, "issue": "filename is invalid"})
                     continue
 
+                captured_at, captured_at_source, captured_at_raw = _extract_image_captured_at(image_data)
+
                 images.append(
                     {
                         "filename": normalized_filename,
                         "mime_type": mime_type,
                         "image_data": image_data,
                         "image_sha256": _compute_image_sha256(image_data),
+                        "captured_at": captured_at,
+                        "captured_at_source": captured_at_source,
+                        "captured_at_raw": captured_at_raw,
                         "source": upload.filename or "archive.zip",
                     }
                 )
@@ -782,12 +980,17 @@ def _extract_bulk_image_items(uploads):
             issues.append({"filename": upload.filename or "(unnamed)", "issue": "filename is invalid"})
             continue
 
+        captured_at, captured_at_source, captured_at_raw = _extract_image_captured_at(image_data)
+
         image_items.append(
             {
                 "filename": filename,
                 "mime_type": mime_type,
                 "image_data": image_data,
                 "image_sha256": _compute_image_sha256(image_data),
+                "captured_at": captured_at,
+                "captured_at_source": captured_at_source,
+                "captured_at_raw": captured_at_raw,
                 "source": upload.filename or "(unnamed)",
             }
         )
@@ -2103,11 +2306,19 @@ def create_jigsaw_image(jigsaw_id):
     if error is not None:
         return error
 
+    captured_at, captured_at_source, captured_at_raw = _extract_image_captured_at(image_data)
+
     image_sha256 = _compute_image_sha256(image_data)
     duplicate_image = db_session.execute(
         select(JigsawImage).where(JigsawImage.image_sha256 == image_sha256).order_by(JigsawImage.id.asc())
     ).scalar_one_or_none()
     if duplicate_image is not None:
+        metadata_backfilled = _backfill_image_capture_metadata(
+            duplicate_image,
+            captured_at,
+            captured_at_source,
+            captured_at_raw,
+        )
         _record_audit_event(
             action="jigsaw.image_duplicate_ignored",
             entity_type="jigsaw_image",
@@ -2116,6 +2327,7 @@ def create_jigsaw_image(jigsaw_id):
                 "jigsaw_id": jigsaw.id,
                 "source_filename": filename,
                 "duplicate_hash": image_sha256,
+                "metadata_backfilled": metadata_backfilled,
             },
         )
         db_session.commit()
@@ -2130,6 +2342,16 @@ def create_jigsaw_image(jigsaw_id):
             mime_type=mime_type,
             image_data=image_data,
             image_sha256=image_sha256,
+            captured_at=captured_at,
+            captured_at_source=captured_at_source,
+            captured_at_raw=captured_at_raw,
+        )
+
+        _maybe_create_diary_entry_from_image(
+            db_session=db_session,
+            jigsaw=jigsaw,
+            image=image,
+            trigger="upload",
         )
 
         _record_audit_event(
@@ -2189,7 +2411,7 @@ def list_image_library_images():
 def upload_image_library_items():
     db_session = get_session()
 
-    jigsaw_id, _jigsaw, error = _resolve_optional_jigsaw_reference(db_session, request.form.get("jigsaw_id"))
+    jigsaw_id, associated_jigsaw, error = _resolve_optional_jigsaw_reference(db_session, request.form.get("jigsaw_id"))
     if error is not None:
         return error
 
@@ -2238,10 +2460,18 @@ def upload_image_library_items():
         for item in image_items:
             image_sha256 = item.get("image_sha256")
             if image_sha256 and image_sha256 in existing_images_by_hash:
+                existing_image = existing_images_by_hash[image_sha256]
+                metadata_backfilled = _backfill_image_capture_metadata(
+                    existing_image,
+                    item.get("captured_at"),
+                    item.get("captured_at_source"),
+                    item.get("captured_at_raw"),
+                )
                 issues.append(
                     {
                         "filename": item["filename"] or "(unnamed)",
                         "issue": "duplicate image content already exists",
+                        "metadata_backfilled": metadata_backfilled,
                     }
                 )
                 continue
@@ -2263,10 +2493,21 @@ def upload_image_library_items():
                 mime_type=item["mime_type"],
                 image_data=item["image_data"],
                 image_sha256=image_sha256,
+                captured_at=item.get("captured_at"),
+                captured_at_source=item.get("captured_at_source"),
+                captured_at_raw=item.get("captured_at_raw"),
             )
             created_images.append((image, item["source"]))
             if image_sha256:
                 created_hashes.add(image_sha256)
+
+            if associated_jigsaw is not None:
+                _maybe_create_diary_entry_from_image(
+                    db_session=db_session,
+                    jigsaw=associated_jigsaw,
+                    image=image,
+                    trigger="bulk_upload",
+                )
 
         _record_audit_event(
             action="jigsaw.image_bulk_uploaded",
@@ -2296,10 +2537,13 @@ def upload_image_library_items():
         serialized["source"] = source
         created_payload.append(serialized)
 
+    metadata_backfilled_count = sum(1 for issue in issues if issue.get("metadata_backfilled"))
+
     return _success_response(
         {
             "created_count": len(created_payload),
             "skipped_count": len(issues),
+            "metadata_backfilled_count": metadata_backfilled_count,
             "created": created_payload,
             "skipped": issues,
         },
@@ -2335,6 +2579,13 @@ def assign_image_library_item(image_id):
 
     image.jigsaw_id = jigsaw.id
 
+    _maybe_create_diary_entry_from_image(
+        db_session=db_session,
+        jigsaw=jigsaw,
+        image=image,
+        trigger="assignment",
+    )
+
     _record_audit_event(
         action="jigsaw.image_assigned",
         entity_type="jigsaw_image",
@@ -2369,6 +2620,17 @@ def set_image_library_item_tag(image_id):
         return _success_response(_serialize_jigsaw_image(image))
 
     image.tag = tag
+
+    if image.jigsaw_id is not None:
+        jigsaw = db_session.get(Jigsaw, image.jigsaw_id)
+        if jigsaw is not None:
+            _maybe_create_diary_entry_from_image(
+                db_session=db_session,
+                jigsaw=jigsaw,
+                image=image,
+                trigger="tag_update",
+            )
+
     _record_audit_event(
         action="jigsaw.image_tag_updated",
         entity_type="jigsaw_image",
@@ -2378,6 +2640,31 @@ def set_image_library_item_tag(image_id):
     db_session.commit()
 
     return _success_response(_serialize_jigsaw_image(image))
+
+
+@api_v1_bp.delete("/image-library/images/<int:image_id>")
+@require_role("administrator")
+def delete_image_library_item(image_id):
+    db_session = get_session()
+    image = db_session.get(JigsawImage, image_id)
+    if image is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    _record_audit_event(
+        action="jigsaw.image_deleted",
+        entity_type="jigsaw_image",
+        entity_id=image.id,
+        payload={
+            "jigsaw_id": image.jigsaw_id,
+            "tag": image.tag,
+            "filename": image.filename,
+            "captured_at": image.captured_at.isoformat() if image.captured_at else None,
+        },
+    )
+    db_session.delete(image)
+    db_session.commit()
+
+    return _success_response({"id": image_id, "deleted": True})
 
 
 @api_v1_bp.put("/image-library/images/<int:image_id>/content")
@@ -2429,9 +2716,14 @@ def replace_image_library_item_content(image_id):
 
     previous_hash = image.image_sha256
     new_content_hash = _compute_image_sha256(image_data)
+    captured_at, captured_at_source, captured_at_raw = _extract_image_captured_at(image_data)
     image.image_data = image_data
     image.mime_type = mime_type
     image.filename = filename
+    if captured_at is not None:
+        image.captured_at = captured_at
+        image.captured_at_source = captured_at_source
+        image.captured_at_raw = captured_at_raw
 
     _record_audit_event(
         action="jigsaw.image_content_overwritten",
@@ -2442,6 +2734,7 @@ def replace_image_library_item_content(image_id):
             "new_content_hash": new_content_hash,
             "mime_type": image.mime_type,
             "size_bytes": len(image_data),
+            "captured_at_updated": captured_at is not None,
         },
     )
     db_session.commit()

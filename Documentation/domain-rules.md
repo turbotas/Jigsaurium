@@ -34,8 +34,11 @@
 - Image-library uploads may optionally associate imported images to a jigsaw at upload time.
 - Each image can be associated to at most one jigsaw.
 - Admin assignment action can attach an unassigned image to a jigsaw; reassigning an already-associated image to a different jigsaw is blocked.
+- Admins can permanently delete image-library records (assigned or unassigned) as cleanup actions.
 - Every image stores a SHA-256 content hash.
 - Duplicate uploads (same bytes, even with different filenames) are ignored using hash matching.
+- Images may store `captured_at` extracted from EXIF date metadata; EXIF timestamps without timezone are interpreted as UTC.
+- Duplicate uploads can backfill missing `captured_at` metadata on an existing image record without overwriting image content.
 - Image browser edits (rotation/crop) overwrite image content in-place but preserve the original dedupe hash.
 - Tag/classification updates (`Box`, `Completed`, etc.) are allowed before jigsaw assignment.
 - Admin create-from-image action can create a new jigsaw from an unassigned image and then bind the image to that created jigsaw.
@@ -52,6 +55,8 @@
 - `completed_at` defaults to the current UTC time when omitted.
 - `difficulty` is an integer from 1 (easy) to 5 (very hard); it may be omitted when unrated.
 - `notes` may be up to 4000 characters and must not contain control characters.
+- Tagging an assigned image as `Completed`, or assigning an image already tagged `Completed`, auto-creates one diary entry per image.
+- Auto-created diary entries use image `captured_at` when available; otherwise they use current UTC time.
 - Diary entries are hard-deleted; deleting a jigsaw cascades to its diary entries.
 - Diary entry lists are visible to any authenticated user for non-retired jigsaws; create and delete are administrator-only.
 - `jigsaws.last_completed_at` is maintained from diary activity:

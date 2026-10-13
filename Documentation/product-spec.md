@@ -52,6 +52,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
   - Log completions per jigsaw with optional 1-5 difficulty rating and notes.
   - View and delete diary entries.
   - Last-completed date derived from diary entries.
+  - Auto-create completion diary entries from `Completed` tagged images when associated to a jigsaw.
 - Image library workflow:
   - Bulk upload one or more images (including zip archives containing image files).
   - Store uploaded images as untagged library assets.
