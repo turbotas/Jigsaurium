@@ -248,6 +248,20 @@
       <button type="submit" class="govuk-button" data-module="govuk-button">Create jigsaw</button>
     </form>
 
+    <div class="govuk-form-group govuk-!-margin-bottom-4">
+      <label class="govuk-label" for="jigsaw-search-input">Search jigsaws</label>
+      <div id="jigsaw-search-hint" class="govuk-hint">Type to filter by title, artist, publisher/manufacturer, tags, or piece count.</div>
+      <input
+        id="jigsaw-search-input"
+        name="jigsaw_search"
+        class="govuk-input"
+        type="search"
+        autocomplete="off"
+        spellcheck="false"
+        aria-describedby="jigsaw-search-hint"
+      >
+    </div>
+
     <div class="table-scroll-wrap">
       <table class="govuk-table app-jigsaws-table" id="jigsaws-table">
         <caption class="govuk-table__caption govuk-table__caption--m">Jigsaw inventory</caption>
@@ -358,7 +372,7 @@
 
     <section class="govuk-!-margin-top-6" aria-labelledby="jigsaw-images-heading">
       <h3 id="jigsaw-images-heading" class="govuk-heading-m">Jigsaw images</h3>
-      <p class="govuk-body">Store tagged images in the database (for example completed puzzle, box front, box side).</p>
+      <p class="govuk-body">Store tagged images in the database (for example Completed, Box front, Box side).</p>
       <form id="jigsaw-image-form" class="govuk-!-margin-bottom-4">
         <div class="govuk-grid-row">
           <div class="govuk-grid-column-one-third">
@@ -435,6 +449,42 @@
         <button type="submit" class="govuk-button" data-module="govuk-button">Upload to image library</button>
       </form>
 
+      <div class="govuk-grid-row govuk-!-margin-bottom-4">
+        <div class="govuk-grid-column-one-third">
+          <fieldset class="govuk-fieldset" aria-describedby="image-library-assignment-filter-hint">
+            <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">Assignment filter</legend>
+            <div id="image-library-assignment-filter-hint" class="govuk-hint">Show assigned and/or unassigned images.</div>
+            <div class="govuk-checkboxes govuk-checkboxes--small">
+              <div class="govuk-checkboxes__item">
+                <input
+                  id="image-library-filter-assigned"
+                  class="govuk-checkboxes__input"
+                  type="checkbox"
+                  checked
+                >
+                <label class="govuk-label govuk-checkboxes__label" for="image-library-filter-assigned">Assigned</label>
+              </div>
+              <div class="govuk-checkboxes__item">
+                <input
+                  id="image-library-filter-unassigned"
+                  class="govuk-checkboxes__input"
+                  type="checkbox"
+                  checked
+                >
+                <label class="govuk-label govuk-checkboxes__label" for="image-library-filter-unassigned">Unassigned</label>
+              </div>
+            </div>
+          </fieldset>
+        </div>
+        <div class="govuk-grid-column-two-thirds">
+          <fieldset class="govuk-fieldset" aria-describedby="image-library-tag-filter-hint">
+            <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">Tag filter</legend>
+            <div id="image-library-tag-filter-hint" class="govuk-hint">Filter by one or more image tags (for example Completed, Box, Box front).</div>
+            <div id="image-library-tag-filters" class="govuk-checkboxes govuk-checkboxes--small"></div>
+          </fieldset>
+        </div>
+      </div>
+
       <div class="table-scroll-wrap">
         <table class="govuk-table app-image-library-table" id="image-library-table">
           <caption class="govuk-table__caption govuk-table__caption--m">Recent image library uploads</caption>
@@ -466,16 +516,20 @@
             <button id="image-browser-rotate-right" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate right</button>
             <button id="image-browser-mark-box" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box</button>
             <button id="image-browser-mark-completed" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Completed</button>
-            <button id="image-browser-mark-box-side" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark box-side</button>
-            <button id="image-browser-mark-box-back" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark box-back</button>
-            <button id="image-browser-mark-in-progress" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark in-progress</button>
+            <button id="image-browser-assign-previous" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Assign to previous</button>
+            <button id="image-browser-assign-next" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Assign to next</button>
+            <button id="image-browser-mark-box-side" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box side</button>
+            <button id="image-browser-mark-box-back" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box back</button>
+            <button id="image-browser-mark-in-progress" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark In progress</button>
+            <button id="image-browser-create-jigsaw" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Create jigsaw</button>
+            <button id="image-browser-delete" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Delete image</button>
             <button id="image-browser-crop-toggle" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Crop</button>
             <button id="image-browser-crop-apply" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Apply crop</button>
             <button id="image-browser-save" type="button" class="govuk-button" data-module="govuk-button">Save overwrite</button>
             <button id="image-browser-close" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Close</button>
           </div>
 
-          <p class="govuk-hint">Keyboard: Left/Right = previous/next, [ / ] (or Q / E) = rotate, B = Box, C = Completed, S = box-side, K = box-back, I = in-progress.</p>
+          <p class="govuk-hint">Keyboard: Left/Right = previous/next, [ / ] (or Q / E) = rotate, B = Box, C = Completed, , = assign previous, . = assign next, S = Box side, K = Box back, I = In progress, J = create jigsaw, Delete/Backspace = delete image.</p>
 
           <div class="app-image-browser__viewport">
             <canvas id="image-browser-canvas" class="app-image-browser__canvas"></canvas>
@@ -599,6 +653,7 @@
             <th class="govuk-table__header">Checked out</th>
             <th class="govuk-table__header">Due</th>
             <th class="govuk-table__header">Status</th>
+            <th class="govuk-table__header">Actions</th>
           </tr>
         </thead>
         <tbody class="govuk-table__body" id="loans-table-body"></tbody>

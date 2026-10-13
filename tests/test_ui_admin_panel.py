@@ -145,6 +145,13 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("text=Jigsaw created.")
         page.wait_for_selector("text=UI Smoke Puzzle")
 
+        page.fill("#jigsaw-search-input", "ui smoke")
+        page.wait_for_selector("#jigsaws-table-body tr:has-text('UI Smoke Puzzle')")
+        page.fill("#jigsaw-search-input", "definitely-not-present")
+        page.wait_for_selector("#jigsaws-table-body td:has-text('No matching jigsaws found.')")
+        page.fill("#jigsaw-search-input", "")
+        page.wait_for_selector("#jigsaws-table-body tr:has-text('UI Smoke Puzzle')")
+
         borrower_options = page.locator("#loan-borrower-user-id option")
         assert borrower_options.filter(has_text="admin@example.com").count() >= 1
 
@@ -158,8 +165,12 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#loan-create-form button[type='submit']")
 
         page.wait_for_selector("text=Loan created.")
-        page.wait_for_selector("#loans-table-body tr")
+        page.wait_for_selector("#loans-table-body tr button[data-loan-return]")
         assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("text=on_loan").count() >= 1
+
+        page.locator("#loans-table-body tr", has_text="active").locator("button[data-loan-return]").first.click()
+        page.wait_for_selector("text=Loan returned.")
+        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("text=available").count() >= 1
 
         page.select_option("#jigsaw-image-jigsaw-id", jigsaw_option_value)
         page.fill("#jigsaw-image-tag", "completed puzzle")
@@ -215,8 +226,35 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("text=Image assigned to jigsaw.")
         page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png'):has-text('UI Smoke Puzzle')")
 
+        page.uncheck("#image-library-filter-assigned")
+        page.wait_for_selector("#image-library-table-body tr:has-text('bulk-two.png')")
+        assert page.locator("#image-library-table-body tr", has_text="bulk-one.png").count() == 0
+
+        page.check("#image-library-filter-assigned")
+        page.uncheck("#image-library-filter-unassigned")
+        page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png')")
+        assert page.locator("#image-library-table-body tr", has_text="bulk-two.png").count() == 0
+
+        page.check("#image-library-filter-unassigned")
+        page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png')")
+
+        untagged_filter = page.locator("#image-library-tag-filters .govuk-checkboxes__item", has_text="untagged").locator("input")
+        untagged_filter.uncheck()
+        page.wait_for_selector("#image-library-table-body td:has-text('No matching image library items found.')")
+        untagged_filter.check()
+        page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png')")
+
         page.click("#image-browser-open")
         page.wait_for_selector("#image-browser-modal:not([hidden])")
+        assert page.locator("#image-browser-assign-previous").is_visible()
+        assert page.locator("#image-browser-assign-next").is_visible()
+        assert page.locator("#image-browser-create-jigsaw").is_visible()
+        assert page.locator("#image-browser-delete").is_visible()
+
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.click("#image-browser-delete")
+        page.wait_for_selector("text=Image deleted.")
+
         page.click("#image-browser-mark-box")
         page.wait_for_selector("text=Image tagged as Box.")
         page.click("#image-browser-close")

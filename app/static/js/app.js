@@ -1,18 +1,24 @@
 (() => {
   const IMAGE_BROWSER_TAG_BOX = "Box";
   const IMAGE_BROWSER_TAG_COMPLETED = "Completed";
-  const IMAGE_BROWSER_TAG_BOX_SIDE = "box-side";
-  const IMAGE_BROWSER_TAG_BOX_BACK = "box-back";
-  const IMAGE_BROWSER_TAG_IN_PROGRESS = "in-progress";
+  const IMAGE_BROWSER_TAG_BOX_FRONT = "Box front";
+  const IMAGE_BROWSER_TAG_BOX_SIDE = "Box side";
+  const IMAGE_BROWSER_TAG_BOX_BACK = "Box back";
+  const IMAGE_BROWSER_TAG_IN_PROGRESS = "In progress";
 
   const state = {
     csrfToken: null,
     user: null,
     users: [],
     jigsaws: [],
+    jigsawSearchQuery: "",
     loans: [],
     jigsawImages: [],
     imageLibraryImages: [],
+    imageLibraryFilterAssigned: true,
+    imageLibraryFilterUnassigned: true,
+    imageLibraryFilterTagSelections: {},
+    imageBrowserContentCacheByImageId: {},
     diaryEntries: [],
     bulkUploadFiles: [],
     imageBrowser: {
@@ -79,6 +85,7 @@
     editJigsawCondition: document.getElementById("edit-jigsaw-condition"),
     editJigsawStatus: document.getElementById("edit-jigsaw-status"),
     editJigsawTags: document.getElementById("edit-jigsaw-tags"),
+    jigsawSearchInput: document.getElementById("jigsaw-search-input"),
     jigsawsTableBody: document.getElementById("jigsaws-table-body"),
     jigsawImageForm: document.getElementById("jigsaw-image-form"),
     jigsawImageJigsawId: document.getElementById("jigsaw-image-jigsaw-id"),
@@ -91,6 +98,9 @@
     imageLibraryBrowseButton: document.getElementById("image-library-browse-button"),
     imageLibraryFilesInput: document.getElementById("image-library-files"),
     imageLibraryFilesList: document.getElementById("image-library-files-list"),
+    imageLibraryFilterAssigned: document.getElementById("image-library-filter-assigned"),
+    imageLibraryFilterUnassigned: document.getElementById("image-library-filter-unassigned"),
+    imageLibraryTagFilters: document.getElementById("image-library-tag-filters"),
     imageLibraryTableBody: document.getElementById("image-library-table-body"),
     imageBrowserOpen: document.getElementById("image-browser-open"),
     imageBrowserModal: document.getElementById("image-browser-modal"),
@@ -102,9 +112,13 @@
     imageBrowserRotateRight: document.getElementById("image-browser-rotate-right"),
     imageBrowserMarkBox: document.getElementById("image-browser-mark-box"),
     imageBrowserMarkCompleted: document.getElementById("image-browser-mark-completed"),
+    imageBrowserAssignPrevious: document.getElementById("image-browser-assign-previous"),
+    imageBrowserAssignNext: document.getElementById("image-browser-assign-next"),
     imageBrowserMarkBoxSide: document.getElementById("image-browser-mark-box-side"),
     imageBrowserMarkBoxBack: document.getElementById("image-browser-mark-box-back"),
     imageBrowserMarkInProgress: document.getElementById("image-browser-mark-in-progress"),
+    imageBrowserCreateJigsaw: document.getElementById("image-browser-create-jigsaw"),
+    imageBrowserDelete: document.getElementById("image-browser-delete"),
     imageBrowserCropToggle: document.getElementById("image-browser-crop-toggle"),
     imageBrowserCropApply: document.getElementById("image-browser-crop-apply"),
     imageBrowserSave: document.getElementById("image-browser-save"),
@@ -290,6 +304,136 @@
     }
 
     return Math.trunc(parsed);
+  }
+
+  function jigsawMatchesSearchQuery(jigsaw, query) {
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    if (!normalizedQuery) {
+      return true;
+    }
+
+    const searchableText = [jigsaw?.title, jigsaw?.artist, jigsaw?.manufacturer, jigsaw?.tags, jigsaw?.piece_count]
+      .filter((value) => value !== null && value !== undefined)
+      .map((value) => String(value).toLowerCase())
+      .join(" ");
+
+    const searchTerms = normalizedQuery.split(/\s+/).filter(Boolean);
+    return searchTerms.every((term) => searchableText.includes(term));
+  }
+
+  function normalizeImageTagLabel(value) {
+    const rawValue = String(value || "").trim();
+    if (!rawValue) {
+      return "untagged";
+    }
+
+    const collapsed = rawValue.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    if (collapsed === "box") {
+      return IMAGE_BROWSER_TAG_BOX;
+    }
+    if (collapsed === "boxfront") {
+      return IMAGE_BROWSER_TAG_BOX_FRONT;
+    }
+    if (collapsed === "boxside") {
+      return IMAGE_BROWSER_TAG_BOX_SIDE;
+    }
+    if (collapsed === "boxback") {
+      return IMAGE_BROWSER_TAG_BOX_BACK;
+    }
+    if (collapsed === "completed") {
+      return IMAGE_BROWSER_TAG_COMPLETED;
+    }
+    if (collapsed === "inprogress") {
+      return IMAGE_BROWSER_TAG_IN_PROGRESS;
+    }
+
+    return rawValue;
+  }
+
+  function toImageTagKey(value) {
+    return normalizeImageTagLabel(value).toLowerCase();
+  }
+
+  function imageMatchesAssignmentFilters(image) {
+    const isAssigned = Boolean(image?.jigsaw_id);
+    if (isAssigned && !state.imageLibraryFilterAssigned) {
+      return false;
+    }
+    if (!isAssigned && !state.imageLibraryFilterUnassigned) {
+      return false;
+    }
+    return true;
+  }
+
+  function imageMatchesTagFilters(image) {
+    const tagKey = toImageTagKey(image?.tag);
+    return state.imageLibraryFilterTagSelections[tagKey] !== false;
+  }
+
+  function reconcileImageLibraryTagFilterState(images) {
+    const availableTagMap = new Map();
+
+    images.filter((image) => imageMatchesAssignmentFilters(image)).forEach((image) => {
+      const tagLabel = normalizeImageTagLabel(image?.tag);
+      const tagKey = toImageTagKey(tagLabel);
+      if (!availableTagMap.has(tagKey)) {
+        availableTagMap.set(tagKey, tagLabel);
+      }
+    });
+
+    const nextSelections = {};
+    availableTagMap.forEach((_tagLabel, tagKey) => {
+      if (Object.prototype.hasOwnProperty.call(state.imageLibraryFilterTagSelections, tagKey)) {
+        nextSelections[tagKey] = Boolean(state.imageLibraryFilterTagSelections[tagKey]);
+      } else {
+        nextSelections[tagKey] = true;
+      }
+    });
+    state.imageLibraryFilterTagSelections = nextSelections;
+
+    return [...availableTagMap.entries()].sort((left, right) => left[1].localeCompare(right[1]));
+  }
+
+  function renderImageLibraryTagFilters(tagEntries) {
+    const container = elements.imageLibraryTagFilters;
+    if (!container) {
+      return;
+    }
+
+    container.innerHTML = "";
+
+    if (!Array.isArray(tagEntries) || tagEntries.length === 0) {
+      const note = document.createElement("span");
+      note.className = "govuk-hint";
+      note.textContent = "No tags available yet.";
+      container.appendChild(note);
+      return;
+    }
+
+    tagEntries.forEach(([tagKey, tagLabel], index) => {
+      const item = document.createElement("div");
+      item.className = "govuk-checkboxes__item";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.className = "govuk-checkboxes__input";
+      checkbox.id = `image-library-tag-filter-${index}`;
+      checkbox.checked = state.imageLibraryFilterTagSelections[tagKey] !== false;
+      checkbox.dataset.imageLibraryTagFilter = tagKey;
+
+      const label = document.createElement("label");
+      label.className = "govuk-label govuk-checkboxes__label";
+      label.setAttribute("for", checkbox.id);
+      label.textContent = tagLabel;
+
+      item.appendChild(checkbox);
+      item.appendChild(label);
+      container.appendChild(item);
+    });
+  }
+
+  function imageLibraryRowMatchesFilters(image) {
+    return imageMatchesAssignmentFilters(image) && imageMatchesTagFilters(image);
   }
 
   function getSelectedRoles(formData) {
@@ -646,7 +790,13 @@
       return;
     }
 
-    jigsaws.forEach((jigsaw) => {
+    const filteredJigsaws = jigsaws.filter((jigsaw) => jigsawMatchesSearchQuery(jigsaw, state.jigsawSearchQuery));
+    if (filteredJigsaws.length === 0) {
+      appendEmptyRow(tableBody, 6, "No matching jigsaws found.");
+      return;
+    }
+
+    filteredJigsaws.forEach((jigsaw) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
@@ -732,7 +882,7 @@
     clearTableBody(tableBody);
 
     if (!Array.isArray(loans) || loans.length === 0) {
-      appendEmptyRow(tableBody, 6, "No loans found.");
+      appendEmptyRow(tableBody, 7, "No loans found.");
       return;
     }
 
@@ -755,6 +905,23 @@
       row.appendChild(buildCell(toLocalTimestamp(loan.checked_out_at)));
       row.appendChild(buildCell(toLocalTimestamp(loan.due_at)));
       row.appendChild(buildCell(String(loan.status || "-")));
+
+      const actionCell = document.createElement("td");
+      actionCell.className = "govuk-table__cell";
+
+      if (loan.status === "active" || loan.status === "overdue") {
+        const returnButton = document.createElement("button");
+        returnButton.type = "button";
+        returnButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        returnButton.setAttribute("data-module", "govuk-button");
+        returnButton.dataset.loanReturn = String(loan.id);
+        returnButton.textContent = "Return";
+        actionCell.appendChild(returnButton);
+      } else {
+        actionCell.textContent = "-";
+      }
+
+      row.appendChild(actionCell);
 
       tableBody.appendChild(row);
     });
@@ -801,13 +968,24 @@
     clearTableBody(tableBody);
 
     if (!Array.isArray(images) || images.length === 0) {
+      state.imageLibraryFilterTagSelections = {};
+      renderImageLibraryTagFilters([]);
       appendEmptyRow(tableBody, 6, "No image library items found.");
+      return;
+    }
+
+    const tagEntries = reconcileImageLibraryTagFilterState(images);
+    renderImageLibraryTagFilters(tagEntries);
+
+    const filteredImages = images.filter((image) => imageLibraryRowMatchesFilters(image));
+    if (filteredImages.length === 0) {
+      appendEmptyRow(tableBody, 6, "No matching image library items found.");
       return;
     }
 
     const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
     const jigsawsById = new Map(state.jigsaws.map((jigsaw) => [Number(jigsaw.id), jigsaw]));
-    images.forEach((image) => {
+    filteredImages.forEach((image) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
@@ -1087,6 +1265,64 @@
     state.imageBrowser.filename = "image.png";
   }
 
+  function getCachedImageBrowserContent(imageId) {
+    if (!imageId) {
+      return null;
+    }
+    return state.imageBrowserContentCacheByImageId[String(imageId)] || null;
+  }
+
+  function setCachedImageBrowserContent(imageId, cachedContent) {
+    if (!imageId || !cachedContent) {
+      return;
+    }
+    state.imageBrowserContentCacheByImageId[String(imageId)] = cachedContent;
+  }
+
+  function clearCachedImageBrowserContent(imageId) {
+    if (!imageId) {
+      return;
+    }
+    delete state.imageBrowserContentCacheByImageId[String(imageId)];
+  }
+
+  function pruneImageBrowserContentCache(images) {
+    const validIds = new Set((Array.isArray(images) ? images : []).map((image) => String(image.id)));
+    Object.keys(state.imageBrowserContentCacheByImageId).forEach((imageId) => {
+      if (!validIds.has(imageId)) {
+        delete state.imageBrowserContentCacheByImageId[imageId];
+      }
+    });
+  }
+
+  async function prefetchImageBrowserByIndex(index) {
+    if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
+      return;
+    }
+
+    const normalizedIndex = ((index % state.imageLibraryImages.length) + state.imageLibraryImages.length) % state.imageLibraryImages.length;
+    const item = state.imageLibraryImages[normalizedIndex];
+    if (!item || !item.id || getCachedImageBrowserContent(item.id)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(String(item.content_url || ""), { credentials: "same-origin" });
+      if (!response.ok) {
+        return;
+      }
+      const blob = await response.blob();
+      const dataUrl = await blobToDataUrl(blob);
+      setCachedImageBrowserContent(item.id, {
+        dataUrl,
+        mimeType: String(blob.type || item.mime_type || "image/png").toLowerCase(),
+        filename: item.filename || `image-${item.id}.png`,
+      });
+    } catch (_error) {
+      // Ignore prefetch failures; browser will fetch on demand.
+    }
+  }
+
   async function loadCurrentImageIntoBrowser() {
     const item = getCurrentImageBrowserItem();
     clearImageBrowserWorkingState();
@@ -1096,20 +1332,38 @@
       return;
     }
 
-    const response = await fetch(String(item.content_url || ""), { credentials: "same-origin" });
-    if (!response.ok) {
-      throw new Error(`Failed to load image content (HTTP ${response.status}).`);
+    const cached = getCachedImageBrowserContent(item.id);
+    if (cached && cached.dataUrl) {
+      state.imageBrowser.sourceDataUrl = cached.dataUrl;
+      state.imageBrowser.workingDataUrl = cached.dataUrl;
+      state.imageBrowser.workingImage = await loadImageElementFromDataUrl(cached.dataUrl);
+      state.imageBrowser.mimeType = cached.mimeType || String(item.mime_type || "image/png").toLowerCase();
+      state.imageBrowser.filename = cached.filename || item.filename || `image-${item.id}.png`;
+    } else {
+      const response = await fetch(String(item.content_url || ""), { credentials: "same-origin" });
+      if (!response.ok) {
+        throw new Error(`Failed to load image content (HTTP ${response.status}).`);
+      }
+
+      const blob = await response.blob();
+      const dataUrl = await blobToDataUrl(blob);
+      state.imageBrowser.sourceDataUrl = dataUrl;
+      state.imageBrowser.workingDataUrl = dataUrl;
+      state.imageBrowser.workingImage = await loadImageElementFromDataUrl(dataUrl);
+      state.imageBrowser.mimeType = String(blob.type || item.mime_type || "image/png").toLowerCase();
+      state.imageBrowser.filename = item.filename || `image-${item.id}.png`;
+      setCachedImageBrowserContent(item.id, {
+        dataUrl,
+        mimeType: state.imageBrowser.mimeType,
+        filename: state.imageBrowser.filename,
+      });
     }
 
-    const blob = await response.blob();
-    const dataUrl = await blobToDataUrl(blob);
-    state.imageBrowser.sourceDataUrl = dataUrl;
-    state.imageBrowser.workingDataUrl = dataUrl;
-    state.imageBrowser.workingImage = await loadImageElementFromDataUrl(dataUrl);
-    state.imageBrowser.mimeType = String(blob.type || item.mime_type || "image/png").toLowerCase();
-    state.imageBrowser.filename = item.filename || `image-${item.id}.png`;
-
     await redrawImageBrowserCanvas();
+
+    const currentIndex = state.imageBrowser.index;
+    prefetchImageBrowserByIndex(currentIndex + 1);
+    prefetchImageBrowserByIndex(currentIndex - 1);
   }
 
   async function openImageBrowser() {
@@ -1170,17 +1424,129 @@
     }
 
     try {
-      await apiRequest(`/api/v1/image-library/images/${item.id}/tag`, {
+      const payload = await apiRequest(`/api/v1/image-library/images/${item.id}/tag`, {
         method: "PATCH",
         body: JSON.stringify({ tag }),
       });
+
+      const updated = payload?.data;
+      if (updated && Number(updated.id)) {
+        const imageId = Number(updated.id);
+        state.imageLibraryImages = state.imageLibraryImages.map((entry) =>
+          Number(entry.id) === imageId ? { ...entry, ...updated } : entry,
+        );
+      }
+
       showFeedback(`Image tagged as ${tag}.`);
-      await loadImageLibraryImages();
+      renderImageLibraryImages(state.imageLibraryImages);
+      updateImageBrowserStatus();
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function assignCurrentImageUsingNeighbor(offset) {
+    const item = getCurrentImageBrowserItem();
+    if (!item) {
+      return;
+    }
+
+    const neighborLabel = offset < 0 ? "previous" : "next";
+    const neighborIndex = state.imageBrowser.index + offset;
+
+    if (neighborIndex < 0 || neighborIndex >= state.imageLibraryImages.length) {
+      showFeedback(`No ${neighborLabel} image available to copy assignment from.`);
+      return;
+    }
+
+    if (item.jigsaw_id) {
+      showFeedback("Current image is already assigned to a jigsaw.");
+      return;
+    }
+
+    const neighbor = state.imageLibraryImages[neighborIndex];
+    if (!neighbor?.jigsaw_id) {
+      showFeedback(`${neighborLabel.charAt(0).toUpperCase()}${neighborLabel.slice(1)} image is not assigned to a jigsaw.`);
+      return;
+    }
+
+    try {
+      await apiRequest(`/api/v1/image-library/images/${item.id}/assign`, {
+        method: "PATCH",
+        body: JSON.stringify({ jigsaw_id: Number(neighbor.jigsaw_id) }),
+      });
+
+      showFeedback(`Image assigned to jigsaw from ${neighborLabel} image.`);
+      await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadJigsaws(), loadAuditEvents()]);
+
       const refreshedIndex = state.imageLibraryImages.findIndex((image) => Number(image.id) === Number(item.id));
       if (refreshedIndex >= 0) {
         state.imageBrowser.index = refreshedIndex;
       }
       updateImageBrowserStatus();
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function createJigsawFromCurrentBrowserImage() {
+    const item = getCurrentImageBrowserItem();
+    if (!item) {
+      return;
+    }
+
+    if (item.jigsaw_id) {
+      showFeedback("This image is already assigned to a jigsaw; create-from-image requires an unassigned image.", true);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest(`/api/v1/image-library/images/${item.id}/create-jigsaw`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      const createdTitle = payload?.data?.jigsaw?.title || "(untitled)";
+      showFeedback(`Jigsaw created from image: ${createdTitle}.`);
+
+      await Promise.all([loadJigsaws(), loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
+      const refreshedIndex = state.imageLibraryImages.findIndex((image) => Number(image.id) === Number(item.id));
+      if (refreshedIndex >= 0) {
+        state.imageBrowser.index = refreshedIndex;
+      }
+      updateImageBrowserStatus();
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function deleteCurrentBrowserImage() {
+    const item = getCurrentImageBrowserItem();
+    if (!item) {
+      return;
+    }
+
+    if (item.jigsaw_id) {
+      const shouldDelete = window.confirm("This image is assigned to a jigsaw. Delete it anyway? This cannot be undone.");
+      if (!shouldDelete) {
+        return;
+      }
+    }
+
+    try {
+      await apiRequest(`/api/v1/image-library/images/${item.id}`, { method: "DELETE" });
+      clearCachedImageBrowserContent(item.id);
+      showFeedback("Image deleted.");
+
+      const previousIndex = state.imageBrowser.index;
+      await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
+
+      if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
+        closeImageBrowser();
+        return;
+      }
+
+      state.imageBrowser.index = Math.min(previousIndex, state.imageLibraryImages.length - 1);
+      await loadCurrentImageIntoBrowser();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -1343,6 +1709,7 @@
         method: "PUT",
         body: formData,
       });
+      clearCachedImageBrowserContent(item.id);
       showFeedback("Image overwritten successfully.");
       await loadImageLibraryImages();
       const refreshedIndex = state.imageLibraryImages.findIndex((image) => Number(image.id) === Number(item.id));
@@ -1395,6 +1762,16 @@
       setImageBrowserTag(IMAGE_BROWSER_TAG_COMPLETED);
       return;
     }
+    if (event.code === "Comma" || event.key === ",") {
+      event.preventDefault();
+      assignCurrentImageUsingNeighbor(-1);
+      return;
+    }
+    if (event.code === "Period" || event.key === ".") {
+      event.preventDefault();
+      assignCurrentImageUsingNeighbor(1);
+      return;
+    }
     if (event.key === "s" || event.key === "S") {
       event.preventDefault();
       setImageBrowserTag(IMAGE_BROWSER_TAG_BOX_SIDE);
@@ -1408,6 +1785,16 @@
     if (event.key === "i" || event.key === "I") {
       event.preventDefault();
       setImageBrowserTag(IMAGE_BROWSER_TAG_IN_PROGRESS);
+      return;
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      deleteCurrentBrowserImage();
+      return;
+    }
+    if (event.key === "j" || event.key === "J") {
+      event.preventDefault();
+      createJigsawFromCurrentBrowserImage();
       return;
     }
     if (event.key === "Escape") {
@@ -1543,6 +1930,7 @@
   async function loadImageLibraryImages() {
     if (!state.user) {
       state.imageLibraryImages = [];
+      state.imageBrowserContentCacheByImageId = {};
       renderImageLibraryImages([]);
       return;
     }
@@ -1550,6 +1938,7 @@
     try {
       const payload = await apiRequest("/api/v1/image-library/images?limit=200");
       state.imageLibraryImages = Array.isArray(payload.data) ? payload.data : [];
+      pruneImageBrowserContentCache(state.imageLibraryImages);
       renderImageLibraryImages(state.imageLibraryImages);
       if (state.imageBrowser.isOpen) {
         updateImageBrowserStatus();
@@ -1557,10 +1946,12 @@
     } catch (error) {
       if (error.status === 403) {
         state.imageLibraryImages = [];
+        state.imageBrowserContentCacheByImageId = {};
         renderImageLibraryImages([]);
         return;
       }
       state.imageLibraryImages = [];
+      state.imageBrowserContentCacheByImageId = {};
       renderImageLibraryImages([]);
       showFeedback(error.message, true);
     }
@@ -1673,7 +2064,12 @@
       state.loans = [];
       state.jigsawImages = [];
       state.imageLibraryImages = [];
+      state.imageLibraryFilterAssigned = true;
+      state.imageLibraryFilterUnassigned = true;
+      state.imageLibraryFilterTagSelections = {};
+      state.imageBrowserContentCacheByImageId = {};
       state.diaryEntries = [];
+      state.jigsawSearchQuery = "";
       renderUsers([]);
       closeUserEditor();
       renderJigsaws([]);
@@ -1684,6 +2080,15 @@
       renderDiaryEntries([]);
       clearBulkUploadFiles();
       closeImageBrowser();
+      if (elements.jigsawSearchInput) {
+        elements.jigsawSearchInput.value = "";
+      }
+      if (elements.imageLibraryFilterAssigned) {
+        elements.imageLibraryFilterAssigned.checked = true;
+      }
+      if (elements.imageLibraryFilterUnassigned) {
+        elements.imageLibraryFilterUnassigned.checked = true;
+      }
       populateLoanFormOptions();
       populateJigsawImageOptions();
       populateDiaryJigsawOptions();
@@ -2323,6 +2728,22 @@
       return;
     }
 
+    const loanReturnButton = event.target.closest("[data-loan-return]");
+    if (loanReturnButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const loanId = Number(loanReturnButton.getAttribute("data-loan-return"));
+      try {
+        await apiRequest(`/api/v1/loans/${loanId}/return`, { method: "POST" });
+        showFeedback("Loan returned.");
+        await Promise.all([loadJigsaws(), loadLoans(), loadAuditEvents()]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
     const retireButton = event.target.closest("[data-jigsaw-retire]");
     if (retireButton) {
       event.preventDefault();
@@ -2356,7 +2777,7 @@
 
       const jigsawId = Number(deleteButton.getAttribute("data-jigsaw-delete"));
       const shouldDelete = window.confirm(
-        "Permanently delete this jigsaw and all of its images/diary entries? This cannot be undone.",
+        "Permanently delete this jigsaw and all of its images, diary entries, and loans? This cannot be undone.",
       );
       if (!shouldDelete) {
         return;
@@ -2488,6 +2909,32 @@
     loadJigsawImagesForSelected();
   }
 
+  function handleJigsawSearchInput(event) {
+    state.jigsawSearchQuery = String(event.currentTarget?.value || "").trim().toLowerCase();
+    renderJigsaws(state.jigsaws);
+  }
+
+  function handleImageLibraryFilterChange(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) {
+      return;
+    }
+
+    if (target === elements.imageLibraryFilterAssigned) {
+      state.imageLibraryFilterAssigned = target.checked;
+    } else if (target === elements.imageLibraryFilterUnassigned) {
+      state.imageLibraryFilterUnassigned = target.checked;
+    } else {
+      const tagKey = String(target.dataset.imageLibraryTagFilter || "").trim().toLowerCase();
+      if (!tagKey) {
+        return;
+      }
+      state.imageLibraryFilterTagSelections[tagKey] = target.checked;
+    }
+
+    renderImageLibraryImages(state.imageLibraryImages);
+  }
+
   function attachEvents() {
     if (elements.loginForm) {
       elements.loginForm.addEventListener("submit", handleLoginSubmit);
@@ -2540,6 +2987,18 @@
       elements.imageLibraryDropzone.addEventListener("keydown", handleImageLibraryDropzoneKeyDown);
     }
 
+    if (elements.imageLibraryFilterAssigned) {
+      elements.imageLibraryFilterAssigned.addEventListener("change", handleImageLibraryFilterChange);
+    }
+
+    if (elements.imageLibraryFilterUnassigned) {
+      elements.imageLibraryFilterUnassigned.addEventListener("change", handleImageLibraryFilterChange);
+    }
+
+    if (elements.imageLibraryTagFilters) {
+      elements.imageLibraryTagFilters.addEventListener("change", handleImageLibraryFilterChange);
+    }
+
     if (elements.imageBrowserOpen) {
       elements.imageBrowserOpen.addEventListener("click", () => {
         openImageBrowser();
@@ -2586,6 +3045,18 @@
       });
     }
 
+    if (elements.imageBrowserAssignPrevious) {
+      elements.imageBrowserAssignPrevious.addEventListener("click", () => {
+        assignCurrentImageUsingNeighbor(-1);
+      });
+    }
+
+    if (elements.imageBrowserAssignNext) {
+      elements.imageBrowserAssignNext.addEventListener("click", () => {
+        assignCurrentImageUsingNeighbor(1);
+      });
+    }
+
     if (elements.imageBrowserMarkBoxSide) {
       elements.imageBrowserMarkBoxSide.addEventListener("click", () => {
         setImageBrowserTag(IMAGE_BROWSER_TAG_BOX_SIDE);
@@ -2601,6 +3072,18 @@
     if (elements.imageBrowserMarkInProgress) {
       elements.imageBrowserMarkInProgress.addEventListener("click", () => {
         setImageBrowserTag(IMAGE_BROWSER_TAG_IN_PROGRESS);
+      });
+    }
+
+    if (elements.imageBrowserCreateJigsaw) {
+      elements.imageBrowserCreateJigsaw.addEventListener("click", () => {
+        createJigsawFromCurrentBrowserImage();
+      });
+    }
+
+    if (elements.imageBrowserDelete) {
+      elements.imageBrowserDelete.addEventListener("click", () => {
+        deleteCurrentBrowserImage();
       });
     }
 
@@ -2645,6 +3128,10 @@
       elements.imageLibraryTableBody.addEventListener("click", handleTableActions);
     }
 
+    if (elements.loansTableBody) {
+      elements.loansTableBody.addEventListener("click", handleTableActions);
+    }
+
     if (elements.jigsawEditForm) {
       elements.jigsawEditForm.addEventListener("submit", handleEditJigsaw);
     }
@@ -2671,6 +3158,10 @@
 
     if (elements.jigsawsTableBody) {
       elements.jigsawsTableBody.addEventListener("click", handleTableActions);
+    }
+
+    if (elements.jigsawSearchInput) {
+      elements.jigsawSearchInput.addEventListener("input", handleJigsawSearchInput);
     }
   }
 

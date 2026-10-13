@@ -40,6 +40,7 @@
 - `GET /api/v1/audit-events`
 - `GET /api/v1/loans`
 - `POST /api/v1/loans`
+- `POST /api/v1/loans/{id}/return`
 - `GET /api/v1/jigsaws/{id}/images`
 - `POST /api/v1/jigsaws/{id}/images`
 - `GET /api/v1/jigsaws/{id}/images/{image_id}/content`
@@ -161,6 +162,7 @@
 - Loan endpoint notes:
   - `GET /api/v1/loans` is admin-only in the initial administrative rollout.
   - `POST /api/v1/loans` is admin-only in the initial administrative rollout.
+  - `POST /api/v1/loans/{id}/return` is admin-only and closes an active/overdue loan.
   - `POST /api/v1/loans` request body requires:
     - `borrower_user_id` (positive integer)
     - `jigsaw_id` (positive integer)
@@ -169,6 +171,9 @@
   - Loan checkout sets `due_at` to four weeks (28 days) after `checked_out_at`.
   - Loan checkout returns `409` when the target jigsaw is not currently available.
   - Loan checkout updates jigsaw status to `on_loan`.
+  - Loan return sets `returned_at` to current UTC time and sets loan status to `returned`.
+  - Loan return sets jigsaw status to `available` when the linked jigsaw is currently `on_loan`.
+  - Loan return returns `409` when the loan is not active/overdue.
 
 - Jigsaw metadata notes:
   - `POST /api/v1/jigsaws` allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.
@@ -176,8 +181,7 @@
   - Jigsaw payloads now support optional fields: `series_name`, `series_number`, `manufacturer`, `artist`, `dimensions_cm`, `description`, `last_completed_at`.
   - `last_completed_at` uses UTC ISO 8601 format.
   - `DELETE /api/v1/jigsaws/{id}` retires the jigsaw (soft delete).
-  - `DELETE /api/v1/jigsaws/{id}/permanent` permanently removes the jigsaw and deletes linked images and diary entries.
-  - `DELETE /api/v1/jigsaws/{id}/permanent` returns `409` when the jigsaw has any loan history.
+  - `DELETE /api/v1/jigsaws/{id}/permanent` permanently removes the jigsaw and deletes linked images, diary entries, and loans.
 
 - Jigsaw image endpoint notes:
   - `GET /api/v1/jigsaws/{id}/images` is admin-only.
@@ -205,6 +209,7 @@
   - `PATCH /api/v1/image-library/images/{image_id}/assign` assigns an image to one jigsaw; reassignment to a different jigsaw returns `409`.
   - `DELETE /api/v1/image-library/images/{image_id}` is admin-only and permanently deletes the image record.
   - `PATCH /api/v1/image-library/images/{image_id}/tag` is admin-only and updates image tag/classification (for example `Box`, `Completed`) even when image is unassigned.
+  - Known built-in tag variants are normalized to canonical title-case values: `Box`, `Box front`, `Box side`, `Box back`, `Completed`, `In progress`.
   - `PUT /api/v1/image-library/images/{image_id}/content` is admin-only and overwrites the stored image bytes in-place (used by rotate/crop workflows).
   - Overwrite operations preserve the original dedupe hash so future uploads of the original source bytes still clash as duplicates.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` is admin-only and creates a new jigsaw from AI-extracted image metadata.
@@ -213,7 +218,7 @@
   - AI extraction expects these metadata keys: `title`, `series_name`, `series_number`, `manufacturer`/`publisher`, `artist`, `piece_count`, `tags`, `dimensions_cm`, `description`.
   - AI usage is cost-tracked per call (`ai_usage_events`) with token usage and final USD cost.
   - Daily AI spend guardrail: when configured budget is reached, create-from-image requests return `409` and are blocked before provider calls.
-  - `POST /api/v1/jigsaws/{id}/enrich-from-images` is admin-only and uses assigned box-tagged images only (`Box`, `box front`, `box-side`, `box-back`, and similar `box*` tags) to infer missing metadata.
+  - `POST /api/v1/jigsaws/{id}/enrich-from-images` is admin-only and uses assigned box-tagged images only (`Box`, `Box front`, `Box side`, `Box back`, and similar `box*` tags) to infer missing metadata.
   - Completed-puzzle images are excluded from enrichment input.
   - Enrichment is non-destructive by default (`overwrite_existing=false`): only empty fields are populated.
   - Enrichment request body optionally accepts `overwrite_existing` (boolean).

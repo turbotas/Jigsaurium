@@ -52,9 +52,10 @@ JIGSAW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_JIGSAW_IMAGE_TAG = "untagged"
 IMAGE_BROWSER_TAG_BOX = "Box"
 IMAGE_BROWSER_TAG_COMPLETED = "Completed"
-IMAGE_BROWSER_TAG_BOX_SIDE = "box-side"
-IMAGE_BROWSER_TAG_BOX_BACK = "box-back"
-IMAGE_BROWSER_TAG_BOX_FRONT = "box front"
+IMAGE_BROWSER_TAG_BOX_SIDE = "Box side"
+IMAGE_BROWSER_TAG_BOX_BACK = "Box back"
+IMAGE_BROWSER_TAG_BOX_FRONT = "Box front"
+IMAGE_BROWSER_TAG_IN_PROGRESS = "In progress"
 ZIP_UPLOAD_MIME_TYPES = {"application/zip", "application/x-zip-compressed", "multipart/x-zip"}
 AI_IMAGE_CREATE_OPERATION = "image_to_jigsaw"
 AI_JIGSAW_ENRICH_OPERATION = "jigsaw_enrich_from_images"
@@ -1020,7 +1021,24 @@ def _validate_image_browser_tag(value):
             422,
             [{"field": "tag", "issue": "must be a non-empty string"}],
         )
-    return normalized, None
+    return _normalize_known_image_tag(normalized), None
+
+
+def _normalize_known_image_tag(value):
+    normalized = str(value or "").strip()
+    if not normalized:
+        return normalized
+
+    collapsed = re.sub(r"[^a-z0-9]+", "", normalized.lower())
+    canonical_tags = {
+        "box": IMAGE_BROWSER_TAG_BOX,
+        "boxfront": IMAGE_BROWSER_TAG_BOX_FRONT,
+        "boxside": IMAGE_BROWSER_TAG_BOX_SIDE,
+        "boxback": IMAGE_BROWSER_TAG_BOX_BACK,
+        "completed": IMAGE_BROWSER_TAG_COMPLETED,
+        "inprogress": IMAGE_BROWSER_TAG_IN_PROGRESS,
+    }
+    return canonical_tags.get(collapsed, normalized)
 
 
 def _to_decimal(value):
@@ -1953,6 +1971,40 @@ def create_loan():
     return _success_response(_serialize_loan(loan), status_code=201)
 
 
+@api_v1_bp.post("/loans/<int:loan_id>/return")
+@require_role("administrator")
+def return_loan(loan_id):
+    db_session = get_session()
+    loan = db_session.get(Loan, loan_id)
+    if loan is None:
+        return _error_response("not_found", "Loan was not found.", 404)
+
+    if loan.status not in [LoanStatus.ACTIVE, LoanStatus.OVERDUE]:
+        return _error_response("conflict", "Loan is not active and cannot be returned.", 409)
+
+    returned_at = datetime.now(timezone.utc)
+    loan.returned_at = returned_at
+    loan.status = LoanStatus.RETURNED
+
+    jigsaw = db_session.get(Jigsaw, loan.jigsaw_id)
+    if jigsaw is not None and jigsaw.status == JigsawStatus.ON_LOAN:
+        jigsaw.status = JigsawStatus.AVAILABLE
+
+    _record_audit_event(
+        action="loan.returned",
+        entity_type="loan",
+        entity_id=loan.id,
+        payload={
+            "borrower_user_id": loan.borrower_user_id,
+            "jigsaw_id": loan.jigsaw_id,
+            "returned_at": returned_at.isoformat(),
+        },
+    )
+    db_session.commit()
+
+    return _success_response(_serialize_loan(loan))
+
+
 @api_v1_bp.post("/jigsaws")
 @require_role("administrator")
 def create_jigsaw():
@@ -2264,6 +2316,8 @@ def create_jigsaw_image(jigsaw_id):
         return error
     if tag is None:
         tag = DEFAULT_JIGSAW_IMAGE_TAG
+    else:
+        tag = _normalize_known_image_tag(tag)
 
     upload = request.files.get("image")
     if upload is None:
@@ -2422,6 +2476,8 @@ def upload_image_library_items():
         return error
     if tag is None:
         tag = DEFAULT_JIGSAW_IMAGE_TAG
+    else:
+        tag = _normalize_known_image_tag(tag)
 
     uploads = request.files.getlist("files")
     if not uploads:
@@ -3231,25 +3287,19 @@ def delete_jigsaw_permanently(jigsaw_id):
     if jigsaw is None:
         return _error_response("not_found", "Jigsaw was not found.", 404)
 
-    has_any_loans = db_session.execute(
-        select(Loan.id).where(Loan.jigsaw_id == jigsaw.id).limit(1)
-    ).scalar_one_or_none()
-    if has_any_loans is not None:
-        return _error_response(
-            "conflict",
-            "Jigsaw cannot be permanently deleted because it has loan history.",
-            409,
-        )
-
     image_count = db_session.execute(
         select(func.count()).select_from(JigsawImage).where(JigsawImage.jigsaw_id == jigsaw.id)
     ).scalar_one()
     diary_count = db_session.execute(
         select(func.count()).select_from(JigsawDiaryEntry).where(JigsawDiaryEntry.jigsaw_id == jigsaw.id)
     ).scalar_one()
+    loan_count = db_session.execute(
+        select(func.count()).select_from(Loan).where(Loan.jigsaw_id == jigsaw.id)
+    ).scalar_one()
 
     db_session.execute(sa_delete(JigsawImage).where(JigsawImage.jigsaw_id == jigsaw.id))
     db_session.execute(sa_delete(JigsawDiaryEntry).where(JigsawDiaryEntry.jigsaw_id == jigsaw.id))
+    db_session.execute(sa_delete(Loan).where(Loan.jigsaw_id == jigsaw.id))
     db_session.delete(jigsaw)
 
     _record_audit_event(
@@ -3259,6 +3309,7 @@ def delete_jigsaw_permanently(jigsaw_id):
         payload={
             "deleted_image_count": int(image_count or 0),
             "deleted_diary_entry_count": int(diary_count or 0),
+            "deleted_loan_count": int(loan_count or 0),
         },
     )
     db_session.commit()

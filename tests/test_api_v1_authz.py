@@ -120,6 +120,7 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
             {"title": "Locked", "piece_count": 200, "status": "available"},
         ),
         ("POST", "/api/v1/loans", {"borrower_user_id": 1, "jigsaw_id": 1}),
+        ("POST", "/api/v1/loans/1/return", {}),
         ("PATCH", "/api/v1/jigsaws/1", {"title": "Updated title"}),
         ("DELETE", "/api/v1/jigsaws/1", None),
         ("DELETE", "/api/v1/jigsaws/1/permanent", None),
@@ -477,6 +478,66 @@ def test_api_loans_returns_created_loan_for_administrator(client, seeded_identit
 
 
 @pytest.mark.functional
+def test_admin_can_return_active_loan_and_restore_jigsaw_status(app, client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    before_count = _count_audit_events(app)
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    create_response = client.post(
+        "/api/v1/loans",
+        headers=_csrf_headers(),
+        json={
+            "borrower_user_id": seeded_identity_data["borrower_user_id"],
+            "jigsaw_id": jigsaw_id,
+        },
+    )
+    assert create_response.status_code == 201
+    loan_id = create_response.get_json()["data"]["id"]
+
+    return_response = client.post(f"/api/v1/loans/{loan_id}/return", headers=_csrf_headers(), json={})
+    assert return_response.status_code == 200
+    returned_payload = return_response.get_json()["data"]
+    assert returned_payload["status"] == "returned"
+    assert returned_payload["returned_at"] is not None
+
+    with app.app_context():
+        db_session = get_session()
+        returned_loan = db_session.get(Loan, loan_id)
+        assert returned_loan is not None
+        assert returned_loan.status == LoanStatus.RETURNED
+        assert returned_loan.returned_at is not None
+
+        jigsaw = db_session.get(Jigsaw, jigsaw_id)
+        assert jigsaw is not None
+        assert jigsaw.status == JigsawStatus.AVAILABLE
+
+    assert _count_audit_events(app) == before_count + 2
+
+
+@pytest.mark.functional
+def test_return_loan_rejects_already_returned_loan(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    create_response = client.post(
+        "/api/v1/loans",
+        headers=_csrf_headers(),
+        json={
+            "borrower_user_id": seeded_identity_data["borrower_user_id"],
+            "jigsaw_id": seeded_identity_data["available_jigsaw_id"],
+        },
+    )
+    assert create_response.status_code == 201
+    loan_id = create_response.get_json()["data"]["id"]
+
+    first_return_response = client.post(f"/api/v1/loans/{loan_id}/return", headers=_csrf_headers(), json={})
+    assert first_return_response.status_code == 200
+
+    second_return_response = client.post(f"/api/v1/loans/{loan_id}/return", headers=_csrf_headers(), json={})
+    assert second_return_response.status_code == 409
+    assert second_return_response.get_json()["error"]["code"] == "conflict"
+
+
+@pytest.mark.functional
 def test_admin_can_edit_existing_jigsaw_fields(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["admin_user_id"])
 
@@ -697,7 +758,7 @@ def test_admin_can_upload_and_list_jigsaw_images(client, seeded_identity_data):
 
     assert upload_response.status_code == 201
     uploaded = upload_response.get_json()["data"]
-    assert uploaded["tag"] == "box front"
+    assert uploaded["tag"] == "Box front"
     assert uploaded["mime_type"] == "image/png"
     assert uploaded["content_url"].endswith("/content")
 
@@ -796,11 +857,11 @@ def test_admin_can_permanently_delete_jigsaw_and_images(client, seeded_identity_
 
 
 @pytest.mark.functional
-def test_permanent_delete_rejects_jigsaw_with_loan_history(client, seeded_identity_data):
+def test_permanent_delete_cascades_related_loans(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["admin_user_id"])
     jigsaw_id = seeded_identity_data["available_jigsaw_id"]
 
-    create_loan_response = client.post(
+    first_loan_response = client.post(
         "/api/v1/loans",
         headers=_csrf_headers(),
         json={
@@ -808,13 +869,29 @@ def test_permanent_delete_rejects_jigsaw_with_loan_history(client, seeded_identi
             "jigsaw_id": jigsaw_id,
         },
     )
-    assert create_loan_response.status_code == 201
+    assert first_loan_response.status_code == 201
+    first_loan_id = first_loan_response.get_json()["data"]["id"]
+
+    return_response = client.post(f"/api/v1/loans/{first_loan_id}/return", headers=_csrf_headers(), json={})
+    assert return_response.status_code == 200
+
+    second_loan_response = client.post(
+        "/api/v1/loans",
+        headers=_csrf_headers(),
+        json={
+            "borrower_user_id": seeded_identity_data["borrower_user_id"],
+            "jigsaw_id": jigsaw_id,
+        },
+    )
+    assert second_loan_response.status_code == 201
 
     delete_response = client.delete(f"/api/v1/jigsaws/{jigsaw_id}/permanent", headers=_csrf_headers())
-    assert delete_response.status_code == 409
-    assert delete_response.get_json()["error"]["message"] == (
-        "Jigsaw cannot be permanently deleted because it has loan history."
-    )
+    assert delete_response.status_code == 200
+
+    list_response = client.get("/api/v1/loans")
+    assert list_response.status_code == 200
+    remaining_loan_jigsaw_ids = {loan["jigsaw_id"] for loan in list_response.get_json()["data"]}
+    assert jigsaw_id not in remaining_loan_jigsaw_ids
 
 
 @pytest.mark.functional

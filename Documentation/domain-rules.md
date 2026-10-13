@@ -19,13 +19,13 @@
   - `maintenance`
   - `retired`
 - Retired jigsaws are hidden from borrower browse views by default.
-- Admins can permanently delete a jigsaw only when it has no loan history.
-- Permanent delete removes the jigsaw row and hard-deletes its associated images and diary entries.
+- Admins can permanently delete a jigsaw even when it has loan history.
+- Permanent delete removes the jigsaw row and hard-deletes its associated images, diary entries, and loans (active or historic).
 
 ## Jigsaw Image Rules
 
 - Jigsaw images are stored in the database in v1.
-- Each image record includes a tag (for example `completed puzzle`, `box front`, `box side`) and binary image content.
+- Each image record includes a tag (for example `Completed`, `Box front`, `Box side`) and binary image content.
 - Image create/list endpoints are administrator-only in the initial rollout.
 - A jigsaw image may be unassigned (`jigsaw_id = null`) while it sits in the image library.
 - Image library bulk upload accepts one or more image files and/or zip archives containing image files.
@@ -41,9 +41,10 @@
 - Duplicate uploads can backfill missing `captured_at` metadata on an existing image record without overwriting image content.
 - Image browser edits (rotation/crop) overwrite image content in-place but preserve the original dedupe hash.
 - Tag/classification updates (`Box`, `Completed`, etc.) are allowed before jigsaw assignment.
+- Built-in image-browser tags use canonical title-case values: `Box`, `Box front`, `Box side`, `Box back`, `Completed`, `In progress`.
 - Admin create-from-image action can create a new jigsaw from an unassigned image and then bind the image to that created jigsaw.
 - Admin enrich-from-images action can infer metadata for an existing jigsaw from assigned box images.
-- Enrichment input only uses box-tagged images (for example `Box`, `box front`, `box-side`, `box-back`); completed-puzzle images are excluded.
+- Enrichment input only uses box-tagged images (for example `Box`, `Box front`, `Box side`, `Box back`); completed-puzzle images are excluded.
 - Enrichment is non-destructive by default: only empty fields are populated unless overwrite mode is explicitly requested.
 - Create-from-image uses AI metadata extraction and records per-call token/cost usage.
 - Create-from-image is blocked when configured daily AI spend budget has been reached.
@@ -83,6 +84,7 @@
   - `overdue`
 - Overdue is derived from due date and return status.
 - New loans set `due_at` to four weeks (28 days) after `checked_out_at`.
+- Returning a loan sets `returned_at` and transitions status to `returned`.
 
 ## Audit Rules
 

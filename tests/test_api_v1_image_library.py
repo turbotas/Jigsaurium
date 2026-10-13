@@ -453,6 +453,49 @@ def test_admin_can_set_image_tag_before_assignment(client, seeded_image_library_
 
 
 @pytest.mark.functional
+def test_image_tag_update_normalizes_known_tags_to_camel_case(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"h" * 24), "normalize-tag.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    tag_response = client.patch(
+        f"/api/v1/image-library/images/{image_id}/tag",
+        headers=_csrf_headers(),
+        json={"tag": "box-back"},
+    )
+
+    assert tag_response.status_code == 200
+    assert tag_response.get_json()["data"]["tag"] == "Box back"
+
+
+@pytest.mark.functional
+def test_image_library_upload_normalizes_known_tags_to_camel_case(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "tag": "in-progress",
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"i" * 24), "normalize-upload-tag.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert upload_response.status_code == 201
+    created_image = upload_response.get_json()["data"]["created"][0]
+    assert created_image["tag"] == "In progress"
+
+
+@pytest.mark.functional
 def test_completed_tag_on_assigned_image_creates_diary_entry(client, seeded_image_library_data, monkeypatch):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 
