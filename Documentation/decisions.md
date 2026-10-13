@@ -109,6 +109,10 @@
 - Why: removes ambiguity for downstream image-first creation flows while preserving data integrity and a clear ownership path per image.
 - Decision: add SHA-256 image hashing and duplicate suppression for both single-image and bulk/zip upload paths.
 - Why: backfill workflows frequently reintroduce the same image under different filenames; byte-level dedupe avoids redundant storage and noisy libraries.
+- Decision: image browser transforms (rotate/crop) overwrite image bytes in-place via admin endpoint instead of creating immutable versions.
+- Why: current workflow prioritizes speed of cleanup/backfill; full version history can be added later if operational need emerges.
+- Decision: preserve the original upload hash during destructive image edits so dedupe continues to clash against source files.
+- Why: backfill workflows rely on detecting re-uploads of originals even after derivatives are cropped/rotated in-place.
 
 ## 2026-10-13 - AI-Assisted Create-From-Image
 

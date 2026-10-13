@@ -6,6 +6,14 @@
   padding-top: 32px;
 }
 
+.app-main-container {
+  max-width: 1240px;
+}
+
+.govuk-header__container.govuk-width-container {
+  max-width: 1240px;
+}
+
 .govuk-caption-l {
   color: #505a5f;
 }
@@ -35,6 +43,36 @@
   text-decoration: underline;
 }
 
+.app-jigsaws-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.app-jigsaws-table .govuk-table__cell,
+.app-jigsaws-table .govuk-table__header {
+  overflow-wrap: anywhere;
+}
+
+.app-cell-actions {
+  white-space: normal;
+}
+
+.app-inline-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-inline-controls .govuk-select {
+  min-width: 200px;
+  max-width: 100%;
+}
+
+.app-inline-button {
+  margin-bottom: 0;
+}
+
 .app-dropzone {
   border: 2px dashed #b1b4b6;
   border-radius: 6px;
@@ -50,4 +88,56 @@
 .app-file-list {
   max-height: 180px;
   overflow-y: auto;
+}
+
+.app-image-browser {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(11, 12, 12, 0.85);
+  padding: 12px;
+}
+
+.app-image-browser__panel {
+  background: #fff;
+  border-radius: 6px;
+  height: calc(100vh - 24px);
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+}
+
+.app-image-browser__header {
+  flex: 0 0 auto;
+}
+
+.app-image-browser__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-image-browser__controls .govuk-button {
+  margin-bottom: 0;
+}
+
+.app-image-browser__viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #1d1f20;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+
+.app-image-browser__canvas {
+  max-width: 100%;
+  max-height: 100%;
+  cursor: default;
+}
+
+.app-image-browser__canvas.is-cropping {
+  cursor: crosshair;
 }

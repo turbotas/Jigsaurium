@@ -29,6 +29,7 @@
 - [x] Add image-library bulk upload (multi-file + zip extraction, optional jigsaw association).
 - [x] Add image-library assignment action (attach unassigned image to one existing jigsaw).
 - [x] Add create-from-image workflow (AI metadata extraction + jigsaw creation + image binding).
+- [x] Add image browser workflow (near-fullscreen review, keyboard tagging, rotate/crop, in-place overwrite).
 - [ ] Add diary entry edit (PATCH) support.
 - [ ] Add pagination for `jigsaws`, `loans`, `jigsaw_images`, and `diary_entries` list views.
 - [ ] Add collection-level diary/stats views (for example recent completions, difficulty breakdown).

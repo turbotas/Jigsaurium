@@ -1,4 +1,10 @@
 (() => {
+  const IMAGE_BROWSER_TAG_BOX = "Box";
+  const IMAGE_BROWSER_TAG_COMPLETED = "Completed";
+  const IMAGE_BROWSER_TAG_BOX_SIDE = "box-side";
+  const IMAGE_BROWSER_TAG_BOX_BACK = "box-back";
+  const IMAGE_BROWSER_TAG_IN_PROGRESS = "in-progress";
+
   const state = {
     csrfToken: null,
     user: null,
@@ -9,6 +15,20 @@
     imageLibraryImages: [],
     diaryEntries: [],
     bulkUploadFiles: [],
+    imageBrowser: {
+      isOpen: false,
+      index: 0,
+      sourceDataUrl: null,
+      workingDataUrl: null,
+      workingImage: null,
+      rotationDegrees: 0,
+      cropMode: false,
+      cropRect: null,
+      isDraggingCrop: false,
+      dragStart: null,
+      mimeType: "image/png",
+      filename: "image.png",
+    },
   };
 
   const elements = {
@@ -69,6 +89,23 @@
     imageLibraryFilesInput: document.getElementById("image-library-files"),
     imageLibraryFilesList: document.getElementById("image-library-files-list"),
     imageLibraryTableBody: document.getElementById("image-library-table-body"),
+    imageBrowserOpen: document.getElementById("image-browser-open"),
+    imageBrowserModal: document.getElementById("image-browser-modal"),
+    imageBrowserStatus: document.getElementById("image-browser-status"),
+    imageBrowserCanvas: document.getElementById("image-browser-canvas"),
+    imageBrowserPrev: document.getElementById("image-browser-prev"),
+    imageBrowserNext: document.getElementById("image-browser-next"),
+    imageBrowserRotateLeft: document.getElementById("image-browser-rotate-left"),
+    imageBrowserRotateRight: document.getElementById("image-browser-rotate-right"),
+    imageBrowserMarkBox: document.getElementById("image-browser-mark-box"),
+    imageBrowserMarkCompleted: document.getElementById("image-browser-mark-completed"),
+    imageBrowserMarkBoxSide: document.getElementById("image-browser-mark-box-side"),
+    imageBrowserMarkBoxBack: document.getElementById("image-browser-mark-box-back"),
+    imageBrowserMarkInProgress: document.getElementById("image-browser-mark-in-progress"),
+    imageBrowserCropToggle: document.getElementById("image-browser-crop-toggle"),
+    imageBrowserCropApply: document.getElementById("image-browser-crop-apply"),
+    imageBrowserSave: document.getElementById("image-browser-save"),
+    imageBrowserClose: document.getElementById("image-browser-close"),
     diaryEntryForm: document.getElementById("diary-entry-form"),
     diaryJigsawId: document.getElementById("diary-jigsaw-id"),
     diaryCompletedAt: document.getElementById("diary-completed-at"),
@@ -111,7 +148,7 @@
     }
 
     const method = (options.method || "GET").toUpperCase();
-    if (["POST", "PATCH", "DELETE"].includes(method) && state.csrfToken) {
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && state.csrfToken) {
       headers.set("X-CSRF-Token", state.csrfToken);
     }
 
@@ -548,23 +585,29 @@
 
       const actionCell = document.createElement("td");
       actionCell.className = "govuk-table__cell";
+      actionCell.classList.add("app-cell-actions");
+
+      const controlsWrap = document.createElement("div");
+      controlsWrap.className = "app-inline-controls";
 
       const editButton = document.createElement("button");
       editButton.type = "button";
-      editButton.className = "app-action-link";
+      editButton.className = "govuk-button govuk-button--secondary app-inline-button";
+      editButton.setAttribute("data-module", "govuk-button");
       editButton.dataset.userEdit = String(user.id);
       editButton.textContent = "Edit";
-      actionCell.appendChild(editButton);
-
-      actionCell.appendChild(document.createTextNode(" | "));
+      controlsWrap.appendChild(editButton);
 
       const actionButton = document.createElement("button");
       actionButton.type = "button";
-      actionButton.className = "app-action-link";
+      actionButton.className = "govuk-button govuk-button--secondary app-inline-button";
+      actionButton.setAttribute("data-module", "govuk-button");
       actionButton.dataset.userToggle = String(user.id);
       actionButton.dataset.currentActive = String(isActive);
       actionButton.textContent = toggleText;
-      actionCell.appendChild(actionButton);
+      controlsWrap.appendChild(actionButton);
+
+      actionCell.appendChild(controlsWrap);
 
       row.appendChild(actionCell);
       tableBody.appendChild(row);
@@ -576,7 +619,7 @@
     clearTableBody(tableBody);
 
     if (!Array.isArray(jigsaws) || jigsaws.length === 0) {
-      appendEmptyRow(tableBody, 10, "No jigsaws found.");
+      appendEmptyRow(tableBody, 6, "No jigsaws found.");
       return;
     }
 
@@ -586,32 +629,42 @@
 
       row.appendChild(buildCell(String(jigsaw.id)));
       row.appendChild(buildCell(String(jigsaw.title || "-")));
-      row.appendChild(buildCell(String(jigsaw.manufacturer || "-")));
-      row.appendChild(buildCell(String(jigsaw.artist || "-")));
-      row.appendChild(buildCell(String(jigsaw.dimensions_cm || "-")));
       row.appendChild(buildCell(String(jigsaw.piece_count || "-")));
-      row.appendChild(buildCell(String(jigsaw.condition || "-")));
       row.appendChild(buildCell(String(jigsaw.status || "-")));
       row.appendChild(buildCell(toLocalTimestamp(jigsaw.last_completed_at)));
 
       const actionCell = document.createElement("td");
       actionCell.className = "govuk-table__cell";
+      actionCell.classList.add("app-cell-actions");
+
+      const controlsWrap = document.createElement("div");
+      controlsWrap.className = "app-inline-controls";
 
       const editButton = document.createElement("button");
       editButton.type = "button";
-      editButton.className = "app-action-link";
+      editButton.className = "govuk-button govuk-button--secondary app-inline-button";
+      editButton.setAttribute("data-module", "govuk-button");
       editButton.dataset.jigsawEdit = String(jigsaw.id);
       editButton.textContent = "Edit";
-      actionCell.appendChild(editButton);
-
-      actionCell.appendChild(document.createTextNode(" | "));
+      controlsWrap.appendChild(editButton);
 
       const retireButton = document.createElement("button");
       retireButton.type = "button";
-      retireButton.className = "app-action-link";
+      retireButton.className = "govuk-button govuk-button--secondary app-inline-button";
+      retireButton.setAttribute("data-module", "govuk-button");
       retireButton.dataset.jigsawRetire = String(jigsaw.id);
       retireButton.textContent = "Retire";
-      actionCell.appendChild(retireButton);
+      controlsWrap.appendChild(retireButton);
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "govuk-button govuk-button--secondary app-inline-button";
+      deleteButton.setAttribute("data-module", "govuk-button");
+      deleteButton.dataset.jigsawDelete = String(jigsaw.id);
+      deleteButton.textContent = "Delete";
+      controlsWrap.appendChild(deleteButton);
+
+      actionCell.appendChild(controlsWrap);
 
       row.appendChild(actionCell);
       tableBody.appendChild(row);
@@ -697,7 +750,9 @@
       const actionCell = document.createElement("td");
       actionCell.className = "govuk-table__cell";
       const link = document.createElement("a");
-      link.className = "govuk-link";
+      link.className = "govuk-button govuk-button--secondary app-inline-button";
+      link.setAttribute("role", "button");
+      link.setAttribute("data-module", "govuk-button");
       link.href = String(image.content_url || "#");
       link.textContent = "Open";
       link.target = "_blank";
@@ -741,6 +796,9 @@
       const assignCell = document.createElement("td");
       assignCell.className = "govuk-table__cell";
       if (!image.jigsaw_id && sortedJigsaws.length > 0) {
+        const controlsWrap = document.createElement("div");
+        controlsWrap.className = "app-inline-controls";
+
         const select = document.createElement("select");
         select.className = "govuk-select";
         select.dataset.imageAssignSelect = String(image.id);
@@ -759,29 +817,39 @@
 
         const button = document.createElement("button");
         button.type = "button";
-        button.className = "app-action-link";
+        button.className = "govuk-button govuk-button--secondary app-inline-button";
+        button.setAttribute("data-module", "govuk-button");
         button.dataset.imageAssign = String(image.id);
         button.textContent = "Assign";
 
         const createButton = document.createElement("button");
         createButton.type = "button";
-        createButton.className = "app-action-link";
+        createButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        createButton.setAttribute("data-module", "govuk-button");
         createButton.dataset.imageCreate = String(image.id);
         createButton.textContent = "Create jigsaw";
 
-        assignCell.appendChild(select);
-        assignCell.appendChild(document.createTextNode(" "));
-        assignCell.appendChild(button);
-        assignCell.appendChild(document.createElement("br"));
-        assignCell.appendChild(createButton);
+        controlsWrap.appendChild(select);
+        controlsWrap.appendChild(button);
+        controlsWrap.appendChild(createButton);
+        assignCell.appendChild(controlsWrap);
       } else if (!image.jigsaw_id) {
+        const controlsWrap = document.createElement("div");
+        controlsWrap.className = "app-inline-controls";
+
+        const note = document.createElement("span");
+        note.textContent = "No jigsaws available";
+
         const createButton = document.createElement("button");
         createButton.type = "button";
-        createButton.className = "app-action-link";
+        createButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        createButton.setAttribute("data-module", "govuk-button");
         createButton.dataset.imageCreate = String(image.id);
         createButton.textContent = "Create jigsaw";
-        assignCell.appendChild(document.createTextNode("No jigsaws available "));
-        assignCell.appendChild(createButton);
+
+        controlsWrap.appendChild(note);
+        controlsWrap.appendChild(createButton);
+        assignCell.appendChild(controlsWrap);
       } else {
         assignCell.textContent = "Assigned";
       }
@@ -790,7 +858,9 @@
       const actionCell = document.createElement("td");
       actionCell.className = "govuk-table__cell";
       const link = document.createElement("a");
-      link.className = "govuk-link";
+      link.className = "govuk-button govuk-button--secondary app-inline-button";
+      link.setAttribute("role", "button");
+      link.setAttribute("data-module", "govuk-button");
       link.href = String(image.content_url || "#");
       link.textContent = "Open";
       link.target = "_blank";
@@ -825,6 +895,488 @@
       item.textContent = `${file.name} (${sizeKb} KB)`;
       list.appendChild(item);
     });
+  }
+
+  function normalizeRotationDegrees(value) {
+    let normalized = Number(value) || 0;
+    normalized %= 360;
+    if (normalized < 0) {
+      normalized += 360;
+    }
+    return normalized;
+  }
+
+  function getCurrentImageBrowserItem() {
+    if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
+      return null;
+    }
+    const index = Math.max(0, Math.min(state.imageBrowser.index, state.imageLibraryImages.length - 1));
+    state.imageBrowser.index = index;
+    return state.imageLibraryImages[index] || null;
+  }
+
+  function browserHasPendingEdits() {
+    return (
+      Boolean(state.imageBrowser.sourceDataUrl) &&
+      (state.imageBrowser.sourceDataUrl !== state.imageBrowser.workingDataUrl || normalizeRotationDegrees(state.imageBrowser.rotationDegrees) !== 0)
+    );
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Failed to read image data."));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function loadImageElementFromDataUrl(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Failed to load image."));
+      image.src = dataUrl;
+    });
+  }
+
+  async function ensureImageBrowserWorkingImage() {
+    if (state.imageBrowser.workingImage) {
+      return state.imageBrowser.workingImage;
+    }
+    if (!state.imageBrowser.workingDataUrl) {
+      return null;
+    }
+    state.imageBrowser.workingImage = await loadImageElementFromDataUrl(state.imageBrowser.workingDataUrl);
+    return state.imageBrowser.workingImage;
+  }
+
+  function drawRotatedImageToContext(context, image, rotationDegrees, canvasWidth, canvasHeight) {
+    const normalized = normalizeRotationDegrees(rotationDegrees);
+    context.save();
+    if (normalized === 0) {
+      context.drawImage(image, 0, 0);
+    } else if (normalized === 90) {
+      context.translate(canvasWidth, 0);
+      context.rotate(Math.PI / 2);
+      context.drawImage(image, 0, 0);
+    } else if (normalized === 180) {
+      context.translate(canvasWidth, canvasHeight);
+      context.rotate(Math.PI);
+      context.drawImage(image, 0, 0);
+    } else if (normalized === 270) {
+      context.translate(0, canvasHeight);
+      context.rotate(-Math.PI / 2);
+      context.drawImage(image, 0, 0);
+    }
+    context.restore();
+  }
+
+  async function renderImageBrowserToCanvas(targetCanvas, includeCropOverlay = true) {
+    if (!targetCanvas) {
+      return false;
+    }
+
+    const image = await ensureImageBrowserWorkingImage();
+    if (!image) {
+      targetCanvas.width = 1;
+      targetCanvas.height = 1;
+      const blankContext = targetCanvas.getContext("2d");
+      blankContext.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+      return false;
+    }
+
+    const normalizedRotation = normalizeRotationDegrees(state.imageBrowser.rotationDegrees);
+    const isQuarterTurn = normalizedRotation === 90 || normalizedRotation === 270;
+    const canvasWidth = isQuarterTurn ? image.naturalHeight : image.naturalWidth;
+    const canvasHeight = isQuarterTurn ? image.naturalWidth : image.naturalHeight;
+
+    targetCanvas.width = canvasWidth;
+    targetCanvas.height = canvasHeight;
+
+    const context = targetCanvas.getContext("2d");
+    context.clearRect(0, 0, canvasWidth, canvasHeight);
+    drawRotatedImageToContext(context, image, normalizedRotation, canvasWidth, canvasHeight);
+
+    if (includeCropOverlay && state.imageBrowser.cropMode && state.imageBrowser.cropRect) {
+      const rect = state.imageBrowser.cropRect;
+      context.save();
+      context.lineWidth = 2;
+      context.strokeStyle = "#ffdd00";
+      context.setLineDash([8, 4]);
+      context.strokeRect(rect.x, rect.y, rect.width, rect.height);
+      context.fillStyle = "rgba(255, 221, 0, 0.2)";
+      context.fillRect(rect.x, rect.y, rect.width, rect.height);
+      context.restore();
+    }
+
+    targetCanvas.classList.toggle("is-cropping", Boolean(state.imageBrowser.cropMode));
+    return true;
+  }
+
+  async function redrawImageBrowserCanvas() {
+    await renderImageBrowserToCanvas(elements.imageBrowserCanvas, true);
+    updateImageBrowserStatus();
+  }
+
+  function updateImageBrowserStatus() {
+    if (!elements.imageBrowserStatus) {
+      return;
+    }
+
+    const item = getCurrentImageBrowserItem();
+    if (!item) {
+      elements.imageBrowserStatus.textContent = "No images available.";
+      return;
+    }
+
+    const total = state.imageLibraryImages.length;
+    const index = state.imageBrowser.index + 1;
+    const association = item.jigsaw_id ? `assigned to jigsaw ${item.jigsaw_id}` : "unassigned";
+    const dirty = browserHasPendingEdits() ? " | unsaved edits" : "";
+    elements.imageBrowserStatus.textContent = `Image ${index}/${total}: ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association}${dirty}`;
+  }
+
+  function clearImageBrowserWorkingState() {
+    state.imageBrowser.sourceDataUrl = null;
+    state.imageBrowser.workingDataUrl = null;
+    state.imageBrowser.workingImage = null;
+    state.imageBrowser.rotationDegrees = 0;
+    state.imageBrowser.cropMode = false;
+    state.imageBrowser.cropRect = null;
+    state.imageBrowser.isDraggingCrop = false;
+    state.imageBrowser.dragStart = null;
+    state.imageBrowser.mimeType = "image/png";
+    state.imageBrowser.filename = "image.png";
+  }
+
+  async function loadCurrentImageIntoBrowser() {
+    const item = getCurrentImageBrowserItem();
+    clearImageBrowserWorkingState();
+
+    if (!item) {
+      await redrawImageBrowserCanvas();
+      return;
+    }
+
+    const response = await fetch(String(item.content_url || ""), { credentials: "same-origin" });
+    if (!response.ok) {
+      throw new Error(`Failed to load image content (HTTP ${response.status}).`);
+    }
+
+    const blob = await response.blob();
+    const dataUrl = await blobToDataUrl(blob);
+    state.imageBrowser.sourceDataUrl = dataUrl;
+    state.imageBrowser.workingDataUrl = dataUrl;
+    state.imageBrowser.workingImage = await loadImageElementFromDataUrl(dataUrl);
+    state.imageBrowser.mimeType = String(blob.type || item.mime_type || "image/png").toLowerCase();
+    state.imageBrowser.filename = item.filename || `image-${item.id}.png`;
+
+    await redrawImageBrowserCanvas();
+  }
+
+  async function openImageBrowser() {
+    if (!elements.imageBrowserModal) {
+      return;
+    }
+    if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
+      showFeedback("No images available in the image library yet.", true);
+      return;
+    }
+
+    state.imageBrowser.isOpen = true;
+    elements.imageBrowserModal.hidden = false;
+
+    try {
+      await loadCurrentImageIntoBrowser();
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  function closeImageBrowser() {
+    if (!elements.imageBrowserModal) {
+      return;
+    }
+    state.imageBrowser.isOpen = false;
+    elements.imageBrowserModal.hidden = true;
+    clearImageBrowserWorkingState();
+  }
+
+  async function navigateImageBrowser(direction) {
+    if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
+      return;
+    }
+
+    if (browserHasPendingEdits()) {
+      const shouldDiscard = window.confirm("Discard unsaved image edits and navigate?");
+      if (!shouldDiscard) {
+        return;
+      }
+    }
+
+    const total = state.imageLibraryImages.length;
+    const current = state.imageBrowser.index;
+    state.imageBrowser.index = (current + direction + total) % total;
+
+    try {
+      await loadCurrentImageIntoBrowser();
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function setImageBrowserTag(tag) {
+    const item = getCurrentImageBrowserItem();
+    if (!item) {
+      return;
+    }
+
+    try {
+      await apiRequest(`/api/v1/image-library/images/${item.id}/tag`, {
+        method: "PATCH",
+        body: JSON.stringify({ tag }),
+      });
+      showFeedback(`Image tagged as ${tag}.`);
+      await loadImageLibraryImages();
+      const refreshedIndex = state.imageLibraryImages.findIndex((image) => Number(image.id) === Number(item.id));
+      if (refreshedIndex >= 0) {
+        state.imageBrowser.index = refreshedIndex;
+      }
+      updateImageBrowserStatus();
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  function rotateImageBrowser(deltaDegrees) {
+    state.imageBrowser.rotationDegrees = normalizeRotationDegrees(state.imageBrowser.rotationDegrees + deltaDegrees);
+    redrawImageBrowserCanvas();
+  }
+
+  function toggleImageBrowserCropMode() {
+    state.imageBrowser.cropMode = !state.imageBrowser.cropMode;
+    state.imageBrowser.cropRect = null;
+    state.imageBrowser.isDraggingCrop = false;
+    state.imageBrowser.dragStart = null;
+    redrawImageBrowserCanvas();
+  }
+
+  function getCanvasCoordinates(event) {
+    const canvas = elements.imageBrowserCanvas;
+    if (!canvas) {
+      return null;
+    }
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.max(0, Math.min(canvas.width, (event.clientX - rect.left) * scaleX));
+    const y = Math.max(0, Math.min(canvas.height, (event.clientY - rect.top) * scaleY));
+    return { x, y };
+  }
+
+  function handleImageBrowserCanvasMouseDown(event) {
+    if (!state.imageBrowser.isOpen || !state.imageBrowser.cropMode) {
+      return;
+    }
+    const point = getCanvasCoordinates(event);
+    if (!point) {
+      return;
+    }
+    state.imageBrowser.isDraggingCrop = true;
+    state.imageBrowser.dragStart = point;
+    state.imageBrowser.cropRect = { x: point.x, y: point.y, width: 0, height: 0 };
+  }
+
+  function handleImageBrowserCanvasMouseMove(event) {
+    if (!state.imageBrowser.isOpen || !state.imageBrowser.cropMode || !state.imageBrowser.isDraggingCrop || !state.imageBrowser.dragStart) {
+      return;
+    }
+    const point = getCanvasCoordinates(event);
+    if (!point) {
+      return;
+    }
+
+    const start = state.imageBrowser.dragStart;
+    const x = Math.min(start.x, point.x);
+    const y = Math.min(start.y, point.y);
+    const width = Math.abs(point.x - start.x);
+    const height = Math.abs(point.y - start.y);
+    state.imageBrowser.cropRect = { x, y, width, height };
+    redrawImageBrowserCanvas();
+  }
+
+  function handleImageBrowserCanvasMouseUp() {
+    state.imageBrowser.isDraggingCrop = false;
+    state.imageBrowser.dragStart = null;
+  }
+
+  function resolveWritableMimeType(mimeType) {
+    const supported = new Set(["image/png", "image/jpeg", "image/webp"]);
+    const normalized = String(mimeType || "").toLowerCase();
+    if (supported.has(normalized)) {
+      return normalized;
+    }
+    return "image/png";
+  }
+
+  async function applyImageBrowserCrop() {
+    const cropRect = state.imageBrowser.cropRect;
+    if (!cropRect || cropRect.width < 8 || cropRect.height < 8) {
+      showFeedback("Select a crop area before applying crop.", true);
+      return;
+    }
+
+    const renderedCanvas = document.createElement("canvas");
+    const rendered = await renderImageBrowserToCanvas(renderedCanvas, false);
+    if (!rendered) {
+      showFeedback("Unable to crop this image.", true);
+      return;
+    }
+
+    const outputCanvas = document.createElement("canvas");
+    outputCanvas.width = Math.max(1, Math.round(cropRect.width));
+    outputCanvas.height = Math.max(1, Math.round(cropRect.height));
+    const outputContext = outputCanvas.getContext("2d");
+    outputContext.drawImage(
+      renderedCanvas,
+      Math.round(cropRect.x),
+      Math.round(cropRect.y),
+      Math.round(cropRect.width),
+      Math.round(cropRect.height),
+      0,
+      0,
+      outputCanvas.width,
+      outputCanvas.height,
+    );
+
+    const writableMimeType = resolveWritableMimeType(state.imageBrowser.mimeType);
+    state.imageBrowser.workingDataUrl = outputCanvas.toDataURL(writableMimeType);
+    state.imageBrowser.workingImage = await loadImageElementFromDataUrl(state.imageBrowser.workingDataUrl);
+    state.imageBrowser.rotationDegrees = 0;
+    state.imageBrowser.cropMode = false;
+    state.imageBrowser.cropRect = null;
+    showFeedback("Crop applied locally. Save overwrite to persist changes.");
+    await redrawImageBrowserCanvas();
+  }
+
+  function canvasToBlob(canvas, mimeType) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("Failed to serialize image."));
+          return;
+        }
+        resolve(blob);
+      }, mimeType);
+    });
+  }
+
+  async function saveImageBrowserOverwrite() {
+    const item = getCurrentImageBrowserItem();
+    if (!item) {
+      return;
+    }
+
+    const renderedCanvas = document.createElement("canvas");
+    const rendered = await renderImageBrowserToCanvas(renderedCanvas, false);
+    if (!rendered) {
+      showFeedback("No image to save.", true);
+      return;
+    }
+
+    const writableMimeType = resolveWritableMimeType(state.imageBrowser.mimeType);
+    let blob;
+    try {
+      blob = await canvasToBlob(renderedCanvas, writableMimeType);
+    } catch (error) {
+      showFeedback(error.message, true);
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("image", blob, state.imageBrowser.filename || `image-${item.id}.png`);
+
+    try {
+      await apiRequest(`/api/v1/image-library/images/${item.id}/content`, {
+        method: "PUT",
+        body: formData,
+      });
+      showFeedback("Image overwritten successfully.");
+      await loadImageLibraryImages();
+      const refreshedIndex = state.imageLibraryImages.findIndex((image) => Number(image.id) === Number(item.id));
+      if (refreshedIndex >= 0) {
+        state.imageBrowser.index = refreshedIndex;
+      }
+      await loadCurrentImageIntoBrowser();
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  function handleImageBrowserKeyDown(event) {
+    if (!state.imageBrowser.isOpen) {
+      return;
+    }
+
+    const activeTag = String(event.target?.tagName || "").toUpperCase();
+    if (activeTag === "INPUT" || activeTag === "TEXTAREA" || activeTag === "SELECT") {
+      return;
+    }
+
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      navigateImageBrowser(-1);
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      navigateImageBrowser(1);
+      return;
+    }
+    if (event.code === "BracketLeft" || event.key === "[" || event.key === "{" || event.key === "q" || event.key === "Q") {
+      event.preventDefault();
+      rotateImageBrowser(-90);
+      return;
+    }
+    if (event.code === "BracketRight" || event.key === "]" || event.key === "}" || event.key === "e" || event.key === "E") {
+      event.preventDefault();
+      rotateImageBrowser(90);
+      return;
+    }
+    if (event.key === "b" || event.key === "B") {
+      event.preventDefault();
+      setImageBrowserTag(IMAGE_BROWSER_TAG_BOX);
+      return;
+    }
+    if (event.key === "c" || event.key === "C") {
+      event.preventDefault();
+      setImageBrowserTag(IMAGE_BROWSER_TAG_COMPLETED);
+      return;
+    }
+    if (event.key === "s" || event.key === "S") {
+      event.preventDefault();
+      setImageBrowserTag(IMAGE_BROWSER_TAG_BOX_SIDE);
+      return;
+    }
+    if (event.key === "k" || event.key === "K") {
+      event.preventDefault();
+      setImageBrowserTag(IMAGE_BROWSER_TAG_BOX_BACK);
+      return;
+    }
+    if (event.key === "i" || event.key === "I") {
+      event.preventDefault();
+      setImageBrowserTag(IMAGE_BROWSER_TAG_IN_PROGRESS);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeImageBrowser();
+    }
   }
 
   function renderDiaryEntries(entries) {
@@ -962,6 +1514,9 @@
       const payload = await apiRequest("/api/v1/image-library/images?limit=200");
       state.imageLibraryImages = Array.isArray(payload.data) ? payload.data : [];
       renderImageLibraryImages(state.imageLibraryImages);
+      if (state.imageBrowser.isOpen) {
+        updateImageBrowserStatus();
+      }
     } catch (error) {
       if (error.status === 403) {
         state.imageLibraryImages = [];
@@ -1091,6 +1646,7 @@
       renderImageLibraryImages([]);
       renderDiaryEntries([]);
       clearBulkUploadFiles();
+      closeImageBrowser();
       populateLoanFormOptions();
       populateJigsawImageOptions();
       populateDiaryJigsawOptions();
@@ -1678,6 +2234,36 @@
       return;
     }
 
+    const deleteButton = event.target.closest("[data-jigsaw-delete]");
+    if (deleteButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const jigsawId = Number(deleteButton.getAttribute("data-jigsaw-delete"));
+      const shouldDelete = window.confirm(
+        "Permanently delete this jigsaw and all of its images/diary entries? This cannot be undone.",
+      );
+      if (!shouldDelete) {
+        return;
+      }
+
+      try {
+        await apiRequest(`/api/v1/jigsaws/${jigsawId}/permanent`, { method: "DELETE" });
+        showFeedback("Jigsaw deleted permanently.");
+        await Promise.all([
+          loadJigsaws(),
+          loadJigsawImagesForSelected(),
+          loadImageLibraryImages(),
+          loadDiaryEntriesForSelected(),
+          loadLoans(),
+          loadAuditEvents(),
+        ]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
     const diaryDeleteButton = event.target.closest("[data-diary-delete]");
     if (diaryDeleteButton) {
       event.preventDefault();
@@ -1809,6 +2395,95 @@
       elements.imageLibraryDropzone.addEventListener("drop", handleImageLibraryDropzoneDrop);
       elements.imageLibraryDropzone.addEventListener("keydown", handleImageLibraryDropzoneKeyDown);
     }
+
+    if (elements.imageBrowserOpen) {
+      elements.imageBrowserOpen.addEventListener("click", () => {
+        openImageBrowser();
+      });
+    }
+
+    if (elements.imageBrowserClose) {
+      elements.imageBrowserClose.addEventListener("click", closeImageBrowser);
+    }
+
+    if (elements.imageBrowserPrev) {
+      elements.imageBrowserPrev.addEventListener("click", () => {
+        navigateImageBrowser(-1);
+      });
+    }
+
+    if (elements.imageBrowserNext) {
+      elements.imageBrowserNext.addEventListener("click", () => {
+        navigateImageBrowser(1);
+      });
+    }
+
+    if (elements.imageBrowserRotateLeft) {
+      elements.imageBrowserRotateLeft.addEventListener("click", () => {
+        rotateImageBrowser(-90);
+      });
+    }
+
+    if (elements.imageBrowserRotateRight) {
+      elements.imageBrowserRotateRight.addEventListener("click", () => {
+        rotateImageBrowser(90);
+      });
+    }
+
+    if (elements.imageBrowserMarkBox) {
+      elements.imageBrowserMarkBox.addEventListener("click", () => {
+        setImageBrowserTag(IMAGE_BROWSER_TAG_BOX);
+      });
+    }
+
+    if (elements.imageBrowserMarkCompleted) {
+      elements.imageBrowserMarkCompleted.addEventListener("click", () => {
+        setImageBrowserTag(IMAGE_BROWSER_TAG_COMPLETED);
+      });
+    }
+
+    if (elements.imageBrowserMarkBoxSide) {
+      elements.imageBrowserMarkBoxSide.addEventListener("click", () => {
+        setImageBrowserTag(IMAGE_BROWSER_TAG_BOX_SIDE);
+      });
+    }
+
+    if (elements.imageBrowserMarkBoxBack) {
+      elements.imageBrowserMarkBoxBack.addEventListener("click", () => {
+        setImageBrowserTag(IMAGE_BROWSER_TAG_BOX_BACK);
+      });
+    }
+
+    if (elements.imageBrowserMarkInProgress) {
+      elements.imageBrowserMarkInProgress.addEventListener("click", () => {
+        setImageBrowserTag(IMAGE_BROWSER_TAG_IN_PROGRESS);
+      });
+    }
+
+    if (elements.imageBrowserCropToggle) {
+      elements.imageBrowserCropToggle.addEventListener("click", toggleImageBrowserCropMode);
+    }
+
+    if (elements.imageBrowserCropApply) {
+      elements.imageBrowserCropApply.addEventListener("click", () => {
+        applyImageBrowserCrop();
+      });
+    }
+
+    if (elements.imageBrowserSave) {
+      elements.imageBrowserSave.addEventListener("click", () => {
+        saveImageBrowserOverwrite();
+      });
+    }
+
+    if (elements.imageBrowserCanvas) {
+      elements.imageBrowserCanvas.addEventListener("mousedown", handleImageBrowserCanvasMouseDown);
+      elements.imageBrowserCanvas.addEventListener("mousemove", handleImageBrowserCanvasMouseMove);
+      elements.imageBrowserCanvas.addEventListener("mouseup", handleImageBrowserCanvasMouseUp);
+      elements.imageBrowserCanvas.addEventListener("mouseleave", handleImageBrowserCanvasMouseUp);
+    }
+
+    document.addEventListener("keydown", handleImageBrowserKeyDown);
 
     if (elements.diaryEntryForm) {
       elements.diaryEntryForm.addEventListener("submit", handleCreateDiaryEntry);

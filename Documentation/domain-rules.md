@@ -18,6 +18,8 @@
   - `maintenance`
   - `retired`
 - Retired jigsaws are hidden from borrower browse views by default.
+- Admins can permanently delete a jigsaw only when it has no loan history.
+- Permanent delete removes the jigsaw row and hard-deletes its associated images and diary entries.
 
 ## Jigsaw Image Rules
 
@@ -33,6 +35,8 @@
 - Admin assignment action can attach an unassigned image to a jigsaw; reassigning an already-associated image to a different jigsaw is blocked.
 - Every image stores a SHA-256 content hash.
 - Duplicate uploads (same bytes, even with different filenames) are ignored using hash matching.
+- Image browser edits (rotation/crop) overwrite image content in-place but preserve the original dedupe hash.
+- Tag/classification updates (`Box`, `Completed`, etc.) are allowed before jigsaw assignment.
 - Admin create-from-image action can create a new jigsaw from an unassigned image and then bind the image to that created jigsaw.
 - Create-from-image uses AI metadata extraction and records per-call token/cost usage.
 - Create-from-image is blocked when configured daily AI spend budget has been reached.

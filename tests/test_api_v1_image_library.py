@@ -75,6 +75,7 @@ def _make_zip_file(entries):
         ("GET", "/api/v1/image-library/images", None, None),
         ("POST", "/api/v1/image-library/uploads", "multipart/form-data", None),
         ("PATCH", "/api/v1/image-library/images/1/assign", None, {"jigsaw_id": 1}),
+        ("PATCH", "/api/v1/image-library/images/1/tag", None, {"tag": "Box"}),
         ("GET", "/api/v1/images/1/content", None, None),
     ],
 )
@@ -118,6 +119,13 @@ def test_borrower_cannot_use_image_library_admin_endpoints(client, seeded_image_
         json={"jigsaw_id": seeded_image_library_data["jigsaw_id"]},
     )
     assert assign_response.status_code == 403
+
+    tag_response = client.patch(
+        "/api/v1/image-library/images/1/tag",
+        headers=_csrf_headers(),
+        json={"tag": "Box"},
+    )
+    assert tag_response.status_code == 403
 
 
 @pytest.mark.functional
@@ -374,6 +382,79 @@ def test_assign_image_validates_payload(client, seeded_image_library_data):
     assert response.status_code == 422
     payload = response.get_json()
     assert payload["error"]["details"][0]["field"] == "jigsaw_id"
+
+
+@pytest.mark.functional
+def test_admin_can_set_image_tag_before_assignment(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"g" * 24), "tag-me.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    tag_response = client.patch(
+        f"/api/v1/image-library/images/{image_id}/tag",
+        headers=_csrf_headers(),
+        json={"tag": "Completed"},
+    )
+
+    assert tag_response.status_code == 200
+    assert tag_response.get_json()["data"]["tag"] == "Completed"
+
+
+@pytest.mark.functional
+def test_admin_can_overwrite_image_content(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    original_bytes = b"\x89PNG\r\n\x1a\n" + b"h" * 24
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(original_bytes), "before.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    created = upload_response.get_json()["data"]["created"][0]
+    image_id = created["id"]
+
+    overwrite_response = client.put(
+        f"/api/v1/image-library/images/{image_id}/content",
+        headers=_csrf_headers(),
+        data={
+            "image": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"i" * 96), "after.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert overwrite_response.status_code == 200
+    updated = overwrite_response.get_json()["data"]
+    assert updated["filename"] == "after.png"
+
+    content_response = client.get(updated["content_url"])
+    assert content_response.status_code == 200
+    assert content_response.data == b"\x89PNG\r\n\x1a\n" + b"i" * 96
+
+    duplicate_original_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(original_bytes), "before-again-different-name.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert duplicate_original_response.status_code == 201
+    payload = duplicate_original_response.get_json()["data"]
+    assert payload["created_count"] == 0
+    assert payload["skipped_count"] == 1
+    assert "duplicate image content" in payload["skipped"][0]["issue"]
 
 
 @pytest.mark.functional

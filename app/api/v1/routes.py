@@ -13,6 +13,7 @@ from secrets import token_urlsafe
 from functools import wraps
 
 from flask import Blueprint, current_app, g, request, session
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 from sqlalchemy.exc import DataError
 
@@ -39,6 +40,8 @@ JIGSAW_DESCRIPTION_MAX_LENGTH = 4000
 JIGSAW_IMAGE_TAG_MAX_LENGTH = 64
 JIGSAW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_JIGSAW_IMAGE_TAG = "untagged"
+IMAGE_BROWSER_TAG_BOX = "Box"
+IMAGE_BROWSER_TAG_COMPLETED = "Completed"
 ZIP_UPLOAD_MIME_TYPES = {"application/zip", "application/x-zip-compressed", "multipart/x-zip"}
 AI_IMAGE_CREATE_OPERATION = "image_to_jigsaw"
 AI_USAGE_STATUS_SUCCESS = "success"
@@ -793,6 +796,20 @@ def _build_image_content_response(image):
 
 def _compute_image_sha256(image_data):
     return hashlib.sha256(image_data).hexdigest()
+
+
+def _validate_image_browser_tag(value):
+    normalized, error = _validate_optional_text_field(value, field_name="tag", max_length=JIGSAW_IMAGE_TAG_MAX_LENGTH)
+    if error is not None:
+        return None, error
+    if normalized is None:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "tag", "issue": "must be a non-empty string"}],
+        )
+    return normalized, None
 
 
 def _to_decimal(value):
@@ -2175,6 +2192,106 @@ def assign_image_library_item(image_id):
     return _success_response(_serialize_jigsaw_image(image))
 
 
+@api_v1_bp.patch("/image-library/images/<int:image_id>/tag")
+@require_role("administrator")
+def set_image_library_item_tag(image_id):
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    tag, error = _validate_image_browser_tag(payload.get("tag"))
+    if error is not None:
+        return error
+
+    db_session = get_session()
+    image = db_session.get(JigsawImage, image_id)
+    if image is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    if image.tag == tag:
+        return _success_response(_serialize_jigsaw_image(image))
+
+    image.tag = tag
+    _record_audit_event(
+        action="jigsaw.image_tag_updated",
+        entity_type="jigsaw_image",
+        entity_id=image.id,
+        payload={"tag": image.tag},
+    )
+    db_session.commit()
+
+    return _success_response(_serialize_jigsaw_image(image))
+
+
+@api_v1_bp.put("/image-library/images/<int:image_id>/content")
+@require_role("administrator")
+def replace_image_library_item_content(image_id):
+    db_session = get_session()
+    image = db_session.get(JigsawImage, image_id)
+    if image is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    upload = request.files.get("image")
+    if upload is None:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": "file is required"}],
+        )
+
+    mime_type = (upload.mimetype or "").strip().lower()
+    if not mime_type.startswith("image/"):
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": "must be an image content type"}],
+        )
+
+    image_data = upload.read()
+    if not image_data:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": "file must not be empty"}],
+        )
+
+    if len(image_data) > JIGSAW_IMAGE_MAX_BYTES:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": f"must be {JIGSAW_IMAGE_MAX_BYTES} bytes or fewer"}],
+        )
+
+    filename, error = _validate_optional_text_field(upload.filename, field_name="filename", max_length=255)
+    if error is not None:
+        return error
+
+    previous_hash = image.image_sha256
+    new_content_hash = _compute_image_sha256(image_data)
+    image.image_data = image_data
+    image.mime_type = mime_type
+    image.filename = filename
+
+    _record_audit_event(
+        action="jigsaw.image_content_overwritten",
+        entity_type="jigsaw_image",
+        entity_id=image.id,
+        payload={
+            "dedupe_hash_preserved": previous_hash,
+            "new_content_hash": new_content_hash,
+            "mime_type": image.mime_type,
+            "size_bytes": len(image_data),
+        },
+    )
+    db_session.commit()
+
+    return _success_response(_serialize_jigsaw_image(image))
+
+
 @api_v1_bp.post("/image-library/images/<int:image_id>/create-jigsaw")
 @require_role("administrator")
 def create_jigsaw_from_image(image_id):
@@ -2473,3 +2590,46 @@ def retire_jigsaw(jigsaw_id):
     db_session.commit()
 
     return _success_response(_serialize_jigsaw(jigsaw))
+
+
+@api_v1_bp.delete("/jigsaws/<int:jigsaw_id>/permanent")
+@require_role("administrator")
+def delete_jigsaw_permanently(jigsaw_id):
+    db_session = get_session()
+    jigsaw = db_session.get(Jigsaw, jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+
+    has_any_loans = db_session.execute(
+        select(Loan.id).where(Loan.jigsaw_id == jigsaw.id).limit(1)
+    ).scalar_one_or_none()
+    if has_any_loans is not None:
+        return _error_response(
+            "conflict",
+            "Jigsaw cannot be permanently deleted because it has loan history.",
+            409,
+        )
+
+    image_count = db_session.execute(
+        select(func.count()).select_from(JigsawImage).where(JigsawImage.jigsaw_id == jigsaw.id)
+    ).scalar_one()
+    diary_count = db_session.execute(
+        select(func.count()).select_from(JigsawDiaryEntry).where(JigsawDiaryEntry.jigsaw_id == jigsaw.id)
+    ).scalar_one()
+
+    db_session.execute(sa_delete(JigsawImage).where(JigsawImage.jigsaw_id == jigsaw.id))
+    db_session.execute(sa_delete(JigsawDiaryEntry).where(JigsawDiaryEntry.jigsaw_id == jigsaw.id))
+    db_session.delete(jigsaw)
+
+    _record_audit_event(
+        action="jigsaw.deleted",
+        entity_type="jigsaw",
+        entity_id=jigsaw_id,
+        payload={
+            "deleted_image_count": int(image_count or 0),
+            "deleted_diary_entry_count": int(diary_count or 0),
+        },
+    )
+    db_session.commit()
+
+    return _success_response({"id": jigsaw_id, "deleted": True})

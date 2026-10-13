@@ -122,6 +122,7 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
         ("POST", "/api/v1/loans", {"borrower_user_id": 1, "jigsaw_id": 1}),
         ("PATCH", "/api/v1/jigsaws/1", {"title": "Updated title"}),
         ("DELETE", "/api/v1/jigsaws/1", None),
+        ("DELETE", "/api/v1/jigsaws/1/permanent", None),
     ],
 )
 def test_protected_endpoints_require_authentication(client, seeded_identity_data, method, path, json_payload):
@@ -746,6 +747,55 @@ def test_upload_jigsaw_image_ignores_duplicate_content_hash(client, seeded_ident
     assert list_response.status_code == 200
     images = list_response.get_json()["data"]
     assert len(images) == 1
+
+
+@pytest.mark.functional
+def test_admin_can_permanently_delete_jigsaw_and_images(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    upload_response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "image": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"p" * 64), "delete-me.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    content_url = upload_response.get_json()["data"]["content_url"]
+
+    delete_response = client.delete(f"/api/v1/jigsaws/{jigsaw_id}/permanent", headers=_csrf_headers())
+    assert delete_response.status_code == 200
+    assert delete_response.get_json()["data"]["deleted"] is True
+
+    get_jigsaw_response = client.get(f"/api/v1/jigsaws/{jigsaw_id}")
+    assert get_jigsaw_response.status_code == 404
+
+    get_content_response = client.get(content_url)
+    assert get_content_response.status_code == 404
+
+
+@pytest.mark.functional
+def test_permanent_delete_rejects_jigsaw_with_loan_history(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    create_loan_response = client.post(
+        "/api/v1/loans",
+        headers=_csrf_headers(),
+        json={
+            "borrower_user_id": seeded_identity_data["borrower_user_id"],
+            "jigsaw_id": jigsaw_id,
+        },
+    )
+    assert create_loan_response.status_code == 201
+
+    delete_response = client.delete(f"/api/v1/jigsaws/{jigsaw_id}/permanent", headers=_csrf_headers())
+    assert delete_response.status_code == 409
+    assert delete_response.get_json()["error"]["message"] == (
+        "Jigsaw cannot be permanently deleted because it has loan history."
+    )
 
 
 @pytest.mark.functional

@@ -215,13 +215,20 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("text=Image assigned to jigsaw.")
         page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png'):has-text('UI Smoke Puzzle')")
 
+        page.click("#image-browser-open")
+        page.wait_for_selector("#image-browser-modal:not([hidden])")
+        page.click("#image-browser-mark-box")
+        page.wait_for_selector("text=Image tagged as Box.")
+        page.click("#image-browser-close")
+        assert page.locator("#image-browser-modal").is_hidden()
+
         page.select_option("#diary-jigsaw-id", jigsaw_option_value)
         page.select_option("#diary-difficulty", "4")
         page.fill("#diary-notes", "UI diary entry")
         page.click("#diary-entry-form button[type='submit']")
         page.wait_for_selector("text=Diary entry added.")
         page.wait_for_selector("#diary-entries-table-body tr:has-text('UI diary entry')")
-        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(8).inner_text() != "-"
+        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(4).inner_text() != "-"
 
         page.locator("#diary-entries-table-body tr", has_text="UI diary entry").locator("button[data-diary-delete]").click()
         page.wait_for_selector("text=Diary entry deleted.")

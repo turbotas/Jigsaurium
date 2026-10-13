@@ -31,6 +31,7 @@
 - `GET /api/v1/jigsaws/{id}`
 - `PATCH /api/v1/jigsaws/{id}`
 - `DELETE /api/v1/jigsaws/{id}` (retire/archive semantics)
+- `DELETE /api/v1/jigsaws/{id}/permanent` (hard-delete semantics)
 - `GET /api/v1/users`
 - `POST /api/v1/users`
 - `PATCH /api/v1/users/{id}`
@@ -44,6 +45,8 @@
 - `GET /api/v1/image-library/images`
 - `POST /api/v1/image-library/uploads`
 - `PATCH /api/v1/image-library/images/{image_id}/assign`
+- `PATCH /api/v1/image-library/images/{image_id}/tag`
+- `PUT /api/v1/image-library/images/{image_id}/content`
 - `POST /api/v1/image-library/images/{image_id}/create-jigsaw`
 - `GET /api/v1/images/{image_id}/content`
 - `GET /api/v1/jigsaws/{id}/diary-entries`
@@ -170,6 +173,9 @@
   - Duplicate `title` values are allowed.
   - Jigsaw payloads now support optional fields: `manufacturer`, `artist`, `dimensions_cm`, `description`, `last_completed_at`.
   - `last_completed_at` uses UTC ISO 8601 format.
+  - `DELETE /api/v1/jigsaws/{id}` retires the jigsaw (soft delete).
+  - `DELETE /api/v1/jigsaws/{id}/permanent` permanently removes the jigsaw and deletes linked images and diary entries.
+  - `DELETE /api/v1/jigsaws/{id}/permanent` returns `409` when the jigsaw has any loan history.
 
 - Jigsaw image endpoint notes:
   - `GET /api/v1/jigsaws/{id}/images` is admin-only.
@@ -193,6 +199,9 @@
   - Hash duplicate handling applies to bulk imports too: duplicate image bytes are skipped and reported in `skipped`.
   - `PATCH /api/v1/image-library/images/{image_id}/assign` is admin-only and requires JSON body `{ "jigsaw_id": <positive integer> }`.
   - `PATCH /api/v1/image-library/images/{image_id}/assign` assigns an image to one jigsaw; reassignment to a different jigsaw returns `409`.
+  - `PATCH /api/v1/image-library/images/{image_id}/tag` is admin-only and updates image tag/classification (for example `Box`, `Completed`) even when image is unassigned.
+  - `PUT /api/v1/image-library/images/{image_id}/content` is admin-only and overwrites the stored image bytes in-place (used by rotate/crop workflows).
+  - Overwrite operations preserve the original dedupe hash so future uploads of the original source bytes still clash as duplicates.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` is admin-only and creates a new jigsaw from AI-extracted image metadata.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` only works for unassigned images; assigned images return `409`.
   - Successful create-from-image sets the associated image tag to `Box`.

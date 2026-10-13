@@ -235,17 +235,13 @@
     </form>
 
     <div class="table-scroll-wrap">
-      <table class="govuk-table" id="jigsaws-table">
+      <table class="govuk-table app-jigsaws-table" id="jigsaws-table">
         <caption class="govuk-table__caption govuk-table__caption--m">Jigsaw inventory</caption>
         <thead class="govuk-table__head">
           <tr class="govuk-table__row">
             <th class="govuk-table__header">ID</th>
             <th class="govuk-table__header">Title</th>
-            <th class="govuk-table__header">Maker</th>
-            <th class="govuk-table__header">Artist</th>
-            <th class="govuk-table__header">Dimensions</th>
             <th class="govuk-table__header">Pieces</th>
-            <th class="govuk-table__header">Condition</th>
             <th class="govuk-table__header">Status</th>
             <th class="govuk-table__header">Last completed</th>
             <th class="govuk-table__header">Action</th>
@@ -380,6 +376,7 @@
     <section class="govuk-!-margin-top-6" aria-labelledby="image-library-heading">
       <h3 id="image-library-heading" class="govuk-heading-m">Image library bulk upload</h3>
       <p class="govuk-body">Upload one or more image files, or a zip containing image files. Images are stored as <code>untagged</code> in the library and can optionally be linked to a jigsaw now.</p>
+      <button id="image-browser-open" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Open image browser</button>
       <form id="image-library-upload-form" class="govuk-!-margin-bottom-4">
         <div class="govuk-grid-row">
           <div class="govuk-grid-column-one-half">
@@ -425,6 +422,37 @@
           </thead>
           <tbody class="govuk-table__body" id="image-library-table-body"></tbody>
         </table>
+      </div>
+
+      <div id="image-browser-modal" class="app-image-browser" hidden>
+        <div class="app-image-browser__panel" role="dialog" aria-modal="true" aria-labelledby="image-browser-title">
+          <div class="app-image-browser__header">
+            <h4 id="image-browser-title" class="govuk-heading-m govuk-!-margin-bottom-1">Image browser</h4>
+            <p id="image-browser-status" class="govuk-hint govuk-!-margin-bottom-0"></p>
+          </div>
+
+          <div class="app-image-browser__controls govuk-!-margin-bottom-3">
+            <button id="image-browser-prev" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Previous</button>
+            <button id="image-browser-next" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Next</button>
+            <button id="image-browser-rotate-left" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate left</button>
+            <button id="image-browser-rotate-right" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate right</button>
+            <button id="image-browser-mark-box" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box</button>
+            <button id="image-browser-mark-completed" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Completed</button>
+            <button id="image-browser-mark-box-side" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark box-side</button>
+            <button id="image-browser-mark-box-back" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark box-back</button>
+            <button id="image-browser-mark-in-progress" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark in-progress</button>
+            <button id="image-browser-crop-toggle" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Crop</button>
+            <button id="image-browser-crop-apply" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Apply crop</button>
+            <button id="image-browser-save" type="button" class="govuk-button" data-module="govuk-button">Save overwrite</button>
+            <button id="image-browser-close" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Close</button>
+          </div>
+
+          <p class="govuk-hint">Keyboard: Left/Right = previous/next, [ / ] (or Q / E) = rotate, B = Box, C = Completed, S = box-side, K = box-back, I = in-progress.</p>
+
+          <div class="app-image-browser__viewport">
+            <canvas id="image-browser-canvas" class="app-image-browser__canvas"></canvas>
+          </div>
+        </div>
       </div>
     </section>
 
