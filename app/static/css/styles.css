@@ -34,3 +34,20 @@
   padding: 0;
   text-decoration: underline;
 }
+
+.app-dropzone {
+  border: 2px dashed #b1b4b6;
+  border-radius: 6px;
+  padding: 16px;
+  background: #f8f8f8;
+}
+
+.app-dropzone.is-dragover {
+  border-color: #1d70b8;
+  background: #eef4fa;
+}
+
+.app-file-list {
+  max-height: 180px;
+  overflow-y: auto;
+}

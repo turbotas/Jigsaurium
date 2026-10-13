@@ -25,6 +25,12 @@
 - `CANONICAL_HOST`: expected public host per environment.
 - `TRUSTED_PROXY_CIDRS`: comma-separated proxy CIDRs for header trust.
 - `TRUSTED_PROXY_HOPS`: optional fixed proxy depth if CIDR is not used.
+- `AI_ENABLED`: enable/disable AI create-from-image endpoint.
+- `AI_API_KEY`: provider API key for vision metadata extraction.
+- `AI_ENDPOINT_URL`: AI provider chat/completions-compatible endpoint URL.
+- `AI_MODEL`: provider model identifier for image metadata extraction.
+- `AI_TIMEOUT_SECONDS`: provider request timeout.
+- `AI_DAILY_BUDGET_USD`: optional daily spend limit; when reached, create-from-image requests are blocked.
 
 ## Canonical Hosts
 
@@ -56,6 +62,17 @@
   - `forwarded_chain`
   - `user_id` (if authenticated)
   - `environment`
+
+## AI Usage Logging and Spend Control
+
+- Every create-from-image AI call is recorded in `ai_usage_events` with:
+  - operation/status
+  - image id and actor
+  - model/endpoint
+  - prompt/completion/total tokens
+  - provider and final USD cost
+  - request_id and failure details when applicable
+- Spend control evaluates same-day UTC successful AI costs and blocks new create-from-image requests when `AI_DAILY_BUDGET_USD` is reached.
 
 ## Security Baseline
 

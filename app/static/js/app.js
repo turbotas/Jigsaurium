@@ -6,6 +6,9 @@
     jigsaws: [],
     loans: [],
     jigsawImages: [],
+    imageLibraryImages: [],
+    diaryEntries: [],
+    bulkUploadFiles: [],
   };
 
   const elements = {
@@ -44,11 +47,6 @@
     jigsawEditCancelButton: document.getElementById("jigsaw-edit-cancel"),
     editJigsawId: document.getElementById("edit-jigsaw-id"),
     editJigsawTitle: document.getElementById("edit-jigsaw-title"),
-    jigsawManufacturer: document.getElementById("jigsaw-manufacturer"),
-    jigsawArtist: document.getElementById("jigsaw-artist"),
-    jigsawDimensionsCm: document.getElementById("jigsaw-dimensions-cm"),
-    jigsawDescription: document.getElementById("jigsaw-description"),
-    jigsawLastCompletedAt: document.getElementById("jigsaw-last-completed-at"),
     editJigsawPieceCount: document.getElementById("edit-jigsaw-piece-count"),
     editJigsawManufacturer: document.getElementById("edit-jigsaw-manufacturer"),
     editJigsawArtist: document.getElementById("edit-jigsaw-artist"),
@@ -64,6 +62,19 @@
     jigsawImageTag: document.getElementById("jigsaw-image-tag"),
     jigsawImageFile: document.getElementById("jigsaw-image-file"),
     jigsawImagesTableBody: document.getElementById("jigsaw-images-table-body"),
+    imageLibraryUploadForm: document.getElementById("image-library-upload-form"),
+    imageLibraryJigsawId: document.getElementById("image-library-jigsaw-id"),
+    imageLibraryDropzone: document.getElementById("image-library-dropzone"),
+    imageLibraryBrowseButton: document.getElementById("image-library-browse-button"),
+    imageLibraryFilesInput: document.getElementById("image-library-files"),
+    imageLibraryFilesList: document.getElementById("image-library-files-list"),
+    imageLibraryTableBody: document.getElementById("image-library-table-body"),
+    diaryEntryForm: document.getElementById("diary-entry-form"),
+    diaryJigsawId: document.getElementById("diary-jigsaw-id"),
+    diaryCompletedAt: document.getElementById("diary-completed-at"),
+    diaryDifficulty: document.getElementById("diary-difficulty"),
+    diaryNotes: document.getElementById("diary-notes"),
+    diaryEntriesTableBody: document.getElementById("diary-entries-table-body"),
     loanCreateForm: document.getElementById("loan-create-form"),
     loanBorrowerUserId: document.getElementById("loan-borrower-user-id"),
     loanJigsawId: document.getElementById("loan-jigsaw-id"),
@@ -320,6 +331,58 @@
     }
   }
 
+  function populateDiaryJigsawOptions() {
+    if (!elements.diaryJigsawId) {
+      return;
+    }
+
+    const currentJigsawId = elements.diaryJigsawId.value;
+    elements.diaryJigsawId.innerHTML = "";
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Choose jigsaw";
+    elements.diaryJigsawId.appendChild(placeholder);
+
+    const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
+    sortedJigsaws.forEach((jigsaw) => {
+      const option = document.createElement("option");
+      option.value = String(jigsaw.id);
+      option.textContent = `${jigsaw.title} (id ${jigsaw.id})`;
+      elements.diaryJigsawId.appendChild(option);
+    });
+
+    if (currentJigsawId && sortedJigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
+      elements.diaryJigsawId.value = currentJigsawId;
+    }
+  }
+
+  function populateImageLibraryJigsawOptions() {
+    if (!elements.imageLibraryJigsawId) {
+      return;
+    }
+
+    const currentJigsawId = elements.imageLibraryJigsawId.value;
+    elements.imageLibraryJigsawId.innerHTML = "";
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Unassigned (image library only)";
+    elements.imageLibraryJigsawId.appendChild(placeholder);
+
+    const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
+    sortedJigsaws.forEach((jigsaw) => {
+      const option = document.createElement("option");
+      option.value = String(jigsaw.id);
+      option.textContent = `${jigsaw.title} (id ${jigsaw.id})`;
+      elements.imageLibraryJigsawId.appendChild(option);
+    });
+
+    if (currentJigsawId && sortedJigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
+      elements.imageLibraryJigsawId.value = currentJigsawId;
+    }
+  }
+
   function setSessionSummary() {
     if (!elements.sessionSummary) {
       return;
@@ -350,6 +413,8 @@
       }
       populateLoanFormOptions();
       populateJigsawImageOptions();
+      populateDiaryJigsawOptions();
+      populateImageLibraryJigsawOptions();
       return;
     }
 
@@ -638,12 +703,162 @@
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       actionCell.appendChild(link);
+
       row.appendChild(actionCell);
 
       tableBody.appendChild(row);
     });
   }
 
+  function renderImageLibraryImages(images) {
+    const tableBody = elements.imageLibraryTableBody;
+    clearTableBody(tableBody);
+
+    if (!Array.isArray(images) || images.length === 0) {
+      appendEmptyRow(tableBody, 7, "No image library items found.");
+      return;
+    }
+
+    const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
+    const jigsawsById = new Map(state.jigsaws.map((jigsaw) => [Number(jigsaw.id), jigsaw]));
+    images.forEach((image) => {
+      const row = document.createElement("tr");
+      row.className = "govuk-table__row";
+
+      const associatedJigsaw = image.jigsaw_id ? jigsawsById.get(Number(image.jigsaw_id)) : null;
+      const associationLabel = associatedJigsaw
+        ? `${associatedJigsaw.title || "(untitled)"} (id ${associatedJigsaw.id})`
+        : image.jigsaw_id
+          ? `id ${image.jigsaw_id}`
+          : "unassigned";
+
+      row.appendChild(buildCell(String(image.id)));
+      row.appendChild(buildCell(String(image.filename || "-")));
+      row.appendChild(buildCell(associationLabel));
+      row.appendChild(buildCell(String(image.tag || "-")));
+      row.appendChild(buildCell(toLocalTimestamp(image.created_at)));
+
+      const assignCell = document.createElement("td");
+      assignCell.className = "govuk-table__cell";
+      if (!image.jigsaw_id && sortedJigsaws.length > 0) {
+        const select = document.createElement("select");
+        select.className = "govuk-select";
+        select.dataset.imageAssignSelect = String(image.id);
+
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Choose jigsaw";
+        select.appendChild(placeholder);
+
+        sortedJigsaws.forEach((jigsaw) => {
+          const option = document.createElement("option");
+          option.value = String(jigsaw.id);
+          option.textContent = `${jigsaw.title || "(untitled)"} (id ${jigsaw.id})`;
+          select.appendChild(option);
+        });
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "app-action-link";
+        button.dataset.imageAssign = String(image.id);
+        button.textContent = "Assign";
+
+        const createButton = document.createElement("button");
+        createButton.type = "button";
+        createButton.className = "app-action-link";
+        createButton.dataset.imageCreate = String(image.id);
+        createButton.textContent = "Create jigsaw";
+
+        assignCell.appendChild(select);
+        assignCell.appendChild(document.createTextNode(" "));
+        assignCell.appendChild(button);
+        assignCell.appendChild(document.createElement("br"));
+        assignCell.appendChild(createButton);
+      } else if (!image.jigsaw_id) {
+        const createButton = document.createElement("button");
+        createButton.type = "button";
+        createButton.className = "app-action-link";
+        createButton.dataset.imageCreate = String(image.id);
+        createButton.textContent = "Create jigsaw";
+        assignCell.appendChild(document.createTextNode("No jigsaws available "));
+        assignCell.appendChild(createButton);
+      } else {
+        assignCell.textContent = "Assigned";
+      }
+      row.appendChild(assignCell);
+
+      const actionCell = document.createElement("td");
+      actionCell.className = "govuk-table__cell";
+      const link = document.createElement("a");
+      link.className = "govuk-link";
+      link.href = String(image.content_url || "#");
+      link.textContent = "Open";
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      actionCell.appendChild(link);
+
+      row.appendChild(actionCell);
+      tableBody.appendChild(row);
+    });
+  }
+
+  function renderBulkUploadFiles() {
+    const list = elements.imageLibraryFilesList;
+    if (!list) {
+      return;
+    }
+
+    while (list.firstChild) {
+      list.removeChild(list.firstChild);
+    }
+
+    if (!Array.isArray(state.bulkUploadFiles) || state.bulkUploadFiles.length === 0) {
+      const item = document.createElement("li");
+      item.textContent = "No files selected.";
+      list.appendChild(item);
+      return;
+    }
+
+    state.bulkUploadFiles.forEach((file) => {
+      const item = document.createElement("li");
+      const sizeKb = Math.max(1, Math.round((Number(file.size) || 0) / 1024));
+      item.textContent = `${file.name} (${sizeKb} KB)`;
+      list.appendChild(item);
+    });
+  }
+
+  function renderDiaryEntries(entries) {
+    const tableBody = elements.diaryEntriesTableBody;
+    clearTableBody(tableBody);
+
+    if (!Array.isArray(entries) || entries.length === 0) {
+      appendEmptyRow(tableBody, 5, "No diary entries found.");
+      return;
+    }
+
+    entries.forEach((entry) => {
+      const row = document.createElement("tr");
+      row.className = "govuk-table__row";
+
+      row.appendChild(buildCell(String(entry.id)));
+      row.appendChild(buildCell(toLocalTimestamp(entry.completed_at)));
+      row.appendChild(buildCell(entry.difficulty === null || entry.difficulty === undefined ? "-" : String(entry.difficulty)));
+      row.appendChild(buildCell(String(entry.notes || "-")));
+
+      const actionCell = document.createElement("td");
+      actionCell.className = "govuk-table__cell";
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "app-action-link";
+      deleteButton.dataset.diaryDelete = String(entry.id);
+      deleteButton.textContent = "Delete";
+      actionCell.appendChild(deleteButton);
+
+      row.appendChild(actionCell);
+      tableBody.appendChild(row);
+    });
+  }
   async function refreshSession() {
     try {
       const payload = await apiRequest("/api/v1/auth/me");
@@ -699,14 +914,20 @@
       const payload = await apiRequest("/api/v1/jigsaws");
       state.jigsaws = Array.isArray(payload.data) ? payload.data : [];
       renderJigsaws(state.jigsaws);
+      renderImageLibraryImages(state.imageLibraryImages);
       populateLoanFormOptions();
       populateJigsawImageOptions();
+      populateDiaryJigsawOptions();
+      populateImageLibraryJigsawOptions();
     } catch (error) {
       state.jigsaws = [];
       renderJigsaws([]);
+      renderImageLibraryImages(state.imageLibraryImages);
       closeJigsawEditor();
       populateLoanFormOptions();
       populateJigsawImageOptions();
+      populateDiaryJigsawOptions();
+      populateImageLibraryJigsawOptions();
       showFeedback(error.message, true);
     }
   }
@@ -726,6 +947,48 @@
     } catch (error) {
       state.jigsawImages = [];
       renderJigsawImages([]);
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function loadImageLibraryImages() {
+    if (!state.user) {
+      state.imageLibraryImages = [];
+      renderImageLibraryImages([]);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest("/api/v1/image-library/images?limit=200");
+      state.imageLibraryImages = Array.isArray(payload.data) ? payload.data : [];
+      renderImageLibraryImages(state.imageLibraryImages);
+    } catch (error) {
+      if (error.status === 403) {
+        state.imageLibraryImages = [];
+        renderImageLibraryImages([]);
+        return;
+      }
+      state.imageLibraryImages = [];
+      renderImageLibraryImages([]);
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function loadDiaryEntriesForSelected() {
+    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    if (!state.user || !selectedJigsawId) {
+      state.diaryEntries = [];
+      renderDiaryEntries([]);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest(`/api/v1/jigsaws/${selectedJigsawId}/diary-entries`);
+      state.diaryEntries = Array.isArray(payload.data) ? payload.data : [];
+      renderDiaryEntries(state.diaryEntries);
+    } catch (error) {
+      state.diaryEntries = [];
+      renderDiaryEntries([]);
       showFeedback(error.message, true);
     }
   }
@@ -793,8 +1056,8 @@
       state.csrfToken = payload.data.csrf_token;
       setSessionSummary();
       showFeedback("Signed in successfully.");
-      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents()]);
-      await loadJigsawImagesForSelected();
+      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadImageLibraryImages()]);
+      await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -817,14 +1080,21 @@
       state.jigsaws = [];
       state.loans = [];
       state.jigsawImages = [];
+      state.imageLibraryImages = [];
+      state.diaryEntries = [];
       renderUsers([]);
       closeUserEditor();
       renderJigsaws([]);
       closeJigsawEditor();
       renderLoans([]);
       renderJigsawImages([]);
+      renderImageLibraryImages([]);
+      renderDiaryEntries([]);
+      clearBulkUploadFiles();
       populateLoanFormOptions();
       populateJigsawImageOptions();
+      populateDiaryJigsawOptions();
+      populateImageLibraryJigsawOptions();
       renderAuditEvents([]);
       showFeedback("Signed out.");
     } catch (error) {
@@ -1042,15 +1312,7 @@
     const formData = new FormData(form);
     const payload = {
       title: String(formData.get("title") || "").trim(),
-      manufacturer: String(formData.get("manufacturer") || "").trim() || null,
-      artist: String(formData.get("artist") || "").trim() || null,
-      dimensions_cm: String(formData.get("dimensions_cm") || "").trim() || null,
-      description: String(formData.get("description") || "").trim() || null,
-      last_completed_at: normalizeDatetimeLocal(formData.get("last_completed_at")),
       piece_count: parseOptionalIntegerFormValue(formData.get("piece_count")),
-      condition: String(formData.get("condition") || "").trim() || null,
-      status: String(formData.get("status") || "").trim() || null,
-      tags: String(formData.get("tags") || "").trim() || null,
     };
 
     try {
@@ -1061,6 +1323,46 @@
       form.reset();
       showFeedback("Jigsaw created.");
       await Promise.all([loadJigsaws(), loadJigsawImagesForSelected(), loadLoans(), loadAuditEvents()]);
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function handleCreateDiaryEntry(event) {
+    event.preventDefault();
+    clearFeedback();
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const jigsawId = Number(formData.get("jigsaw_id") || "0");
+
+    if (!jigsawId) {
+      showFeedback("Select a jigsaw before adding a diary entry.", true);
+      return;
+    }
+
+    const payload = {
+      completed_at: normalizeDatetimeLocal(formData.get("completed_at")),
+      difficulty: parseOptionalIntegerFormValue(formData.get("difficulty")),
+      notes: String(formData.get("notes") || "").trim() || null,
+    };
+
+    try {
+      await apiRequest(`/api/v1/jigsaws/${jigsawId}/diary-entries`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      showFeedback("Diary entry added.");
+      if (elements.diaryCompletedAt) {
+        elements.diaryCompletedAt.value = "";
+      }
+      if (elements.diaryDifficulty) {
+        elements.diaryDifficulty.value = "";
+      }
+      if (elements.diaryNotes) {
+        elements.diaryNotes.value = "";
+      }
+      await Promise.all([loadDiaryEntriesForSelected(), loadJigsaws(), loadAuditEvents()]);
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -1092,6 +1394,104 @@
         elements.jigsawImageFile.value = "";
       }
       await Promise.all([loadJigsawImagesForSelected(), loadAuditEvents()]);
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  function addBulkUploadFiles(fileList) {
+    if (!fileList || fileList.length === 0) {
+      return;
+    }
+
+    const existingKeys = new Set(
+      state.bulkUploadFiles.map((file) => `${file.name}::${file.size}::${file.lastModified}`),
+    );
+
+    Array.from(fileList).forEach((file) => {
+      const key = `${file.name}::${file.size}::${file.lastModified}`;
+      if (!existingKeys.has(key)) {
+        state.bulkUploadFiles.push(file);
+        existingKeys.add(key);
+      }
+    });
+
+    renderBulkUploadFiles();
+  }
+
+  function clearBulkUploadFiles() {
+    state.bulkUploadFiles = [];
+    if (elements.imageLibraryFilesInput) {
+      elements.imageLibraryFilesInput.value = "";
+    }
+    renderBulkUploadFiles();
+  }
+
+  function handleImageLibraryBrowseClick() {
+    elements.imageLibraryFilesInput?.click();
+  }
+
+  function handleImageLibraryFilesInputChange(event) {
+    addBulkUploadFiles(event.currentTarget?.files || []);
+    if (elements.imageLibraryFilesInput) {
+      elements.imageLibraryFilesInput.value = "";
+    }
+  }
+
+  function handleImageLibraryDropzoneDragOver(event) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    elements.imageLibraryDropzone?.classList.add("is-dragover");
+  }
+
+  function handleImageLibraryDropzoneDragLeave(event) {
+    event.preventDefault();
+    elements.imageLibraryDropzone?.classList.remove("is-dragover");
+  }
+
+  function handleImageLibraryDropzoneDrop(event) {
+    event.preventDefault();
+    elements.imageLibraryDropzone?.classList.remove("is-dragover");
+    addBulkUploadFiles(event.dataTransfer?.files || []);
+  }
+
+  function handleImageLibraryDropzoneKeyDown(event) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      elements.imageLibraryFilesInput?.click();
+    }
+  }
+
+  async function handleImageLibraryUpload(event) {
+    event.preventDefault();
+    clearFeedback();
+
+    if (!Array.isArray(state.bulkUploadFiles) || state.bulkUploadFiles.length === 0) {
+      showFeedback("Choose one or more files before uploading to the image library.", true);
+      return;
+    }
+
+    const formData = new FormData();
+    const jigsawIdValue = String(elements.imageLibraryJigsawId?.value || "").trim();
+    if (jigsawIdValue) {
+      formData.append("jigsaw_id", jigsawIdValue);
+    }
+
+    state.bulkUploadFiles.forEach((file) => {
+      formData.append("files", file, file.name);
+    });
+
+    try {
+      const payload = await apiRequest("/api/v1/image-library/uploads", {
+        method: "POST",
+        body: formData,
+      });
+
+      const createdCount = Number(payload?.data?.created_count || 0);
+      const skippedCount = Number(payload?.data?.skipped_count || 0);
+      showFeedback(`Image library upload complete. Added ${createdCount} image(s), skipped ${skippedCount}.`);
+      clearBulkUploadFiles();
+      await Promise.all([loadImageLibraryImages(), loadJigsaws(), loadAuditEvents()]);
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -1275,7 +1675,82 @@
       } catch (error) {
         showFeedback(error.message, true);
       }
+      return;
     }
+
+    const diaryDeleteButton = event.target.closest("[data-diary-delete]");
+    if (diaryDeleteButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const entryId = Number(diaryDeleteButton.getAttribute("data-diary-delete"));
+      try {
+        await apiRequest(`/api/v1/diary-entries/${entryId}`, { method: "DELETE" });
+        showFeedback("Diary entry deleted.");
+        await Promise.all([loadDiaryEntriesForSelected(), loadJigsaws(), loadAuditEvents()]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
+    const imageAssignButton = event.target.closest("[data-image-assign]");
+    if (imageAssignButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const imageId = Number(imageAssignButton.getAttribute("data-image-assign"));
+      const select = elements.imageLibraryTableBody?.querySelector(
+        `[data-image-assign-select="${imageId}"]`,
+      );
+      const selectedJigsawId = Number(select?.value || "0");
+
+      if (!selectedJigsawId) {
+        showFeedback("Choose a jigsaw before assigning the image.", true);
+        return;
+      }
+
+      try {
+        await apiRequest(`/api/v1/image-library/images/${imageId}/assign`, {
+          method: "PATCH",
+          body: JSON.stringify({ jigsaw_id: selectedJigsawId }),
+        });
+        showFeedback("Image assigned to jigsaw.");
+        await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
+    const imageCreateButton = event.target.closest("[data-image-create]");
+    if (imageCreateButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const imageId = Number(imageCreateButton.getAttribute("data-image-create"));
+      try {
+        const payload = await apiRequest(`/api/v1/image-library/images/${imageId}/create-jigsaw`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        const createdTitle = payload?.data?.jigsaw?.title || "(untitled)";
+        showFeedback(`Jigsaw created from image: ${createdTitle}.`);
+        await Promise.all([
+          loadJigsaws(),
+          loadImageLibraryImages(),
+          loadJigsawImagesForSelected(),
+          loadAuditEvents(),
+        ]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+    }
+  }
+
+  function handleDiarySelectionChange() {
+    clearFeedback();
+    loadDiaryEntriesForSelected();
   }
 
   function handleJigsawImageSelectionChange() {
@@ -1316,6 +1791,41 @@
       elements.jigsawImageJigsawId.addEventListener("change", handleJigsawImageSelectionChange);
     }
 
+    if (elements.imageLibraryUploadForm) {
+      elements.imageLibraryUploadForm.addEventListener("submit", handleImageLibraryUpload);
+    }
+
+    if (elements.imageLibraryBrowseButton) {
+      elements.imageLibraryBrowseButton.addEventListener("click", handleImageLibraryBrowseClick);
+    }
+
+    if (elements.imageLibraryFilesInput) {
+      elements.imageLibraryFilesInput.addEventListener("change", handleImageLibraryFilesInputChange);
+    }
+
+    if (elements.imageLibraryDropzone) {
+      elements.imageLibraryDropzone.addEventListener("dragover", handleImageLibraryDropzoneDragOver);
+      elements.imageLibraryDropzone.addEventListener("dragleave", handleImageLibraryDropzoneDragLeave);
+      elements.imageLibraryDropzone.addEventListener("drop", handleImageLibraryDropzoneDrop);
+      elements.imageLibraryDropzone.addEventListener("keydown", handleImageLibraryDropzoneKeyDown);
+    }
+
+    if (elements.diaryEntryForm) {
+      elements.diaryEntryForm.addEventListener("submit", handleCreateDiaryEntry);
+    }
+
+    if (elements.diaryJigsawId) {
+      elements.diaryJigsawId.addEventListener("change", handleDiarySelectionChange);
+    }
+
+    if (elements.diaryEntriesTableBody) {
+      elements.diaryEntriesTableBody.addEventListener("click", handleTableActions);
+    }
+
+    if (elements.imageLibraryTableBody) {
+      elements.imageLibraryTableBody.addEventListener("click", handleTableActions);
+    }
+
     if (elements.jigsawEditForm) {
       elements.jigsawEditForm.addEventListener("submit", handleEditJigsaw);
     }
@@ -1343,18 +1853,24 @@
 
   async function init() {
     attachEvents();
+    renderBulkUploadFiles();
     const isAuthenticated = await refreshSession();
     if (isAuthenticated) {
-      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents()]);
-      await loadJigsawImagesForSelected();
+      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadImageLibraryImages()]);
+      await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
     } else {
       renderUsers([]);
       renderJigsaws([]);
       renderLoans([]);
       renderJigsawImages([]);
+      renderImageLibraryImages([]);
+      renderDiaryEntries([]);
       renderAuditEvents([]);
+      renderBulkUploadFiles();
       populateLoanFormOptions();
       populateJigsawImageOptions();
+      populateDiaryJigsawOptions();
+      populateImageLibraryJigsawOptions();
     }
   }
 

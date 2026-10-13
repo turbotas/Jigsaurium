@@ -50,14 +50,17 @@ def seeded_identity_data(app):
 
         db_session.commit()
 
-        yield {
+        seeded_ids = {
             "admin_user_id": admin_user.id,
             "borrower_user_id": borrower_user.id,
             "available_jigsaw_id": available_jigsaw.id,
             "retired_jigsaw_id": retired_jigsaw.id,
         }
 
-        db_session.remove()
+    # Release the app context before yielding: keeping it pushed makes the
+    # test client reuse it per request, leaking g-cached users across requests.
+    db_session.remove()
+    yield seeded_ids
 
 
 def _set_user_session(client, user_id, csrf_token="test-csrf-token"):
@@ -706,6 +709,43 @@ def test_admin_can_upload_jigsaw_image_without_tag(client, seeded_identity_data)
     assert response.status_code == 201
     payload = response.get_json()["data"]
     assert payload["tag"] == "untagged"
+
+
+@pytest.mark.functional
+def test_upload_jigsaw_image_ignores_duplicate_content_hash(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    image_bytes = b"\x89PNG\r\n\x1a\n" + (b"d" * 128)
+
+    first_response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "image": (BytesIO(image_bytes), "first-name.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert first_response.status_code == 201
+    first_image = first_response.get_json()["data"]
+
+    duplicate_response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "image": (BytesIO(image_bytes), "second-name.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert duplicate_response.status_code == 200
+    duplicate_image = duplicate_response.get_json()["data"]
+    assert duplicate_image["id"] == first_image["id"]
+
+    list_response = client.get(f"/api/v1/jigsaws/{jigsaw_id}/images")
+    assert list_response.status_code == 200
+    images = list_response.get_json()["data"]
+    assert len(images) == 1
 
 
 @pytest.mark.functional

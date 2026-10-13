@@ -41,6 +41,14 @@
 - `GET /api/v1/jigsaws/{id}/images`
 - `POST /api/v1/jigsaws/{id}/images`
 - `GET /api/v1/jigsaws/{id}/images/{image_id}/content`
+- `GET /api/v1/image-library/images`
+- `POST /api/v1/image-library/uploads`
+- `PATCH /api/v1/image-library/images/{image_id}/assign`
+- `POST /api/v1/image-library/images/{image_id}/create-jigsaw`
+- `GET /api/v1/images/{image_id}/content`
+- `GET /api/v1/jigsaws/{id}/diary-entries`
+- `POST /api/v1/jigsaws/{id}/diary-entries`
+- `DELETE /api/v1/diary-entries/{id}`
 
 ## Filtering, Sorting, Pagination
 
@@ -170,7 +178,41 @@
     - `tag` (optional string, defaults to `untagged` when omitted)
     - `image` (required file, image MIME type)
   - Uploaded images are stored in the database for v1.
-  - `GET /api/v1/jigsaws/{id}/images/{image_id}/content` returns binary image content for authenticated users.
+  - Image content hash (`SHA-256`) is used for duplicate suppression; uploading identical bytes returns the existing image instead of creating a duplicate row.
+  - `GET /api/v1/jigsaws/{id}/images/{image_id}/content` remains supported for jigsaw-associated images.
+
+- Image library endpoint notes:
+  - `GET /api/v1/image-library/images` is admin-only and returns recent images across the full library.
+  - `GET /api/v1/image-library/images` optional query param `limit` must be an integer from `1` to `500` (default `200`).
+  - `POST /api/v1/image-library/uploads` is admin-only and expects multipart form data:
+    - `files` (one or more uploads; each may be an image file or a `.zip` archive containing image files)
+    - `jigsaw_id` (optional positive integer association)
+    - `tag` (optional string, defaults to `untagged`)
+  - Images uploaded through the image-library endpoint may be unassigned (`jigsaw_id = null`).
+  - `POST /api/v1/image-library/uploads` returns a summary: `created_count`, `skipped_count`, and per-item `created` / `skipped` details.
+  - Hash duplicate handling applies to bulk imports too: duplicate image bytes are skipped and reported in `skipped`.
+  - `PATCH /api/v1/image-library/images/{image_id}/assign` is admin-only and requires JSON body `{ "jigsaw_id": <positive integer> }`.
+  - `PATCH /api/v1/image-library/images/{image_id}/assign` assigns an image to one jigsaw; reassignment to a different jigsaw returns `409`.
+  - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` is admin-only and creates a new jigsaw from AI-extracted image metadata.
+  - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` only works for unassigned images; assigned images return `409`.
+  - Successful create-from-image sets the associated image tag to `Box`.
+  - AI extraction expects these metadata keys: `title`, `manufacturer`/`publisher`, `artist`, `piece_count`, `tags`, `dimensions_cm`, `description`.
+  - AI usage is cost-tracked per call (`ai_usage_events`) with token usage and final USD cost.
+  - Daily AI spend guardrail: when configured budget is reached, create-from-image requests return `409` and are blocked before provider calls.
+  - `GET /api/v1/images/{image_id}/content` returns binary image content for authenticated users, including unassigned library images.
+  - Bulk uploads write `jigsaw.image_bulk_uploaded` audit events.
+  - Image assignment writes `jigsaw.image_assigned` audit events.
+  - Create-from-image writes `jigsaw.created_from_image` audit events.
+
+- Diary endpoint notes:
+  - `GET /api/v1/jigsaws/{id}/diary-entries` requires authentication; retired jigsaws return `404` for non-admin callers. Entries are ordered by `completed_at` descending.
+  - `POST /api/v1/jigsaws/{id}/diary-entries` is admin-only. Request body fields are all optional:
+    - `completed_at` (UTC ISO 8601 datetime; defaults to current UTC time)
+    - `difficulty` (integer 1-5, or empty)
+    - `notes` (string up to 4000 characters, no control characters)
+  - Creating an entry moves the parent jigsaw's `last_completed_at` forward when the entry is newer.
+  - `DELETE /api/v1/diary-entries/{id}` is admin-only and returns the deleted entry; the parent jigsaw's `last_completed_at` is recomputed from remaining entries.
+  - Diary entry create/delete write audit events (`jigsaw.diary_entry_created`, `jigsaw.diary_entry_deleted`).
 
 ## HTTP Status Rules
 

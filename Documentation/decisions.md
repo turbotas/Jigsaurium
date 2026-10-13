@@ -83,3 +83,40 @@
 - Why: supports planned image-driven creation workflows where structured metadata may be populated later.
 - Decision: allow duplicate jigsaw titles.
 - Why: title uniqueness is not a current domain requirement and cannot be assumed in manual/image-assisted entry.
+
+## 2026-10-13 - Product Pivot to Inventory and Completion Diary
+
+- Decision: shift product focus from lending-library circulation to personal inventory management and a per-jigsaw completion diary.
+- Why: owner direction change; the collection catalog and completion history are the core value, lending is a secondary capability.
+- Decision: model the diary as timestamped entries per jigsaw (`completed_at`, optional 1-5 `difficulty`, optional `notes`) in a dedicated table rather than fields on the jigsaw record.
+- Why: supports repeat completions of the same jigsaw and preserves full history instead of a single latest value.
+- Decision: keep existing loan code paths in place but deprioritize all new lending work.
+- Why: lending is implemented and tested; removing it would discard working value with no user benefit, and it can be resumed later.
+- Decision: streamline jigsaw creation to a quick-add form (title + piece count) with all other metadata editable afterwards.
+- Why: reduces record-entry friction; the API already accepts blank values for all jigsaw fields.
+- Decision: maintain `jigsaws.last_completed_at` from diary activity (bump forward on entry create, recompute on entry delete) while still allowing manual override via `PATCH /api/v1/jigsaws/{id}`.
+- Why: keeps the existing summary field consistent without requiring duplicate date entry.
+
+## 2026-10-13 - Bulk Image Library Intake
+
+- Decision: allow `jigsaw_images.jigsaw_id` to be nullable so images can exist in a standalone library before puzzle association.
+- Why: enables fast intake workflows where image ingestion happens before catalog linking.
+- Decision: add admin bulk image ingestion endpoint that accepts multi-file uploads and zip archives, importing image entries and skipping non-images.
+- Why: dramatically reduces manual effort for initial image library population and supports upcoming image-first creation workflows.
+- Decision: keep legacy jigsaw-scoped image endpoints while adding global image library endpoints.
+- Why: preserves current admin tooling and tests while incrementally introducing the new workflow.
+- Decision: enforce single-jigsaw assignment for images (`jigsaw_id` remains a single nullable FK); allow assignment from unassigned state but block reassignment to a different jigsaw.
+- Why: removes ambiguity for downstream image-first creation flows while preserving data integrity and a clear ownership path per image.
+- Decision: add SHA-256 image hashing and duplicate suppression for both single-image and bulk/zip upload paths.
+- Why: backfill workflows frequently reintroduce the same image under different filenames; byte-level dedupe avoids redundant storage and noisy libraries.
+
+## 2026-10-13 - AI-Assisted Create-From-Image
+
+- Decision: implement create-from-image as an admin API action that runs AI metadata extraction and maps the JSON result into jigsaw fields.
+- Why: image-first intake needs fast structured creation from box imagery where title/piece count/publisher data is often visible.
+- Decision: make AI provider integration endpoint/model/key configurable via environment variables using a chat/completions-compatible request contract.
+- Why: keeps provider choice flexible while avoiding hardcoded secrets and preserving deploy-time configuration control.
+- Decision: persist per-call AI usage/cost telemetry (`ai_usage_events`) including prompt/completion tokens, provider/final cost, and failure details.
+- Why: cost accountability and troubleshooting need durable records beyond ephemeral request logs.
+- Decision: enforce configurable daily AI spend guardrail (`AI_DAILY_BUDGET_USD`) that blocks new create-from-image calls once reached.
+- Why: prevents uncontrolled spend escalation while keeping behavior explicit and auditable.

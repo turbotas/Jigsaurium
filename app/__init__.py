@@ -15,6 +15,12 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("CANONICAL_HOST", "localhost")
     app.config.setdefault("TRUSTED_PROXY_CIDRS", [])
     app.config.setdefault("TRUSTED_PROXY_HOPS", None)
+    app.config.setdefault("AI_ENABLED", False)
+    app.config.setdefault("AI_API_KEY", "")
+    app.config.setdefault("AI_ENDPOINT_URL", "")
+    app.config.setdefault("AI_MODEL", "")
+    app.config.setdefault("AI_TIMEOUT_SECONDS", 60)
+    app.config.setdefault("AI_DAILY_BUDGET_USD", None)
 
     @app.before_request
     def set_request_id():

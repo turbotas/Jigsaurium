@@ -24,6 +24,32 @@
 - Jigsaw images are stored in the database in v1.
 - Each image record includes a tag (for example `completed puzzle`, `box front`, `box side`) and binary image content.
 - Image create/list endpoints are administrator-only in the initial rollout.
+- A jigsaw image may be unassigned (`jigsaw_id = null`) while it sits in the image library.
+- Image library bulk upload accepts one or more image files and/or zip archives containing image files.
+- Zip extraction only imports image entries; non-image entries are skipped and reported in the upload response.
+- Bulk uploads default all imported images to tag `untagged` unless a tag override is provided.
+- Image-library uploads may optionally associate imported images to a jigsaw at upload time.
+- Each image can be associated to at most one jigsaw.
+- Admin assignment action can attach an unassigned image to a jigsaw; reassigning an already-associated image to a different jigsaw is blocked.
+- Every image stores a SHA-256 content hash.
+- Duplicate uploads (same bytes, even with different filenames) are ignored using hash matching.
+- Admin create-from-image action can create a new jigsaw from an unassigned image and then bind the image to that created jigsaw.
+- Create-from-image uses AI metadata extraction and records per-call token/cost usage.
+- Create-from-image is blocked when configured daily AI spend budget has been reached.
+
+## Jigsaw Diary Rules
+
+- A diary entry records one completion of a jigsaw: `completed_at` timestamp, optional `difficulty` rating, optional free-text `notes`.
+- Multiple diary entries per jigsaw are allowed to support repeat completions.
+- `completed_at` defaults to the current UTC time when omitted.
+- `difficulty` is an integer from 1 (easy) to 5 (very hard); it may be omitted when unrated.
+- `notes` may be up to 4000 characters and must not contain control characters.
+- Diary entries are hard-deleted; deleting a jigsaw cascades to its diary entries.
+- Diary entry lists are visible to any authenticated user for non-retired jigsaws; create and delete are administrator-only.
+- `jigsaws.last_completed_at` is maintained from diary activity:
+  - Creating an entry moves it forward when the entry's `completed_at` is newer.
+  - Deleting an entry recomputes it to the latest remaining entry's `completed_at`, or clears it when no entries remain.
+  - Manual override via jigsaw update remains possible but may be overwritten by later diary activity.
 
 ## Jigsaw State Transitions
 

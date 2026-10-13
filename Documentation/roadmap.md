@@ -21,10 +21,22 @@
 - [x] Add audit events for administrative mutations.
 - [x] Extend jigsaw metadata fields and DB-backed image uploads.
 
-## Milestone 2: Borrower + Lending
+## Milestone 2: Inventory + Completion Diary (current focus)
+
+- [x] Streamline jigsaw quick-add (title + piece count; full metadata via edit).
+- [x] Add completion diary entries per jigsaw (completed_at, 1-5 difficulty, notes).
+- [x] Maintain `last_completed_at` from diary entries.
+- [x] Add image-library bulk upload (multi-file + zip extraction, optional jigsaw association).
+- [x] Add image-library assignment action (attach unassigned image to one existing jigsaw).
+- [x] Add create-from-image workflow (AI metadata extraction + jigsaw creation + image binding).
+- [ ] Add diary entry edit (PATCH) support.
+- [ ] Add pagination for `jigsaws`, `loans`, `jigsaw_images`, and `diary_entries` list views.
+- [ ] Add collection-level diary/stats views (for example recent completions, difficulty breakdown).
+
+## Milestone 2b: Borrower + Lending (deprioritized; existing code retained)
 
 - [~] Implement borrower-facing jigsaw browsing.
-- [~] Implement loan creation workflow (admin-first).
+- [x] Implement loan creation workflow (admin-first).
 - [ ] Implement loan return workflow.
 - [~] Add due-date handling (default 28-day checkout due date).
 - [ ] Add borrower history views.
@@ -39,12 +51,12 @@
 ## Team Lanes
 
 - Lane A: user/role management and authz.
-- Lane B: jigsaw CRUD and inventory states.
-- Lane C: loan lifecycle and borrower UI.
+- Lane B: jigsaw CRUD, inventory states, and completion diary.
+- Lane C: loan lifecycle and borrower UI (paused).
 - Shared: migrations, API standards, documentation, test coverage.
 
 ## Immediate Next Slice
 
-- Add `POST /api/v1/loans/{id}/return` with audit events and jigsaw status transition rules.
-- Add borrower-facing list endpoints/views for own active and historical loans.
+- Add `PATCH /api/v1/diary-entries/{id}` for editing notes/difficulty/completed_at.
 - Add pagination for `jigsaws`, `loans`, and `jigsaw_images` list views.
+- When lending resumes: add `POST /api/v1/loans/{id}/return` with audit events and jigsaw status transition rules, plus borrower-facing own-loan views.

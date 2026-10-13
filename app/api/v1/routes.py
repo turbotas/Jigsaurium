@@ -1,15 +1,23 @@
 import json
+import base64
+import hashlib
+import mimetypes
 import re
+import urllib.error
+import urllib.request
+import zipfile
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+from io import BytesIO
 from secrets import token_urlsafe
 from functools import wraps
 
 from flask import Blueprint, current_app, g, request, session
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import DataError
 
 from app.db import get_session
-from app.models import AuditEvent, Jigsaw, JigsawImage, Loan, Role, User, UserRole
+from app.models import AiUsageEvent, AuditEvent, Jigsaw, JigsawDiaryEntry, JigsawImage, Loan, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
 
@@ -31,6 +39,15 @@ JIGSAW_DESCRIPTION_MAX_LENGTH = 4000
 JIGSAW_IMAGE_TAG_MAX_LENGTH = 64
 JIGSAW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_JIGSAW_IMAGE_TAG = "untagged"
+ZIP_UPLOAD_MIME_TYPES = {"application/zip", "application/x-zip-compressed", "multipart/x-zip"}
+AI_IMAGE_CREATE_OPERATION = "image_to_jigsaw"
+AI_USAGE_STATUS_SUCCESS = "success"
+AI_USAGE_STATUS_ERROR = "error"
+AI_USAGE_STATUS_BLOCKED = "blocked"
+AI_BOX_IMAGE_TAG = "Box"
+DIARY_ENTRY_NOTES_MAX_LENGTH = 4000
+DIARY_ENTRY_DIFFICULTY_MIN = 1
+DIARY_ENTRY_DIFFICULTY_MAX = 5
 
 
 def _success_response(data, status_code=200):
@@ -91,8 +108,20 @@ def _serialize_jigsaw_image(image):
         "tag": image.tag,
         "filename": image.filename,
         "mime_type": image.mime_type,
-        "content_url": f"/api/v1/jigsaws/{image.jigsaw_id}/images/{image.id}/content",
+        "content_url": f"/api/v1/images/{image.id}/content",
         "created_at": image.created_at.isoformat() if image.created_at else None,
+    }
+
+
+def _serialize_diary_entry(entry):
+    return {
+        "id": entry.id,
+        "jigsaw_id": entry.jigsaw_id,
+        "completed_at": entry.completed_at.isoformat() if entry.completed_at else None,
+        "difficulty": entry.difficulty,
+        "notes": entry.notes,
+        "created_at": entry.created_at.isoformat() if entry.created_at else None,
+        "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
     }
 
 
@@ -553,6 +582,543 @@ def _parse_optional_positive_integer(value, field_name):
         )
 
     return value, None
+
+
+def _parse_optional_difficulty(value, field_name="difficulty"):
+    if value is None:
+        return None, None
+
+    if isinstance(value, bool):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be an integer between 1 and 5 or empty"}],
+        )
+
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None, None
+        try:
+            parsed = int(normalized)
+        except ValueError:
+            return None, _error_response(
+                "validation_error",
+                "Invalid request payload.",
+                422,
+                [{"field": field_name, "issue": "must be an integer between 1 and 5 or empty"}],
+            )
+    elif isinstance(value, int):
+        parsed = value
+    else:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be an integer between 1 and 5 or empty"}],
+        )
+
+    if parsed < DIARY_ENTRY_DIFFICULTY_MIN or parsed > DIARY_ENTRY_DIFFICULTY_MAX:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be between 1 and 5 when provided"}],
+        )
+
+    return parsed, None
+
+
+def _is_zip_upload(upload):
+    mime_type = (upload.mimetype or "").strip().lower()
+    filename = (upload.filename or "").strip().lower()
+    return mime_type in ZIP_UPLOAD_MIME_TYPES or filename.endswith(".zip")
+
+
+def _resolve_optional_jigsaw_reference(db_session, raw_value):
+    jigsaw_id, error = _parse_optional_positive_integer(raw_value, "jigsaw_id")
+    if error is not None:
+        return None, None, error
+
+    if jigsaw_id is None:
+        return None, None, None
+
+    jigsaw = db_session.get(Jigsaw, jigsaw_id)
+    if jigsaw is None:
+        return None, None, _error_response("not_found", "Jigsaw was not found.", 404)
+
+    return jigsaw_id, jigsaw, None
+
+
+def _create_jigsaw_image_record(db_session, *, jigsaw_id, tag, filename, mime_type, image_data, image_sha256):
+    image = JigsawImage(
+        jigsaw_id=jigsaw_id,
+        tag=tag,
+        filename=filename,
+        mime_type=mime_type,
+        image_data=image_data,
+        image_sha256=image_sha256,
+    )
+    db_session.add(image)
+    db_session.flush()
+    return image
+
+
+def _extract_zip_image_items(upload):
+    issues = []
+    images = []
+
+    zip_bytes = upload.read()
+    if not zip_bytes:
+        issues.append({"filename": upload.filename or "archive.zip", "issue": "zip file is empty"})
+        return images, issues
+
+    try:
+        with zipfile.ZipFile(BytesIO(zip_bytes)) as archive:
+            for entry in archive.infolist():
+                if entry.is_dir():
+                    continue
+
+                filename = (entry.filename or "").rsplit("/", 1)[-1].strip()
+                if not filename:
+                    issues.append({"filename": entry.filename or "(unknown)", "issue": "filename is missing"})
+                    continue
+
+                mime_type, _encoding = mimetypes.guess_type(filename)
+                mime_type = (mime_type or "").lower()
+                if not mime_type.startswith("image/"):
+                    issues.append({"filename": filename, "issue": "not an image file"})
+                    continue
+
+                if entry.file_size <= 0:
+                    issues.append({"filename": filename, "issue": "file must not be empty"})
+                    continue
+
+                if entry.file_size > JIGSAW_IMAGE_MAX_BYTES:
+                    issues.append(
+                        {
+                            "filename": filename,
+                            "issue": f"must be {JIGSAW_IMAGE_MAX_BYTES} bytes or fewer",
+                        }
+                    )
+                    continue
+
+                image_data = archive.read(entry)
+                if len(image_data) > JIGSAW_IMAGE_MAX_BYTES:
+                    issues.append(
+                        {
+                            "filename": filename,
+                            "issue": f"must be {JIGSAW_IMAGE_MAX_BYTES} bytes or fewer",
+                        }
+                    )
+                    continue
+
+                normalized_filename, error = _validate_optional_text_field(
+                    filename, field_name="filename", max_length=255
+                )
+                if error is not None:
+                    issues.append({"filename": filename, "issue": "filename is invalid"})
+                    continue
+
+                images.append(
+                    {
+                        "filename": normalized_filename,
+                        "mime_type": mime_type,
+                        "image_data": image_data,
+                        "image_sha256": _compute_image_sha256(image_data),
+                        "source": upload.filename or "archive.zip",
+                    }
+                )
+    except (zipfile.BadZipFile, OSError):
+        issues.append({"filename": upload.filename or "archive.zip", "issue": "zip file is invalid"})
+
+    return images, issues
+
+
+def _extract_bulk_image_items(uploads):
+    image_items = []
+    issues = []
+
+    for upload in uploads:
+        if _is_zip_upload(upload):
+            extracted_images, extracted_issues = _extract_zip_image_items(upload)
+            image_items.extend(extracted_images)
+            issues.extend(extracted_issues)
+            continue
+
+        mime_type = (upload.mimetype or "").strip().lower()
+        if not mime_type.startswith("image/"):
+            issues.append({"filename": upload.filename or "(unnamed)", "issue": "must be an image or zip file"})
+            continue
+
+        image_data = upload.read()
+        if not image_data:
+            issues.append({"filename": upload.filename or "(unnamed)", "issue": "file must not be empty"})
+            continue
+
+        if len(image_data) > JIGSAW_IMAGE_MAX_BYTES:
+            issues.append(
+                {
+                    "filename": upload.filename or "(unnamed)",
+                    "issue": f"must be {JIGSAW_IMAGE_MAX_BYTES} bytes or fewer",
+                }
+            )
+            continue
+
+        filename, error = _validate_optional_text_field(upload.filename, field_name="filename", max_length=255)
+        if error is not None:
+            issues.append({"filename": upload.filename or "(unnamed)", "issue": "filename is invalid"})
+            continue
+
+        image_items.append(
+            {
+                "filename": filename,
+                "mime_type": mime_type,
+                "image_data": image_data,
+                "image_sha256": _compute_image_sha256(image_data),
+                "source": upload.filename or "(unnamed)",
+            }
+        )
+
+    return image_items, issues
+
+
+def _build_image_content_response(image):
+    response = current_app.response_class(image.image_data, mimetype=image.mime_type)
+    if image.filename:
+        response.headers["Content-Disposition"] = f'inline; filename="{image.filename}"'
+    return response
+
+
+def _compute_image_sha256(image_data):
+    return hashlib.sha256(image_data).hexdigest()
+
+
+def _to_decimal(value):
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _extract_json_object_from_text(raw_text):
+    if not isinstance(raw_text, str):
+        return None
+
+    stripped = raw_text.strip()
+    if not stripped:
+        return None
+
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+
+    candidate = stripped[start : end + 1]
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def _build_ai_image_prompt():
+    return (
+        "You are extracting metadata from a jigsaw puzzle box image. "
+        "Return strictly valid JSON with keys: "
+        "title, manufacturer, artist, piece_count, tags, dimensions_cm, description. "
+        "Use null when unknown. "
+        "piece_count must be an integer when present. "
+        "tags must be either a comma-separated string or an array of short strings. "
+        "Do not include markdown or extra commentary."
+    )
+
+
+def _build_ai_usage_costs(result_payload):
+    usage = result_payload.get("usage") if isinstance(result_payload, dict) else {}
+    usage = usage if isinstance(usage, dict) else {}
+
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    total_tokens = usage.get("total_tokens")
+
+    prompt_tokens = int(prompt_tokens) if isinstance(prompt_tokens, int) else None
+    completion_tokens = int(completion_tokens) if isinstance(completion_tokens, int) else None
+    total_tokens = int(total_tokens) if isinstance(total_tokens, int) else None
+
+    provider_cost = None
+    for candidate in (
+        usage.get("total_cost_usd"),
+        usage.get("cost_usd"),
+        usage.get("cost"),
+        result_payload.get("cost_usd") if isinstance(result_payload, dict) else None,
+        result_payload.get("cost") if isinstance(result_payload, dict) else None,
+    ):
+        provider_cost = _to_decimal(candidate)
+        if provider_cost is not None:
+            break
+
+    computed_cost = None
+    final_cost = provider_cost
+    if final_cost is None:
+        final_cost = Decimal("0")
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "provider_cost_usd": provider_cost,
+        "computed_cost_usd": computed_cost,
+        "final_cost_usd": final_cost,
+    }
+
+
+def _get_daily_ai_spend(db_session):
+    now = datetime.now(timezone.utc)
+    day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=1)
+
+    spend = db_session.execute(
+        select(func.coalesce(func.sum(AiUsageEvent.final_cost_usd), 0)).where(
+            AiUsageEvent.operation == AI_IMAGE_CREATE_OPERATION,
+            AiUsageEvent.status == AI_USAGE_STATUS_SUCCESS,
+            AiUsageEvent.created_at >= day_start,
+            AiUsageEvent.created_at < day_end,
+        )
+    ).scalar_one()
+    return _to_decimal(spend) or Decimal("0")
+
+
+def _record_ai_usage_event(
+    *,
+    db_session,
+    image_id,
+    status,
+    model,
+    endpoint_url,
+    prompt_tokens=None,
+    completion_tokens=None,
+    total_tokens=None,
+    provider_cost_usd=None,
+    computed_cost_usd=None,
+    final_cost_usd=None,
+    error_code=None,
+    error_message=None,
+    payload=None,
+):
+    payload_json = json.dumps(payload, sort_keys=True) if payload is not None else None
+    usage_event = AiUsageEvent(
+        actor_user_id=getattr(g.current_user, "id", None),
+        image_id=image_id,
+        operation=AI_IMAGE_CREATE_OPERATION,
+        status=status,
+        model=model,
+        endpoint_url=endpoint_url,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        provider_cost_usd=provider_cost_usd,
+        computed_cost_usd=computed_cost_usd,
+        final_cost_usd=final_cost_usd if final_cost_usd is not None else Decimal("0"),
+        error_code=error_code,
+        error_message=error_message,
+        payload_json=payload_json,
+        request_id=g.request_id,
+    )
+    db_session.add(usage_event)
+    db_session.flush()
+    return usage_event
+
+
+def _normalize_ai_tags(raw_tags):
+    if raw_tags is None:
+        return None, None
+
+    if isinstance(raw_tags, str):
+        return _validate_optional_text_field(raw_tags, field_name="tags", max_length=JIGSAW_TAGS_MAX_LENGTH)
+
+    if isinstance(raw_tags, list):
+        normalized_items = []
+        for item in raw_tags:
+            tag, error = _validate_optional_text_field(item, field_name="tags", max_length=64)
+            if error is not None:
+                return None, _error_response(
+                    "validation_error",
+                    "Invalid request payload.",
+                    422,
+                    [{"field": "tags", "issue": "must be a string, null, or list of short strings"}],
+                )
+            if tag:
+                normalized_items.append(tag)
+
+        joined = ", ".join(normalized_items)
+        return _validate_optional_text_field(joined, field_name="tags", max_length=JIGSAW_TAGS_MAX_LENGTH)
+
+    return None, _error_response(
+        "validation_error",
+        "Invalid request payload.",
+        422,
+        [{"field": "tags", "issue": "must be a string, null, or list of strings"}],
+    )
+
+
+def _normalize_ai_jigsaw_payload(raw_payload):
+    if not isinstance(raw_payload, dict):
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "ai_response", "issue": "must be a JSON object"}],
+        )
+
+    title, error = _validate_optional_text_field(raw_payload.get("title"), field_name="title", max_length=JIGSAW_TITLE_MAX_LENGTH)
+    if error is not None:
+        return None, error
+
+    manufacturer_source = raw_payload.get("manufacturer")
+    if manufacturer_source is None:
+        manufacturer_source = raw_payload.get("publisher")
+    manufacturer, error = _validate_optional_text_field(
+        manufacturer_source,
+        field_name="manufacturer",
+        max_length=JIGSAW_MANUFACTURER_MAX_LENGTH,
+    )
+    if error is not None:
+        return None, error
+
+    artist, error = _validate_optional_text_field(raw_payload.get("artist"), field_name="artist", max_length=JIGSAW_ARTIST_MAX_LENGTH)
+    if error is not None:
+        return None, error
+
+    dimensions_cm, error = _validate_optional_text_field(
+        raw_payload.get("dimensions_cm"),
+        field_name="dimensions_cm",
+        max_length=JIGSAW_DIMENSIONS_MAX_LENGTH,
+    )
+    if error is not None:
+        return None, error
+
+    description, error = _validate_optional_text_field(
+        raw_payload.get("description"),
+        field_name="description",
+        max_length=JIGSAW_DESCRIPTION_MAX_LENGTH,
+    )
+    if error is not None:
+        return None, error
+
+    piece_count, error = _parse_optional_positive_integer(raw_payload.get("piece_count"), "piece_count")
+    if error is not None:
+        return None, error
+
+    tags, error = _normalize_ai_tags(raw_payload.get("tags"))
+    if error is not None:
+        return None, error
+
+    return {
+        "title": title,
+        "manufacturer": manufacturer,
+        "artist": artist,
+        "dimensions_cm": dimensions_cm,
+        "description": description,
+        "piece_count": piece_count,
+        "tags": tags,
+    }, None
+
+
+def _infer_jigsaw_metadata_from_image(image):
+    if not current_app.config.get("AI_ENABLED", False):
+        raise RuntimeError("AI image inference is disabled")
+
+    api_key = (current_app.config.get("AI_API_KEY") or "").strip()
+    endpoint_url = (current_app.config.get("AI_ENDPOINT_URL") or "").strip()
+    model = (current_app.config.get("AI_MODEL") or "").strip()
+    timeout_seconds = int(current_app.config.get("AI_TIMEOUT_SECONDS") or 60)
+
+    if not api_key or not endpoint_url or not model:
+        raise RuntimeError("AI image inference configuration is incomplete")
+
+    image_base64 = base64.b64encode(image.image_data).decode("ascii")
+    request_payload = {
+        "model": model,
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": _build_ai_image_prompt()},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Extract jigsaw metadata from this image."},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{image.mime_type};base64,{image_base64}",
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+
+    body = json.dumps(request_payload).encode("utf-8")
+    http_request = urllib.request.Request(
+        endpoint_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(http_request, timeout=timeout_seconds) as response:
+            response_raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"AI provider returned HTTP {error.code}") from error
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise RuntimeError("AI provider request failed") from error
+
+    try:
+        result_payload = json.loads(response_raw)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("AI provider returned invalid JSON") from error
+
+    choice = None
+    choices = result_payload.get("choices") if isinstance(result_payload, dict) else None
+    if isinstance(choices, list) and choices:
+        choice = choices[0]
+    message = choice.get("message") if isinstance(choice, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+
+    parsed_payload = _extract_json_object_from_text(content)
+    if parsed_payload is None:
+        raise RuntimeError("AI provider did not return a valid metadata JSON object")
+
+    cost_payload = _build_ai_usage_costs(result_payload)
+    return {
+        "metadata": parsed_payload,
+        "prompt_tokens": cost_payload["prompt_tokens"],
+        "completion_tokens": cost_payload["completion_tokens"],
+        "total_tokens": cost_payload["total_tokens"],
+        "provider_cost_usd": cost_payload["provider_cost_usd"],
+        "computed_cost_usd": cost_payload["computed_cost_usd"],
+        "final_cost_usd": cost_payload["final_cost_usd"],
+        "model": model,
+        "endpoint_url": endpoint_url,
+    }
 
 
 @api_v1_bp.get("/health")
@@ -1363,17 +1929,34 @@ def create_jigsaw_image(jigsaw_id):
     if error is not None:
         return error
 
-    image = JigsawImage(
-        jigsaw_id=jigsaw.id,
-        tag=tag,
-        filename=filename,
-        mime_type=mime_type,
-        image_data=image_data,
-    )
-    db_session.add(image)
+    image_sha256 = _compute_image_sha256(image_data)
+    duplicate_image = db_session.execute(
+        select(JigsawImage).where(JigsawImage.image_sha256 == image_sha256).order_by(JigsawImage.id.asc())
+    ).scalar_one_or_none()
+    if duplicate_image is not None:
+        _record_audit_event(
+            action="jigsaw.image_duplicate_ignored",
+            entity_type="jigsaw_image",
+            entity_id=duplicate_image.id,
+            payload={
+                "jigsaw_id": jigsaw.id,
+                "source_filename": filename,
+                "duplicate_hash": image_sha256,
+            },
+        )
+        db_session.commit()
+        return _success_response(_serialize_jigsaw_image(duplicate_image))
 
     try:
-        db_session.flush()
+        image = _create_jigsaw_image_record(
+            db_session,
+            jigsaw_id=jigsaw.id,
+            tag=tag,
+            filename=filename,
+            mime_type=mime_type,
+            image_data=image_data,
+            image_sha256=image_sha256,
+        )
 
         _record_audit_event(
             action="jigsaw.image_created",
@@ -1399,6 +1982,350 @@ def create_jigsaw_image(jigsaw_id):
     return _success_response(_serialize_jigsaw_image(image), status_code=201)
 
 
+@api_v1_bp.get("/image-library/images")
+@require_role("administrator")
+def list_image_library_images():
+    raw_limit = request.args.get("limit", "200")
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "limit", "issue": "must be an integer"}],
+        )
+
+    if limit < 1 or limit > 500:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "limit", "issue": "must be between 1 and 500"}],
+        )
+
+    db_session = get_session()
+    images = db_session.execute(select(JigsawImage).order_by(JigsawImage.id.desc()).limit(limit)).scalars().all()
+    payload = [_serialize_jigsaw_image(image) for image in images]
+    return _success_response(payload)
+
+
+@api_v1_bp.post("/image-library/uploads")
+@require_role("administrator")
+def upload_image_library_items():
+    db_session = get_session()
+
+    jigsaw_id, _jigsaw, error = _resolve_optional_jigsaw_reference(db_session, request.form.get("jigsaw_id"))
+    if error is not None:
+        return error
+
+    tag, error = _validate_optional_text_field(
+        request.form.get("tag"), field_name="tag", max_length=JIGSAW_IMAGE_TAG_MAX_LENGTH
+    )
+    if error is not None:
+        return error
+    if tag is None:
+        tag = DEFAULT_JIGSAW_IMAGE_TAG
+
+    uploads = request.files.getlist("files")
+    if not uploads:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "files", "issue": "at least one file is required"}],
+        )
+
+    image_items, issues = _extract_bulk_image_items(uploads)
+    if not image_items:
+        default_issue = "must include at least one image file or zip containing image files"
+        issue_message = issues[0]["issue"] if issues else default_issue
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "files", "issue": issue_message}],
+        )
+
+    created_images = []
+    created_hashes = set()
+
+    image_hashes = sorted({item["image_sha256"] for item in image_items if item.get("image_sha256")})
+    existing_images_by_hash = {}
+    if image_hashes:
+        existing_images = db_session.execute(
+            select(JigsawImage).where(JigsawImage.image_sha256.in_(image_hashes)).order_by(JigsawImage.id.asc())
+        ).scalars().all()
+        for existing in existing_images:
+            if existing.image_sha256 and existing.image_sha256 not in existing_images_by_hash:
+                existing_images_by_hash[existing.image_sha256] = existing
+
+    try:
+        for item in image_items:
+            image_sha256 = item.get("image_sha256")
+            if image_sha256 and image_sha256 in existing_images_by_hash:
+                issues.append(
+                    {
+                        "filename": item["filename"] or "(unnamed)",
+                        "issue": "duplicate image content already exists",
+                    }
+                )
+                continue
+
+            if image_sha256 and image_sha256 in created_hashes:
+                issues.append(
+                    {
+                        "filename": item["filename"] or "(unnamed)",
+                        "issue": "duplicate image content in current upload batch",
+                    }
+                )
+                continue
+
+            image = _create_jigsaw_image_record(
+                db_session,
+                jigsaw_id=jigsaw_id,
+                tag=tag,
+                filename=item["filename"],
+                mime_type=item["mime_type"],
+                image_data=item["image_data"],
+                image_sha256=image_sha256,
+            )
+            created_images.append((image, item["source"]))
+            if image_sha256:
+                created_hashes.add(image_sha256)
+
+        _record_audit_event(
+            action="jigsaw.image_bulk_uploaded",
+            entity_type="jigsaw_image_batch",
+            entity_id="bulk",
+            payload={
+                "jigsaw_id": jigsaw_id,
+                "tag": tag,
+                "upload_file_count": len(uploads),
+                "created_count": len(created_images),
+                "skipped_count": len(issues),
+            },
+        )
+        db_session.commit()
+    except DataError:
+        db_session.rollback()
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "files", "issue": "contains images that are too large to store"}],
+        )
+
+    created_payload = []
+    for image, source in created_images:
+        serialized = _serialize_jigsaw_image(image)
+        serialized["source"] = source
+        created_payload.append(serialized)
+
+    return _success_response(
+        {
+            "created_count": len(created_payload),
+            "skipped_count": len(issues),
+            "created": created_payload,
+            "skipped": issues,
+        },
+        status_code=201,
+    )
+
+
+@api_v1_bp.patch("/image-library/images/<int:image_id>/assign")
+@require_role("administrator")
+def assign_image_library_item(image_id):
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    jigsaw_id, error = _parse_positive_integer(payload.get("jigsaw_id"), "jigsaw_id")
+    if error is not None:
+        return error
+
+    db_session = get_session()
+    image = db_session.get(JigsawImage, image_id)
+    if image is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    jigsaw = db_session.get(Jigsaw, jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+
+    if image.jigsaw_id is not None and image.jigsaw_id != jigsaw.id:
+        return _error_response("conflict", "Image is already assigned to a different jigsaw.", 409)
+
+    if image.jigsaw_id == jigsaw.id:
+        return _success_response(_serialize_jigsaw_image(image))
+
+    image.jigsaw_id = jigsaw.id
+
+    _record_audit_event(
+        action="jigsaw.image_assigned",
+        entity_type="jigsaw_image",
+        entity_id=image.id,
+        payload={
+            "jigsaw_id": jigsaw.id,
+            "filename": image.filename,
+        },
+    )
+    db_session.commit()
+
+    return _success_response(_serialize_jigsaw_image(image))
+
+
+@api_v1_bp.post("/image-library/images/<int:image_id>/create-jigsaw")
+@require_role("administrator")
+def create_jigsaw_from_image(image_id):
+    db_session = get_session()
+    image = db_session.get(JigsawImage, image_id)
+    if image is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    if image.jigsaw_id is not None:
+        return _error_response("conflict", "Image is already assigned to a jigsaw.", 409)
+
+    if not current_app.config.get("AI_ENABLED", False):
+        return _error_response("conflict", "Create-from-image AI is disabled in server configuration.", 409)
+
+    if not (current_app.config.get("AI_API_KEY") and current_app.config.get("AI_ENDPOINT_URL") and current_app.config.get("AI_MODEL")):
+        return _error_response("conflict", "Create-from-image AI is not fully configured.", 409)
+
+    budget_usd = _to_decimal(current_app.config.get("AI_DAILY_BUDGET_USD"))
+    current_spend = _get_daily_ai_spend(db_session)
+    if budget_usd is not None and budget_usd >= Decimal("0") and current_spend >= budget_usd:
+        _record_ai_usage_event(
+            db_session=db_session,
+            image_id=image.id,
+            status=AI_USAGE_STATUS_BLOCKED,
+            model=(current_app.config.get("AI_MODEL") or "").strip() or None,
+            endpoint_url=(current_app.config.get("AI_ENDPOINT_URL") or "").strip() or None,
+            error_code="daily_budget_exceeded",
+            error_message="Daily AI budget has been reached.",
+            final_cost_usd=Decimal("0"),
+            payload={"daily_spend_usd": str(current_spend), "daily_budget_usd": str(budget_usd)},
+        )
+        db_session.commit()
+        return _error_response("conflict", "Daily AI budget has been reached for create-from-image.", 409)
+
+    try:
+        inference = _infer_jigsaw_metadata_from_image(image)
+    except RuntimeError as error:
+        _record_ai_usage_event(
+            db_session=db_session,
+            image_id=image.id,
+            status=AI_USAGE_STATUS_ERROR,
+            model=(current_app.config.get("AI_MODEL") or "").strip() or None,
+            endpoint_url=(current_app.config.get("AI_ENDPOINT_URL") or "").strip() or None,
+            error_code="provider_error",
+            error_message=str(error),
+            final_cost_usd=Decimal("0"),
+        )
+        db_session.commit()
+        return _error_response("bad_gateway", "AI metadata extraction failed.", 502)
+
+    normalized_payload, error = _normalize_ai_jigsaw_payload(inference.get("metadata"))
+    if error is not None:
+        _record_ai_usage_event(
+            db_session=db_session,
+            image_id=image.id,
+            status=AI_USAGE_STATUS_ERROR,
+            model=inference.get("model"),
+            endpoint_url=inference.get("endpoint_url"),
+            prompt_tokens=inference.get("prompt_tokens"),
+            completion_tokens=inference.get("completion_tokens"),
+            total_tokens=inference.get("total_tokens"),
+            provider_cost_usd=inference.get("provider_cost_usd"),
+            computed_cost_usd=inference.get("computed_cost_usd"),
+            final_cost_usd=inference.get("final_cost_usd") or Decimal("0"),
+            error_code="invalid_ai_payload",
+            error_message="AI metadata payload could not be normalized.",
+            payload={"raw_metadata": inference.get("metadata")},
+        )
+        db_session.commit()
+        return _error_response("bad_gateway", "AI metadata could not be normalized.", 502)
+
+    jigsaw = Jigsaw(
+        title=normalized_payload["title"],
+        manufacturer=normalized_payload["manufacturer"],
+        artist=normalized_payload["artist"],
+        dimensions_cm=normalized_payload["dimensions_cm"],
+        description=normalized_payload["description"],
+        piece_count=normalized_payload["piece_count"],
+        condition=None,
+        status=JigsawStatus.AVAILABLE,
+        tags=normalized_payload["tags"],
+        last_completed_at=None,
+    )
+    db_session.add(jigsaw)
+    db_session.flush()
+
+    image.jigsaw_id = jigsaw.id
+    image.tag = AI_BOX_IMAGE_TAG
+
+    usage_event = _record_ai_usage_event(
+        db_session=db_session,
+        image_id=image.id,
+        status=AI_USAGE_STATUS_SUCCESS,
+        model=inference.get("model"),
+        endpoint_url=inference.get("endpoint_url"),
+        prompt_tokens=inference.get("prompt_tokens"),
+        completion_tokens=inference.get("completion_tokens"),
+        total_tokens=inference.get("total_tokens"),
+        provider_cost_usd=inference.get("provider_cost_usd"),
+        computed_cost_usd=inference.get("computed_cost_usd"),
+        final_cost_usd=inference.get("final_cost_usd") or Decimal("0"),
+        payload={"metadata": normalized_payload, "created_jigsaw_id": jigsaw.id},
+    )
+
+    _record_audit_event(
+        action="jigsaw.created_from_image",
+        entity_type="jigsaw",
+        entity_id=jigsaw.id,
+        payload={
+            "image_id": image.id,
+            "ai_usage_event_id": usage_event.id,
+            "cost_usd": str(inference.get("final_cost_usd") or Decimal("0")),
+        },
+    )
+    db_session.commit()
+
+    return _success_response(
+        {
+            "jigsaw": _serialize_jigsaw(jigsaw),
+            "image": _serialize_jigsaw_image(image),
+            "ai": {
+                "usage_event_id": usage_event.id,
+                "prompt_tokens": inference.get("prompt_tokens"),
+                "completion_tokens": inference.get("completion_tokens"),
+                "total_tokens": inference.get("total_tokens"),
+                "final_cost_usd": str(inference.get("final_cost_usd") or Decimal("0")),
+            },
+        },
+        status_code=201,
+    )
+
+
+@api_v1_bp.get("/images/<int:image_id>/content")
+@require_auth
+def get_image_content(image_id):
+    db_session = get_session()
+    image = db_session.get(JigsawImage, image_id)
+    if image is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    if image.jigsaw_id is not None:
+        jigsaw = db_session.get(Jigsaw, image.jigsaw_id)
+        if jigsaw is None:
+            return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+        if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
+            return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    return _build_image_content_response(image)
+
+
 @api_v1_bp.get("/jigsaws/<int:jigsaw_id>/images/<int:image_id>/content")
 @require_auth
 def get_jigsaw_image_content(jigsaw_id, image_id):
@@ -1414,10 +2341,116 @@ def get_jigsaw_image_content(jigsaw_id, image_id):
     if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
         return _error_response("not_found", "Jigsaw image was not found.", 404)
 
-    response = current_app.response_class(image.image_data, mimetype=image.mime_type)
-    if image.filename:
-        response.headers["Content-Disposition"] = f'inline; filename="{image.filename}"'
-    return response
+    return _build_image_content_response(image)
+
+
+@api_v1_bp.get("/jigsaws/<int:jigsaw_id>/diary-entries")
+@require_auth
+def list_diary_entries(jigsaw_id):
+    db_session = get_session()
+    jigsaw = db_session.get(Jigsaw, jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+
+    if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+
+    entries = db_session.execute(
+        select(JigsawDiaryEntry)
+        .where(JigsawDiaryEntry.jigsaw_id == jigsaw.id)
+        .order_by(JigsawDiaryEntry.completed_at.desc(), JigsawDiaryEntry.id.desc())
+    ).scalars().all()
+    payload = [_serialize_diary_entry(entry) for entry in entries]
+    return _success_response(payload)
+
+
+@api_v1_bp.post("/jigsaws/<int:jigsaw_id>/diary-entries")
+@require_role("administrator")
+def create_diary_entry(jigsaw_id):
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    db_session = get_session()
+    jigsaw = db_session.get(Jigsaw, jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+
+    completed_at, error = _parse_optional_iso_datetime(payload.get("completed_at"), "completed_at")
+    if error is not None:
+        return error
+    if completed_at is None:
+        completed_at = datetime.now(timezone.utc)
+
+    difficulty, error = _parse_optional_difficulty(payload.get("difficulty"))
+    if error is not None:
+        return error
+
+    notes, error = _validate_optional_text_field(
+        payload.get("notes"), field_name="notes", max_length=DIARY_ENTRY_NOTES_MAX_LENGTH
+    )
+    if error is not None:
+        return error
+
+    entry = JigsawDiaryEntry(
+        jigsaw_id=jigsaw.id,
+        completed_at=completed_at,
+        difficulty=difficulty,
+        notes=notes,
+    )
+    db_session.add(entry)
+    db_session.flush()
+
+    existing_last_completed_at = jigsaw.last_completed_at
+    if existing_last_completed_at is not None and existing_last_completed_at.tzinfo is None:
+        existing_last_completed_at = existing_last_completed_at.replace(tzinfo=timezone.utc)
+    if existing_last_completed_at is None or completed_at > existing_last_completed_at:
+        jigsaw.last_completed_at = completed_at
+
+    _record_audit_event(
+        action="jigsaw.diary_entry_created",
+        entity_type="jigsaw_diary_entry",
+        entity_id=entry.id,
+        payload={
+            "jigsaw_id": jigsaw.id,
+            "completed_at": entry.completed_at.isoformat(),
+            "difficulty": entry.difficulty,
+        },
+    )
+    db_session.commit()
+
+    return _success_response(_serialize_diary_entry(entry), status_code=201)
+
+
+@api_v1_bp.delete("/diary-entries/<int:entry_id>")
+@require_role("administrator")
+def delete_diary_entry(entry_id):
+    db_session = get_session()
+    entry = db_session.get(JigsawDiaryEntry, entry_id)
+    if entry is None:
+        return _error_response("not_found", "Diary entry was not found.", 404)
+
+    jigsaw = db_session.get(Jigsaw, entry.jigsaw_id)
+    serialized = _serialize_diary_entry(entry)
+
+    db_session.delete(entry)
+    db_session.flush()
+
+    if jigsaw is not None:
+        latest_completed_at = db_session.execute(
+            select(func.max(JigsawDiaryEntry.completed_at)).where(JigsawDiaryEntry.jigsaw_id == jigsaw.id)
+        ).scalar_one()
+        jigsaw.last_completed_at = latest_completed_at
+
+    _record_audit_event(
+        action="jigsaw.diary_entry_deleted",
+        entity_type="jigsaw_diary_entry",
+        entity_id=entry_id,
+        payload={"jigsaw_id": serialized["jigsaw_id"]},
+    )
+    db_session.commit()
+
+    return _success_response(serialized)
 
 
 @api_v1_bp.delete("/jigsaws/<int:jigsaw_id>")

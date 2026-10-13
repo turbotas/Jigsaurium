@@ -230,60 +230,7 @@
           </div>
         </div>
       </div>
-      <div class="govuk-grid-row">
-        <div class="govuk-grid-column-one-half">
-          <div class="govuk-form-group">
-            <label class="govuk-label" for="jigsaw-manufacturer">Manufacturer</label>
-            <input id="jigsaw-manufacturer" name="manufacturer" class="govuk-input" type="text" maxlength="255" placeholder="Gibsons, Ravensburger">
-          </div>
-        </div>
-        <div class="govuk-grid-column-one-half">
-          <div class="govuk-form-group">
-            <label class="govuk-label" for="jigsaw-artist">Artist</label>
-            <input id="jigsaw-artist" name="artist" class="govuk-input" type="text" maxlength="255">
-          </div>
-        </div>
-      </div>
-      <div class="govuk-grid-row">
-        <div class="govuk-grid-column-one-half">
-          <div class="govuk-form-group">
-            <label class="govuk-label" for="jigsaw-dimensions-cm">Dimensions (cm)</label>
-            <input id="jigsaw-dimensions-cm" name="dimensions_cm" class="govuk-input" type="text" maxlength="64" placeholder="68 x 49 cm">
-          </div>
-        </div>
-        <div class="govuk-grid-column-one-half">
-          <div class="govuk-form-group">
-            <label class="govuk-label" for="jigsaw-last-completed-at">Last completed</label>
-            <input id="jigsaw-last-completed-at" name="last_completed_at" class="govuk-input" type="datetime-local">
-          </div>
-        </div>
-      </div>
-      <div class="govuk-grid-row">
-        <div class="govuk-grid-column-one-half">
-          <div class="govuk-form-group">
-            <label class="govuk-label" for="jigsaw-condition">Condition</label>
-            <input id="jigsaw-condition" name="condition" class="govuk-input" type="text">
-          </div>
-        </div>
-        <div class="govuk-grid-column-one-half">
-          <div class="govuk-form-group">
-            <label class="govuk-label" for="jigsaw-status">Status</label>
-            <select id="jigsaw-status" name="status" class="govuk-select">
-              <option value="available">available</option>
-              <option value="maintenance">maintenance</option>
-              <option value="retired">retired</option>
-            </select>
-          </div>
-        </div>
-      </div>
-      <div class="govuk-form-group">
-        <label class="govuk-label" for="jigsaw-tags">Tags</label>
-        <input id="jigsaw-tags" name="tags" class="govuk-input" type="text" placeholder="landscape, animals">
-      </div>
-      <div class="govuk-form-group">
-        <label class="govuk-label" for="jigsaw-description">Description</label>
-        <textarea id="jigsaw-description" name="description" class="govuk-textarea" rows="4" maxlength="4000"></textarea>
-      </div>
+      <p class="govuk-hint">Quick add only needs a title and piece count. Edit the record afterwards to add manufacturer, artist, dimensions, condition, status, tags, and description.</p>
       <button type="submit" class="govuk-button" data-module="govuk-button">Create jigsaw</button>
     </form>
 
@@ -426,6 +373,115 @@
             </tr>
           </thead>
           <tbody class="govuk-table__body" id="jigsaw-images-table-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="govuk-!-margin-top-6" aria-labelledby="image-library-heading">
+      <h3 id="image-library-heading" class="govuk-heading-m">Image library bulk upload</h3>
+      <p class="govuk-body">Upload one or more image files, or a zip containing image files. Images are stored as <code>untagged</code> in the library and can optionally be linked to a jigsaw now.</p>
+      <form id="image-library-upload-form" class="govuk-!-margin-bottom-4">
+        <div class="govuk-grid-row">
+          <div class="govuk-grid-column-one-half">
+            <div class="govuk-form-group">
+              <label class="govuk-label" for="image-library-jigsaw-id">Optional jigsaw association</label>
+              <select id="image-library-jigsaw-id" name="jigsaw_id" class="govuk-select">
+                <option value="">Unassigned (image library only)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="image-library-dropzone" class="app-dropzone" role="button" tabindex="0" aria-describedby="image-library-dropzone-hint">
+          <p class="govuk-body govuk-!-margin-bottom-2"><strong>Drag and drop files here</strong></p>
+          <p id="image-library-dropzone-hint" class="govuk-hint govuk-!-margin-bottom-2">Accepted: image files and .zip archives containing images.</p>
+          <button id="image-library-browse-button" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Choose files</button>
+          <input id="image-library-files" name="files" class="govuk-file-upload" type="file" accept="image/*,.zip,application/zip,application/x-zip-compressed" multiple hidden>
+        </div>
+
+        <div class="govuk-!-margin-top-3">
+          <h4 class="govuk-heading-s govuk-!-margin-bottom-1">Selected files</h4>
+          <ul id="image-library-files-list" class="govuk-list govuk-list--bullet app-file-list">
+            <li>No files selected.</li>
+          </ul>
+        </div>
+
+        <button type="submit" class="govuk-button" data-module="govuk-button">Upload to image library</button>
+      </form>
+
+      <div class="table-scroll-wrap">
+        <table class="govuk-table" id="image-library-table">
+          <caption class="govuk-table__caption govuk-table__caption--m">Recent image library uploads</caption>
+          <thead class="govuk-table__head">
+            <tr class="govuk-table__row">
+              <th class="govuk-table__header">ID</th>
+              <th class="govuk-table__header">Filename</th>
+              <th class="govuk-table__header">Associated jigsaw</th>
+              <th class="govuk-table__header">Tag</th>
+              <th class="govuk-table__header">Uploaded</th>
+              <th class="govuk-table__header">Assign</th>
+              <th class="govuk-table__header">View</th>
+            </tr>
+          </thead>
+          <tbody class="govuk-table__body" id="image-library-table-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="govuk-!-margin-top-6" aria-labelledby="jigsaw-diary-heading">
+      <h3 id="jigsaw-diary-heading" class="govuk-heading-m">Completion diary</h3>
+      <p class="govuk-body">Log each completion with a difficulty rating (1 = easy, 5 = very hard) and notes.</p>
+      <form id="diary-entry-form" class="govuk-!-margin-bottom-4">
+        <div class="govuk-grid-row">
+          <div class="govuk-grid-column-one-third">
+            <div class="govuk-form-group">
+              <label class="govuk-label" for="diary-jigsaw-id">Jigsaw</label>
+              <select id="diary-jigsaw-id" name="jigsaw_id" class="govuk-select" required>
+                <option value="">Choose jigsaw</option>
+              </select>
+            </div>
+          </div>
+          <div class="govuk-grid-column-one-third">
+            <div class="govuk-form-group">
+              <label class="govuk-label" for="diary-completed-at">Completed at</label>
+              <div id="diary-completed-at-hint" class="govuk-hint">Leave blank to use the current time.</div>
+              <input id="diary-completed-at" name="completed_at" class="govuk-input" type="datetime-local" aria-describedby="diary-completed-at-hint">
+            </div>
+          </div>
+          <div class="govuk-grid-column-one-third">
+            <div class="govuk-form-group">
+              <label class="govuk-label" for="diary-difficulty">Difficulty</label>
+              <select id="diary-difficulty" name="difficulty" class="govuk-select">
+                <option value="">Not rated</option>
+                <option value="1">1 - easy</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5 - very hard</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="govuk-form-group">
+          <label class="govuk-label" for="diary-notes">Notes</label>
+          <textarea id="diary-notes" name="notes" class="govuk-textarea" rows="3" maxlength="4000"></textarea>
+        </div>
+        <button type="submit" class="govuk-button" data-module="govuk-button">Add diary entry</button>
+      </form>
+
+      <div class="table-scroll-wrap">
+        <table class="govuk-table" id="diary-entries-table">
+          <caption class="govuk-table__caption govuk-table__caption--m">Diary entries for selected jigsaw</caption>
+          <thead class="govuk-table__head">
+            <tr class="govuk-table__row">
+              <th class="govuk-table__header">ID</th>
+              <th class="govuk-table__header">Completed</th>
+              <th class="govuk-table__header">Difficulty</th>
+              <th class="govuk-table__header">Notes</th>
+              <th class="govuk-table__header">Action</th>
+            </tr>
+          </thead>
+          <tbody class="govuk-table__body" id="diary-entries-table-body"></tbody>
         </table>
       </div>
     </section>

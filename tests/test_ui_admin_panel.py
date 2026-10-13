@@ -136,12 +136,10 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.fill("#jigsaw-title", "UI Smoke Puzzle")
         page.evaluate("() => { document.querySelector('#jigsaw-title').value = 'T'.repeat(256); }")
         page.fill("#jigsaw-piece-count", "500")
-        page.select_option("#jigsaw-status", "available")
         page.click("#jigsaw-create-form button[type='submit']")
         page.wait_for_selector("text=Invalid request payload. title: must be 255 characters or fewer")
 
         page.fill("#jigsaw-title", "UI Smoke Puzzle")
-        page.fill("#jigsaw-manufacturer", "Ravensburger")
         page.click("#jigsaw-create-form button[type='submit']")
 
         page.wait_for_selector("text=Jigsaw created.")
@@ -189,6 +187,45 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("text=Jigsaw image uploaded.")
         page.wait_for_selector("#jigsaw-images-table-body tr")
         assert page.locator("#jigsaw-images-table-body tr", has_text="untagged").count() >= 1
+
+        page.set_input_files(
+            "#image-library-files",
+            [
+                {
+                    "name": "bulk-one.png",
+                    "mimeType": "image/png",
+                    "buffer": b"\x89PNG\r\n\x1a\n" + (b"a" * 4096),
+                },
+                {
+                    "name": "bulk-two.png",
+                    "mimeType": "image/png",
+                    "buffer": b"\x89PNG\r\n\x1a\n" + (b"b" * 4096),
+                },
+            ],
+        )
+        page.click("#image-library-upload-form button[type='submit']")
+        page.wait_for_selector("text=Image library upload complete. Added 2 image(s), skipped 0.")
+        page.wait_for_selector("#image-library-table-body tr")
+        assert page.locator("#image-library-table-body tr", has_text="bulk-one.png").count() >= 1
+        assert page.locator("#image-library-table-body tr", has_text="bulk-two.png").count() >= 1
+
+        bulk_one_row = page.locator("#image-library-table-body tr", has_text="bulk-one.png")
+        bulk_one_row.locator("select[data-image-assign-select]").select_option(jigsaw_option_value)
+        bulk_one_row.locator("button[data-image-assign]").click()
+        page.wait_for_selector("text=Image assigned to jigsaw.")
+        page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png'):has-text('UI Smoke Puzzle')")
+
+        page.select_option("#diary-jigsaw-id", jigsaw_option_value)
+        page.select_option("#diary-difficulty", "4")
+        page.fill("#diary-notes", "UI diary entry")
+        page.click("#diary-entry-form button[type='submit']")
+        page.wait_for_selector("text=Diary entry added.")
+        page.wait_for_selector("#diary-entries-table-body tr:has-text('UI diary entry')")
+        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(8).inner_text() != "-"
+
+        page.locator("#diary-entries-table-body tr", has_text="UI diary entry").locator("button[data-diary-delete]").click()
+        page.wait_for_selector("text=Diary entry deleted.")
+        page.wait_for_selector("#diary-entries-table-body td:has-text('No diary entries found.')")
 
         page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("button[data-jigsaw-edit]").click()
         assert page.locator("#jigsaw-edit-form").is_visible()
