@@ -32,6 +32,7 @@
 - `PATCH /api/v1/jigsaws/{id}`
 - `DELETE /api/v1/jigsaws/{id}` (retire/archive semantics)
 - `DELETE /api/v1/jigsaws/{id}/permanent` (hard-delete semantics)
+- `POST /api/v1/jigsaws/{id}/enrich-from-images`
 - `GET /api/v1/users`
 - `POST /api/v1/users`
 - `PATCH /api/v1/users/{id}`
@@ -171,7 +172,7 @@
 - Jigsaw metadata notes:
   - `POST /api/v1/jigsaws` allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.
   - Duplicate `title` values are allowed.
-  - Jigsaw payloads now support optional fields: `manufacturer`, `artist`, `dimensions_cm`, `description`, `last_completed_at`.
+  - Jigsaw payloads now support optional fields: `series_name`, `series_number`, `manufacturer`, `artist`, `dimensions_cm`, `description`, `last_completed_at`.
   - `last_completed_at` uses UTC ISO 8601 format.
   - `DELETE /api/v1/jigsaws/{id}` retires the jigsaw (soft delete).
   - `DELETE /api/v1/jigsaws/{id}/permanent` permanently removes the jigsaw and deletes linked images and diary entries.
@@ -205,9 +206,13 @@
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` is admin-only and creates a new jigsaw from AI-extracted image metadata.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` only works for unassigned images; assigned images return `409`.
   - Successful create-from-image sets the associated image tag to `Box`.
-  - AI extraction expects these metadata keys: `title`, `manufacturer`/`publisher`, `artist`, `piece_count`, `tags`, `dimensions_cm`, `description`.
+  - AI extraction expects these metadata keys: `title`, `series_name`, `series_number`, `manufacturer`/`publisher`, `artist`, `piece_count`, `tags`, `dimensions_cm`, `description`.
   - AI usage is cost-tracked per call (`ai_usage_events`) with token usage and final USD cost.
   - Daily AI spend guardrail: when configured budget is reached, create-from-image requests return `409` and are blocked before provider calls.
+  - `POST /api/v1/jigsaws/{id}/enrich-from-images` is admin-only and uses assigned box-tagged images only (`Box`, `box front`, `box-side`, `box-back`, and similar `box*` tags) to infer missing metadata.
+  - Completed-puzzle images are excluded from enrichment input.
+  - Enrichment is non-destructive by default (`overwrite_existing=false`): only empty fields are populated.
+  - Enrichment request body optionally accepts `overwrite_existing` (boolean).
   - `GET /api/v1/images/{image_id}/content` returns binary image content for authenticated users, including unassigned library images.
   - Bulk uploads write `jigsaw.image_bulk_uploaded` audit events.
   - Image assignment writes `jigsaw.image_assigned` audit events.

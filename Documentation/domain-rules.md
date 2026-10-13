@@ -10,6 +10,7 @@
 
 - Jigsaw create accepts empty values for all user-entered fields in v1 (to support future image-driven creation workflows).
 - Optional metadata fields: manufacturer, artist, dimensions (cm), description, and last-completed timestamp.
+- Series metadata is supported with optional `series_name` and `series_number` fields, stored separately from `title`.
 - When provided, `piece_count` must be a positive integer.
 - Duplicate jigsaw titles are allowed.
 - Status values in v1:
@@ -38,6 +39,9 @@
 - Image browser edits (rotation/crop) overwrite image content in-place but preserve the original dedupe hash.
 - Tag/classification updates (`Box`, `Completed`, etc.) are allowed before jigsaw assignment.
 - Admin create-from-image action can create a new jigsaw from an unassigned image and then bind the image to that created jigsaw.
+- Admin enrich-from-images action can infer metadata for an existing jigsaw from assigned box images.
+- Enrichment input only uses box-tagged images (for example `Box`, `box front`, `box-side`, `box-back`); completed-puzzle images are excluded.
+- Enrichment is non-destructive by default: only empty fields are populated unless overwrite mode is explicitly requested.
 - Create-from-image uses AI metadata extraction and records per-call token/cost usage.
 - Create-from-image is blocked when configured daily AI spend budget has been reached.
 

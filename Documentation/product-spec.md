@@ -56,7 +56,8 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
   - Bulk upload one or more images (including zip archives containing image files).
   - Store uploaded images as untagged library assets.
   - Optionally associate uploads to a jigsaw during import.
-  - Create a new jigsaw from an image via AI metadata extraction (title, artist, manufacturer/publisher, piece count, tags, dimensions, description).
+  - Create a new jigsaw from an image via AI metadata extraction (title, series name/number, artist, manufacturer/publisher, piece count, tags, dimensions, description).
+  - Enrich an existing jigsaw from associated box images (front/back/side) to populate missing fields.
   - Track AI token/cost usage per create-from-image call and enforce daily spend guardrails.
 - Lending management (deprioritized, existing capability retained):
   - Create loan.
@@ -83,6 +84,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 - Admin can create, edit, retire, and restore jigsaw records via UI.
 - Admin can quick-add a jigsaw with only title and piece count, then enrich it later via edit.
 - Admin can create a jigsaw from an unassigned image using AI-assisted metadata extraction.
+- Admin can run non-destructive AI enrichment on an existing jigsaw using its assigned images.
 - Admin can log, view, and delete completion diary entries with difficulty ratings and notes per jigsaw.
 - Admin can create users and assign one of the supported roles.
 - Borrower cannot access admin-only API endpoints.

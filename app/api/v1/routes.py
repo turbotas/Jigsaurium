@@ -32,6 +32,8 @@ PASSWORD_MAX_LENGTH = 256
 PASSWORD_MIN_LENGTH = 12
 DEFAULT_LOAN_DURATION_DAYS = 28
 JIGSAW_TITLE_MAX_LENGTH = 255
+JIGSAW_SERIES_NAME_MAX_LENGTH = 255
+JIGSAW_SERIES_NUMBER_MAX_LENGTH = 64
 JIGSAW_MANUFACTURER_MAX_LENGTH = 255
 JIGSAW_ARTIST_MAX_LENGTH = 255
 JIGSAW_DIMENSIONS_MAX_LENGTH = 64
@@ -42,8 +44,12 @@ JIGSAW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_JIGSAW_IMAGE_TAG = "untagged"
 IMAGE_BROWSER_TAG_BOX = "Box"
 IMAGE_BROWSER_TAG_COMPLETED = "Completed"
+IMAGE_BROWSER_TAG_BOX_SIDE = "box-side"
+IMAGE_BROWSER_TAG_BOX_BACK = "box-back"
+IMAGE_BROWSER_TAG_BOX_FRONT = "box front"
 ZIP_UPLOAD_MIME_TYPES = {"application/zip", "application/x-zip-compressed", "multipart/x-zip"}
 AI_IMAGE_CREATE_OPERATION = "image_to_jigsaw"
+AI_JIGSAW_ENRICH_OPERATION = "jigsaw_enrich_from_images"
 AI_USAGE_STATUS_SUCCESS = "success"
 AI_USAGE_STATUS_ERROR = "error"
 AI_USAGE_STATUS_BLOCKED = "blocked"
@@ -92,6 +98,8 @@ def _serialize_jigsaw(jigsaw):
     return {
         "id": jigsaw.id,
         "title": jigsaw.title,
+        "series_name": jigsaw.series_name,
+        "series_number": jigsaw.series_number,
         "manufacturer": jigsaw.manufacturer,
         "artist": jigsaw.artist,
         "dimensions_cm": jigsaw.dimensions_cm,
@@ -856,8 +864,10 @@ def _build_ai_image_prompt():
     return (
         "You are extracting metadata from a jigsaw puzzle box image. "
         "Return strictly valid JSON with keys: "
-        "title, manufacturer, artist, piece_count, tags, dimensions_cm, description. "
+        "title, series_name, series_number, manufacturer, artist, piece_count, tags, dimensions_cm, description. "
         "Use null when unknown. "
+        "Keep title and series fields separate. "
+        "Do not guess missing values. "
         "piece_count must be an integer when present. "
         "tags must be either a comma-separated string or an array of short strings. "
         "Do not include markdown or extra commentary."
@@ -910,7 +920,6 @@ def _get_daily_ai_spend(db_session):
 
     spend = db_session.execute(
         select(func.coalesce(func.sum(AiUsageEvent.final_cost_usd), 0)).where(
-            AiUsageEvent.operation == AI_IMAGE_CREATE_OPERATION,
             AiUsageEvent.status == AI_USAGE_STATUS_SUCCESS,
             AiUsageEvent.created_at >= day_start,
             AiUsageEvent.created_at < day_end,
@@ -922,6 +931,7 @@ def _get_daily_ai_spend(db_session):
 def _record_ai_usage_event(
     *,
     db_session,
+    operation,
     image_id,
     status,
     model,
@@ -940,7 +950,7 @@ def _record_ai_usage_event(
     usage_event = AiUsageEvent(
         actor_user_id=getattr(g.current_user, "id", None),
         image_id=image_id,
-        operation=AI_IMAGE_CREATE_OPERATION,
+        operation=operation,
         status=status,
         model=model,
         endpoint_url=endpoint_url,
@@ -1005,6 +1015,22 @@ def _normalize_ai_jigsaw_payload(raw_payload):
     if error is not None:
         return None, error
 
+    series_name, error = _validate_optional_text_field(
+        raw_payload.get("series_name"),
+        field_name="series_name",
+        max_length=JIGSAW_SERIES_NAME_MAX_LENGTH,
+    )
+    if error is not None:
+        return None, error
+
+    series_number, error = _validate_optional_text_field(
+        raw_payload.get("series_number"),
+        field_name="series_number",
+        max_length=JIGSAW_SERIES_NUMBER_MAX_LENGTH,
+    )
+    if error is not None:
+        return None, error
+
     manufacturer_source = raw_payload.get("manufacturer")
     if manufacturer_source is None:
         manufacturer_source = raw_payload.get("publisher")
@@ -1046,6 +1072,8 @@ def _normalize_ai_jigsaw_payload(raw_payload):
 
     return {
         "title": title,
+        "series_name": series_name,
+        "series_number": series_number,
         "manufacturer": manufacturer,
         "artist": artist,
         "dimensions_cm": dimensions_cm,
@@ -1055,7 +1083,24 @@ def _normalize_ai_jigsaw_payload(raw_payload):
     }, None
 
 
-def _infer_jigsaw_metadata_from_image(image):
+def _extract_ai_message_text(content):
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        text_parts = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text_value = item.get("text")
+            if isinstance(text_value, str) and text_value.strip():
+                text_parts.append(text_value)
+        return "\n".join(text_parts)
+
+    return ""
+
+
+def _infer_jigsaw_metadata_from_images(images, instruction_text):
     if not current_app.config.get("AI_ENABLED", False):
         raise RuntimeError("AI image inference is disabled")
 
@@ -1067,25 +1112,28 @@ def _infer_jigsaw_metadata_from_image(image):
     if not api_key or not endpoint_url or not model:
         raise RuntimeError("AI image inference configuration is incomplete")
 
-    image_base64 = base64.b64encode(image.image_data).decode("ascii")
+    if not isinstance(images, list) or len(images) == 0:
+        raise RuntimeError("No images were supplied for AI metadata inference")
+
+    user_content = [{"type": "text", "text": instruction_text}]
+    for image in images:
+        image_base64 = base64.b64encode(image.image_data).decode("ascii")
+        user_content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{image.mime_type};base64,{image_base64}",
+                },
+            }
+        )
+
     request_payload = {
         "model": model,
         "temperature": 0,
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": _build_ai_image_prompt()},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Extract jigsaw metadata from this image."},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{image.mime_type};base64,{image_base64}",
-                        },
-                    },
-                ],
-            },
+            {"role": "user", "content": user_content},
         ],
     }
 
@@ -1120,7 +1168,7 @@ def _infer_jigsaw_metadata_from_image(image):
     message = choice.get("message") if isinstance(choice, dict) else None
     content = message.get("content") if isinstance(message, dict) else None
 
-    parsed_payload = _extract_json_object_from_text(content)
+    parsed_payload = _extract_json_object_from_text(_extract_ai_message_text(content))
     if parsed_payload is None:
         raise RuntimeError("AI provider did not return a valid metadata JSON object")
 
@@ -1136,6 +1184,73 @@ def _infer_jigsaw_metadata_from_image(image):
         "model": model,
         "endpoint_url": endpoint_url,
     }
+
+
+def _infer_jigsaw_metadata_from_image(image):
+    return _infer_jigsaw_metadata_from_images([image], "Extract jigsaw metadata from this image.")
+
+
+def _is_missing_jigsaw_value(value):
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
+
+
+def _is_box_metadata_tag(tag_value):
+    normalized = str(tag_value or "").strip().lower()
+    if not normalized:
+        return False
+    explicit_box_tags = {
+        IMAGE_BROWSER_TAG_BOX.lower(),
+        IMAGE_BROWSER_TAG_BOX_FRONT.lower(),
+        IMAGE_BROWSER_TAG_BOX_BACK.lower(),
+        IMAGE_BROWSER_TAG_BOX_SIDE.lower(),
+    }
+    if normalized in explicit_box_tags:
+        return True
+    if normalized.startswith("box"):
+        return True
+    normalized_with_spaces = normalized.replace("_", " ").replace("-", " ")
+    return normalized_with_spaces.startswith("box ")
+
+
+def _apply_ai_metadata_to_jigsaw(*, jigsaw, normalized_payload, overwrite_existing=False):
+    applied_fields = []
+    skipped_fields = []
+
+    candidate_fields = (
+        "title",
+        "series_name",
+        "series_number",
+        "manufacturer",
+        "artist",
+        "piece_count",
+        "tags",
+        "dimensions_cm",
+        "description",
+    )
+
+    for field_name in candidate_fields:
+        candidate_value = normalized_payload.get(field_name)
+        if candidate_value is None:
+            skipped_fields.append({"field": field_name, "reason": "ai_null"})
+            continue
+
+        current_value = getattr(jigsaw, field_name)
+        if not overwrite_existing and not _is_missing_jigsaw_value(current_value):
+            skipped_fields.append({"field": field_name, "reason": "already_set"})
+            continue
+
+        if current_value == candidate_value:
+            skipped_fields.append({"field": field_name, "reason": "unchanged"})
+            continue
+
+        setattr(jigsaw, field_name, candidate_value)
+        applied_fields.append(field_name)
+
+    return applied_fields, skipped_fields
 
 
 @api_v1_bp.get("/health")
@@ -1646,6 +1761,22 @@ def create_jigsaw():
     if error is not None:
         return error
 
+    series_name, error = _validate_optional_text_field(
+        payload.get("series_name"),
+        field_name="series_name",
+        max_length=JIGSAW_SERIES_NAME_MAX_LENGTH,
+    )
+    if error is not None:
+        return error
+
+    series_number, error = _validate_optional_text_field(
+        payload.get("series_number"),
+        field_name="series_number",
+        max_length=JIGSAW_SERIES_NUMBER_MAX_LENGTH,
+    )
+    if error is not None:
+        return error
+
     piece_count, error = _parse_optional_positive_integer(payload.get("piece_count"), "piece_count")
     if error is not None:
         return error
@@ -1697,6 +1828,8 @@ def create_jigsaw():
     db_session = get_session()
     jigsaw = Jigsaw(
         title=title,
+        series_name=series_name,
+        series_number=series_number,
         manufacturer=manufacturer,
         artist=artist,
         dimensions_cm=dimensions_cm,
@@ -1716,6 +1849,8 @@ def create_jigsaw():
         entity_id=jigsaw.id,
         payload={
             "title": jigsaw.title,
+            "series_name": jigsaw.series_name,
+            "series_number": jigsaw.series_number,
             "piece_count": piece_count,
             "status": status.value,
             "manufacturer": jigsaw.manufacturer,
@@ -1752,6 +1887,8 @@ def update_jigsaw(jigsaw_id):
 
     updatable_fields = {
         "title",
+        "series_name",
+        "series_number",
         "manufacturer",
         "artist",
         "dimensions_cm",
@@ -1802,6 +1939,26 @@ def update_jigsaw(jigsaw_id):
         if error is not None:
             return error
         jigsaw.manufacturer = manufacturer
+
+    if "series_name" in payload:
+        series_name, error = _validate_optional_text_field(
+            payload.get("series_name"),
+            field_name="series_name",
+            max_length=JIGSAW_SERIES_NAME_MAX_LENGTH,
+        )
+        if error is not None:
+            return error
+        jigsaw.series_name = series_name
+
+    if "series_number" in payload:
+        series_number, error = _validate_optional_text_field(
+            payload.get("series_number"),
+            field_name="series_number",
+            max_length=JIGSAW_SERIES_NUMBER_MAX_LENGTH,
+        )
+        if error is not None:
+            return error
+        jigsaw.series_number = series_number
 
     if "artist" in payload:
         artist, error = _validate_optional_text_field(
@@ -2314,6 +2471,7 @@ def create_jigsaw_from_image(image_id):
     if budget_usd is not None and budget_usd >= Decimal("0") and current_spend >= budget_usd:
         _record_ai_usage_event(
             db_session=db_session,
+            operation=AI_IMAGE_CREATE_OPERATION,
             image_id=image.id,
             status=AI_USAGE_STATUS_BLOCKED,
             model=(current_app.config.get("AI_MODEL") or "").strip() or None,
@@ -2331,6 +2489,7 @@ def create_jigsaw_from_image(image_id):
     except RuntimeError as error:
         _record_ai_usage_event(
             db_session=db_session,
+            operation=AI_IMAGE_CREATE_OPERATION,
             image_id=image.id,
             status=AI_USAGE_STATUS_ERROR,
             model=(current_app.config.get("AI_MODEL") or "").strip() or None,
@@ -2346,6 +2505,7 @@ def create_jigsaw_from_image(image_id):
     if error is not None:
         _record_ai_usage_event(
             db_session=db_session,
+            operation=AI_IMAGE_CREATE_OPERATION,
             image_id=image.id,
             status=AI_USAGE_STATUS_ERROR,
             model=inference.get("model"),
@@ -2365,6 +2525,8 @@ def create_jigsaw_from_image(image_id):
 
     jigsaw = Jigsaw(
         title=normalized_payload["title"],
+        series_name=normalized_payload["series_name"],
+        series_number=normalized_payload["series_number"],
         manufacturer=normalized_payload["manufacturer"],
         artist=normalized_payload["artist"],
         dimensions_cm=normalized_payload["dimensions_cm"],
@@ -2383,6 +2545,7 @@ def create_jigsaw_from_image(image_id):
 
     usage_event = _record_ai_usage_event(
         db_session=db_session,
+        operation=AI_IMAGE_CREATE_OPERATION,
         image_id=image.id,
         status=AI_USAGE_STATUS_SUCCESS,
         model=inference.get("model"),
@@ -2421,6 +2584,181 @@ def create_jigsaw_from_image(image_id):
             },
         },
         status_code=201,
+    )
+
+
+@api_v1_bp.post("/jigsaws/<int:jigsaw_id>/enrich-from-images")
+@require_role("administrator")
+def enrich_jigsaw_from_images(jigsaw_id):
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    overwrite_existing = payload.get("overwrite_existing", False)
+    if not isinstance(overwrite_existing, bool):
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "overwrite_existing", "issue": "must be a boolean when provided"}],
+        )
+
+    db_session = get_session()
+    jigsaw = db_session.get(Jigsaw, jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+
+    assigned_images = db_session.execute(
+        select(JigsawImage)
+        .where(JigsawImage.jigsaw_id == jigsaw.id)
+        .order_by(JigsawImage.id.asc())
+    ).scalars().all()
+    if len(assigned_images) == 0:
+        return _error_response("conflict", "Jigsaw has no associated images to enrich from.", 409)
+
+    images = [image for image in assigned_images if _is_box_metadata_tag(image.tag)]
+    if len(images) == 0:
+        return _error_response(
+            "conflict",
+            "Jigsaw has no box-tagged images to enrich from.",
+            409,
+        )
+
+    if not current_app.config.get("AI_ENABLED", False):
+        return _error_response("conflict", "AI enrichment is disabled in server configuration.", 409)
+
+    if not (current_app.config.get("AI_API_KEY") and current_app.config.get("AI_ENDPOINT_URL") and current_app.config.get("AI_MODEL")):
+        return _error_response("conflict", "AI enrichment is not fully configured.", 409)
+
+    budget_usd = _to_decimal(current_app.config.get("AI_DAILY_BUDGET_USD"))
+    current_spend = _get_daily_ai_spend(db_session)
+    if budget_usd is not None and budget_usd >= Decimal("0") and current_spend >= budget_usd:
+        _record_ai_usage_event(
+            db_session=db_session,
+            operation=AI_JIGSAW_ENRICH_OPERATION,
+            image_id=images[0].id if images else None,
+            status=AI_USAGE_STATUS_BLOCKED,
+            model=(current_app.config.get("AI_MODEL") or "").strip() or None,
+            endpoint_url=(current_app.config.get("AI_ENDPOINT_URL") or "").strip() or None,
+            error_code="daily_budget_exceeded",
+            error_message="Daily AI budget has been reached.",
+            final_cost_usd=Decimal("0"),
+            payload={"daily_spend_usd": str(current_spend), "daily_budget_usd": str(budget_usd), "jigsaw_id": jigsaw.id},
+        )
+        db_session.commit()
+        return _error_response("conflict", "Daily AI budget has been reached for enrichment.", 409)
+
+    image_descriptors = [
+        f"id={image.id}, tag={image.tag or '-'}, filename={image.filename or '-'}"
+        for image in images
+    ]
+    instruction_text = (
+        "Use all provided box photos for the same jigsaw (front, back, side, and related box shots) "
+        "to extract metadata. Return null for anything uncertain or not visible. "
+        "Keep title and series fields separate. "
+        f"Current jigsaw fields: title={jigsaw.title!r}, series_name={jigsaw.series_name!r}, "
+        f"series_number={jigsaw.series_number!r}, manufacturer={jigsaw.manufacturer!r}, artist={jigsaw.artist!r}, "
+        f"piece_count={jigsaw.piece_count!r}, tags={jigsaw.tags!r}, dimensions_cm={jigsaw.dimensions_cm!r}, "
+        f"description={jigsaw.description!r}. "
+        "Image list: " + "; ".join(image_descriptors)
+    )
+
+    try:
+        inference = _infer_jigsaw_metadata_from_images(images, instruction_text)
+    except RuntimeError as runtime_error:
+        _record_ai_usage_event(
+            db_session=db_session,
+            operation=AI_JIGSAW_ENRICH_OPERATION,
+            image_id=images[0].id if images else None,
+            status=AI_USAGE_STATUS_ERROR,
+            model=(current_app.config.get("AI_MODEL") or "").strip() or None,
+            endpoint_url=(current_app.config.get("AI_ENDPOINT_URL") or "").strip() or None,
+            error_code="provider_error",
+            error_message=str(runtime_error),
+            final_cost_usd=Decimal("0"),
+            payload={"jigsaw_id": jigsaw.id, "image_ids": [image.id for image in images]},
+        )
+        db_session.commit()
+        return _error_response("bad_gateway", "AI metadata extraction failed.", 502)
+
+    normalized_payload, error = _normalize_ai_jigsaw_payload(inference.get("metadata"))
+    if error is not None:
+        _record_ai_usage_event(
+            db_session=db_session,
+            operation=AI_JIGSAW_ENRICH_OPERATION,
+            image_id=images[0].id if images else None,
+            status=AI_USAGE_STATUS_ERROR,
+            model=inference.get("model"),
+            endpoint_url=inference.get("endpoint_url"),
+            prompt_tokens=inference.get("prompt_tokens"),
+            completion_tokens=inference.get("completion_tokens"),
+            total_tokens=inference.get("total_tokens"),
+            provider_cost_usd=inference.get("provider_cost_usd"),
+            computed_cost_usd=inference.get("computed_cost_usd"),
+            final_cost_usd=inference.get("final_cost_usd") or Decimal("0"),
+            error_code="invalid_ai_payload",
+            error_message="AI metadata payload could not be normalized.",
+            payload={"raw_metadata": inference.get("metadata"), "jigsaw_id": jigsaw.id},
+        )
+        db_session.commit()
+        return _error_response("bad_gateway", "AI metadata could not be normalized.", 502)
+
+    applied_fields, skipped_fields = _apply_ai_metadata_to_jigsaw(
+        jigsaw=jigsaw,
+        normalized_payload=normalized_payload,
+        overwrite_existing=overwrite_existing,
+    )
+
+    usage_event = _record_ai_usage_event(
+        db_session=db_session,
+        operation=AI_JIGSAW_ENRICH_OPERATION,
+        image_id=images[0].id if images else None,
+        status=AI_USAGE_STATUS_SUCCESS,
+        model=inference.get("model"),
+        endpoint_url=inference.get("endpoint_url"),
+        prompt_tokens=inference.get("prompt_tokens"),
+        completion_tokens=inference.get("completion_tokens"),
+        total_tokens=inference.get("total_tokens"),
+        provider_cost_usd=inference.get("provider_cost_usd"),
+        computed_cost_usd=inference.get("computed_cost_usd"),
+        final_cost_usd=inference.get("final_cost_usd") or Decimal("0"),
+        payload={
+            "jigsaw_id": jigsaw.id,
+            "image_ids": [image.id for image in images],
+            "overwrite_existing": overwrite_existing,
+            "metadata": normalized_payload,
+            "applied_fields": applied_fields,
+            "skipped_fields": skipped_fields,
+        },
+    )
+
+    _record_audit_event(
+        action="jigsaw.enriched_from_images",
+        entity_type="jigsaw",
+        entity_id=jigsaw.id,
+        payload={
+            "image_ids": [image.id for image in images],
+            "ai_usage_event_id": usage_event.id,
+            "overwrite_existing": overwrite_existing,
+            "applied_fields": applied_fields,
+            "skipped_fields": skipped_fields,
+        },
+    )
+    db_session.commit()
+
+    return _success_response(
+        {
+            "jigsaw": _serialize_jigsaw(jigsaw),
+            "applied_fields": applied_fields,
+            "skipped_fields": skipped_fields,
+            "ai": {
+                "usage_event_id": usage_event.id,
+                "prompt_tokens": inference.get("prompt_tokens"),
+                "completion_tokens": inference.get("completion_tokens"),
+                "total_tokens": inference.get("total_tokens"),
+                "final_cost_usd": str(inference.get("final_cost_usd") or Decimal("0")),
+            },
+        }
     )
 
 

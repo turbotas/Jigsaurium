@@ -65,3 +65,7 @@ node_modules/
 # Playwright/Wayland runtime artifacts
 .wayland/
 .wayland-core/
+
+# IJFW local tooling artifacts
+.ijfw/
+ijfw/

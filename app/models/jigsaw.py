@@ -23,6 +23,8 @@ class Jigsaw(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    series_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    series_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     manufacturer: Mapped[str | None] = mapped_column(String(255), nullable=True)
     artist: Mapped[str | None] = mapped_column(String(255), nullable=True)
     dimensions_cm: Mapped[str | None] = mapped_column(String(64), nullable=True)

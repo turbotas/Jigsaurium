@@ -230,6 +230,20 @@
           </div>
         </div>
       </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="jigsaw-series-name">Series name (optional)</label>
+            <input id="jigsaw-series-name" name="series_name" class="govuk-input" type="text" maxlength="255">
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="jigsaw-series-number">Series number (optional)</label>
+            <input id="jigsaw-series-number" name="series_number" class="govuk-input govuk-input--width-10" type="text" maxlength="64" placeholder="e.g. 10">
+          </div>
+        </div>
+      </div>
       <p class="govuk-hint">Quick add only needs a title and piece count. Edit the record afterwards to add manufacturer, artist, dimensions, condition, status, tags, and description.</p>
       <button type="submit" class="govuk-button" data-module="govuk-button">Create jigsaw</button>
     </form>
@@ -265,6 +279,20 @@
           <div class="govuk-form-group">
             <label class="govuk-label" for="edit-jigsaw-piece-count">Piece count</label>
             <input id="edit-jigsaw-piece-count" name="piece_count" class="govuk-input govuk-input--width-10" type="number" min="1" required>
+          </div>
+        </div>
+      </div>
+      <div class="govuk-grid-row">
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-jigsaw-series-name">Series name</label>
+            <input id="edit-jigsaw-series-name" name="series_name" class="govuk-input" type="text" maxlength="255">
+          </div>
+        </div>
+        <div class="govuk-grid-column-one-half">
+          <div class="govuk-form-group">
+            <label class="govuk-label" for="edit-jigsaw-series-number">Series number</label>
+            <input id="edit-jigsaw-series-number" name="series_number" class="govuk-input govuk-input--width-10" type="text" maxlength="64">
           </div>
         </div>
       </div>
@@ -324,6 +352,7 @@
         <textarea id="edit-jigsaw-description" name="description" class="govuk-textarea" rows="4" maxlength="4000"></textarea>
       </div>
       <button id="jigsaw-edit-save" type="submit" class="govuk-button" data-module="govuk-button">Save jigsaw changes</button>
+      <button id="jigsaw-edit-enrich" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Enrich from images</button>
       <button id="jigsaw-edit-cancel" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Cancel edit</button>
     </form>
 

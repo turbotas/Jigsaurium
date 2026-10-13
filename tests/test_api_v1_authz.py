@@ -123,6 +123,7 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
         ("PATCH", "/api/v1/jigsaws/1", {"title": "Updated title"}),
         ("DELETE", "/api/v1/jigsaws/1", None),
         ("DELETE", "/api/v1/jigsaws/1/permanent", None),
+        ("POST", "/api/v1/jigsaws/1/enrich-from-images", {}),
     ],
 )
 def test_protected_endpoints_require_authentication(client, seeded_identity_data, method, path, json_payload):
@@ -484,6 +485,8 @@ def test_admin_can_edit_existing_jigsaw_fields(client, seeded_identity_data):
         headers=_csrf_headers(),
         json={
             "title": "Harbor Sunrise",
+            "series_name": "My Haven Series",
+            "series_number": "10",
             "piece_count": 1200,
             "condition": "excellent",
             "status": "maintenance",
@@ -494,6 +497,8 @@ def test_admin_can_edit_existing_jigsaw_fields(client, seeded_identity_data):
     assert response.status_code == 200
     payload = response.get_json()["data"]
     assert payload["title"] == "Harbor Sunrise"
+    assert payload["series_name"] == "My Haven Series"
+    assert payload["series_number"] == "10"
     assert payload["piece_count"] == 1200
     assert payload["condition"] == "excellent"
     assert payload["status"] == "maintenance"
@@ -509,6 +514,8 @@ def test_admin_can_create_jigsaw_with_extended_metadata(client, seeded_identity_
         headers=_csrf_headers(),
         json={
             "title": "English Harbour",
+            "series_name": "Collector Series",
+            "series_number": "12",
             "manufacturer": "Gibsons",
             "artist": "Trevor Mitchell",
             "dimensions_cm": "68 x 49 cm",
@@ -523,6 +530,8 @@ def test_admin_can_create_jigsaw_with_extended_metadata(client, seeded_identity_
 
     assert response.status_code == 201
     payload = response.get_json()["data"]
+    assert payload["series_name"] == "Collector Series"
+    assert payload["series_number"] == "12"
     assert payload["manufacturer"] == "Gibsons"
     assert payload["artist"] == "Trevor Mitchell"
     assert payload["dimensions_cm"] == "68 x 49 cm"
@@ -538,6 +547,8 @@ def test_admin_can_create_jigsaw_with_extended_metadata(client, seeded_identity_
         ({"piece_count": "1000a"}, "piece_count", "positive integer or empty"),
         ({"piece_count": 0}, "piece_count", "greater than zero when provided"),
         ({"status": "unknown"}, "status", "must be one of"),
+        ({"series_name": "s" * 256}, "series_name", "255 characters or fewer"),
+        ({"series_number": "n" * 65}, "series_number", "64 characters or fewer"),
         ({"manufacturer": "m" * 256}, "manufacturer", "255 characters or fewer"),
         ({"artist": "a" * 256}, "artist", "255 characters or fewer"),
         ({"dimensions_cm": "d" * 65}, "dimensions_cm", "64 characters or fewer"),
@@ -554,6 +565,8 @@ def test_create_jigsaw_validates_all_displayed_fields(
 
     payload = {
         "title": "Validation Base",
+        "series_name": "Series Base",
+        "series_number": "7",
         "manufacturer": "Ravensburger",
         "artist": "Art Poulin",
         "dimensions_cm": "70x50",
@@ -584,6 +597,8 @@ def test_admin_can_create_jigsaw_with_all_empty_fields(client, seeded_identity_d
         headers=_csrf_headers(),
         json={
             "title": "",
+            "series_name": "",
+            "series_number": "",
             "manufacturer": "",
             "artist": "",
             "dimensions_cm": "",
@@ -599,6 +614,8 @@ def test_admin_can_create_jigsaw_with_all_empty_fields(client, seeded_identity_d
     assert response.status_code == 201
     payload = response.get_json()["data"]
     assert payload["title"] is None
+    assert payload["series_name"] is None
+    assert payload["series_number"] is None
     assert payload["manufacturer"] is None
     assert payload["artist"] is None
     assert payload["dimensions_cm"] is None
@@ -634,6 +651,8 @@ def test_admin_can_create_duplicate_jigsaw_titles(client, seeded_identity_data):
     ("patch_payload", "expected_field", "expected_issue_fragment"),
     [
         ({"piece_count": "letters"}, "piece_count", "must be greater than zero"),
+        ({"series_name": "s" * 256}, "series_name", "255 characters or fewer"),
+        ({"series_number": "n" * 65}, "series_number", "64 characters or fewer"),
         ({"manufacturer": "m" * 256}, "manufacturer", "255 characters or fewer"),
         ({"artist": "a" * 256}, "artist", "255 characters or fewer"),
         ({"dimensions_cm": "d" * 65}, "dimensions_cm", "64 characters or fewer"),

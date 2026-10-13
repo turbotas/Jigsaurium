@@ -64,9 +64,12 @@
     jigsawCreateForm: document.getElementById("jigsaw-create-form"),
     jigsawEditForm: document.getElementById("jigsaw-edit-form"),
     jigsawEditSaveButton: document.getElementById("jigsaw-edit-save"),
+    jigsawEditEnrichButton: document.getElementById("jigsaw-edit-enrich"),
     jigsawEditCancelButton: document.getElementById("jigsaw-edit-cancel"),
     editJigsawId: document.getElementById("edit-jigsaw-id"),
     editJigsawTitle: document.getElementById("edit-jigsaw-title"),
+    editJigsawSeriesName: document.getElementById("edit-jigsaw-series-name"),
+    editJigsawSeriesNumber: document.getElementById("edit-jigsaw-series-number"),
     editJigsawPieceCount: document.getElementById("edit-jigsaw-piece-count"),
     editJigsawManufacturer: document.getElementById("edit-jigsaw-manufacturer"),
     editJigsawArtist: document.getElementById("edit-jigsaw-artist"),
@@ -528,6 +531,12 @@
     if (elements.editJigsawTitle) {
       elements.editJigsawTitle.value = "";
     }
+    if (elements.editJigsawSeriesName) {
+      elements.editJigsawSeriesName.value = "";
+    }
+    if (elements.editJigsawSeriesNumber) {
+      elements.editJigsawSeriesNumber.value = "";
+    }
     if (elements.editJigsawManufacturer) {
       elements.editJigsawManufacturer.value = "";
     }
@@ -557,6 +566,9 @@
     }
     if (elements.jigsawEditSaveButton) {
       elements.jigsawEditSaveButton.disabled = false;
+    }
+    if (elements.jigsawEditEnrichButton) {
+      elements.jigsawEditEnrichButton.disabled = false;
     }
   }
 
@@ -655,6 +667,14 @@
       retireButton.dataset.jigsawRetire = String(jigsaw.id);
       retireButton.textContent = "Retire";
       controlsWrap.appendChild(retireButton);
+
+      const enrichButton = document.createElement("button");
+      enrichButton.type = "button";
+      enrichButton.className = "govuk-button govuk-button--secondary app-inline-button";
+      enrichButton.setAttribute("data-module", "govuk-button");
+      enrichButton.dataset.jigsawEnrich = String(jigsaw.id);
+      enrichButton.textContent = "Enrich";
+      controlsWrap.appendChild(enrichButton);
 
       const deleteButton = document.createElement("button");
       deleteButton.type = "button";
@@ -1868,6 +1888,8 @@
     const formData = new FormData(form);
     const payload = {
       title: String(formData.get("title") || "").trim(),
+      series_name: String(formData.get("series_name") || "").trim() || null,
+      series_number: String(formData.get("series_number") || "").trim() || null,
       piece_count: parseOptionalIntegerFormValue(formData.get("piece_count")),
     };
 
@@ -2097,6 +2119,12 @@
     if (elements.editJigsawTitle) {
       elements.editJigsawTitle.value = selectedJigsaw.title || "";
     }
+    if (elements.editJigsawSeriesName) {
+      elements.editJigsawSeriesName.value = selectedJigsaw.series_name || "";
+    }
+    if (elements.editJigsawSeriesNumber) {
+      elements.editJigsawSeriesNumber.value = selectedJigsaw.series_number || "";
+    }
     if (elements.editJigsawManufacturer) {
       elements.editJigsawManufacturer.value = selectedJigsaw.manufacturer || "";
     }
@@ -2143,6 +2171,8 @@
 
     const payload = {
       title: String(formData.get("title") || "").trim(),
+      series_name: String(formData.get("series_name") || "").trim() || null,
+      series_number: String(formData.get("series_number") || "").trim() || null,
       manufacturer: String(formData.get("manufacturer") || "").trim() || null,
       artist: String(formData.get("artist") || "").trim() || null,
       dimensions_cm: String(formData.get("dimensions_cm") || "").trim() || null,
@@ -2167,6 +2197,50 @@
     } finally {
       if (elements.jigsawEditSaveButton) {
         elements.jigsawEditSaveButton.disabled = false;
+      }
+    }
+  }
+
+  async function enrichJigsawById(jigsawId) {
+    if (!jigsawId) {
+      return;
+    }
+
+    try {
+      const response = await apiRequest(`/api/v1/jigsaws/${jigsawId}/enrich-from-images`, {
+        method: "POST",
+        body: JSON.stringify({ overwrite_existing: false }),
+      });
+      const appliedFields = Array.isArray(response?.data?.applied_fields) ? response.data.applied_fields : [];
+      if (appliedFields.length > 0) {
+        showFeedback(`Jigsaw enriched. Updated fields: ${appliedFields.join(", ")}.`);
+      } else {
+        showFeedback("Jigsaw enrichment completed. No empty fields could be updated.");
+      }
+      await Promise.all([loadJigsaws(), loadJigsawImagesForSelected(), loadAuditEvents()]);
+      openJigsawEditor(jigsawId);
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function handleEnrichJigsaw() {
+    clearFeedback();
+
+    const jigsawId = Number(elements.editJigsawId?.value || "0");
+    if (!jigsawId) {
+      showFeedback("Open a jigsaw in the editor before running enrichment.", true);
+      return;
+    }
+
+    if (elements.jigsawEditEnrichButton) {
+      elements.jigsawEditEnrichButton.disabled = true;
+    }
+    try {
+      await enrichJigsawById(jigsawId);
+    } finally {
+      if (elements.jigsawEditEnrichButton) {
+        elements.jigsawEditEnrichButton.disabled = false;
       }
     }
   }
@@ -2231,6 +2305,16 @@
       } catch (error) {
         showFeedback(error.message, true);
       }
+      return;
+    }
+
+    const enrichButton = event.target.closest("[data-jigsaw-enrich]");
+    if (enrichButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const jigsawId = Number(enrichButton.getAttribute("data-jigsaw-enrich"));
+      await enrichJigsawById(jigsawId);
       return;
     }
 
@@ -2507,6 +2591,10 @@
 
     if (elements.jigsawEditCancelButton) {
       elements.jigsawEditCancelButton.addEventListener("click", handleCancelJigsawEdit);
+    }
+
+    if (elements.jigsawEditEnrichButton) {
+      elements.jigsawEditEnrichButton.addEventListener("click", handleEnrichJigsaw);
     }
 
     if (elements.accountForm) {

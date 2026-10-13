@@ -127,6 +127,13 @@ def test_borrower_cannot_use_image_library_admin_endpoints(client, seeded_image_
     )
     assert tag_response.status_code == 403
 
+    enrich_response = client.post(
+        f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/enrich-from-images",
+        headers=_csrf_headers(),
+        json={},
+    )
+    assert enrich_response.status_code == 403
+
 
 @pytest.mark.functional
 def test_admin_can_bulk_upload_multiple_unassigned_images(client, seeded_image_library_data):
@@ -483,6 +490,8 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
         return {
             "metadata": {
                 "title": "Inferred Puzzle",
+                "series_name": "My Haven Series",
+                "series_number": "10",
                 "publisher": "Ravensburger",
                 "artist": "Sample Artist",
                 "piece_count": 1000,
@@ -511,6 +520,8 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
     assert create_response.status_code == 201
     payload = create_response.get_json()["data"]
     assert payload["jigsaw"]["title"] == "Inferred Puzzle"
+    assert payload["jigsaw"]["series_name"] == "My Haven Series"
+    assert payload["jigsaw"]["series_number"] == "10"
     assert payload["jigsaw"]["manufacturer"] == "Ravensburger"
     assert payload["image"]["jigsaw_id"] == payload["jigsaw"]["id"]
     assert payload["image"]["tag"] == "Box"
@@ -586,3 +597,142 @@ def test_create_jigsaw_from_image_rejects_already_assigned_images(client, seeded
     )
 
     assert response.status_code == 409
+
+
+@pytest.mark.functional
+def test_admin_can_enrich_jigsaw_from_assigned_images_non_destructive(client, seeded_image_library_data, app, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_box_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
+            "tag": "Box",
+            "files": [
+                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"f" * 32), "front.png", "image/png"),
+            ],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_box_response.status_code == 201
+
+    upload_completed_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
+            "tag": "Completed",
+            "files": [
+                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"b" * 32), "completed.png", "image/png"),
+            ],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_completed_response.status_code == 201
+
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = "test-key"
+    app.config["AI_MODEL"] = "mock-vision"
+    app.config["AI_ENDPOINT_URL"] = "https://example.invalid/v1/chat/completions"
+    app.config["AI_DAILY_BUDGET_USD"] = 10.0
+
+    observed = {"count": 0, "tags": []}
+
+    def fake_inference(_images, _instruction_text):
+        observed["count"] = len(_images)
+        observed["tags"] = [image.tag for image in _images]
+        return {
+            "metadata": {
+                "title": "Should Not Replace Existing Title",
+                "series_name": "My Haven Series",
+                "series_number": "10",
+                "publisher": "Ravensburger",
+                "artist": "Jane Doe",
+                "piece_count": 1500,
+                "tags": ["cozy", "kitchen"],
+                "dimensions_cm": "70 x 50 cm",
+                "description": "Details collected across front and back images",
+            },
+            "prompt_tokens": 610,
+            "completion_tokens": 130,
+            "total_tokens": 740,
+            "provider_cost_usd": None,
+            "computed_cost_usd": None,
+            "final_cost_usd": 0.08,
+            "model": "mock-vision",
+            "endpoint_url": "https://example.invalid/v1/chat/completions",
+        }
+
+    monkeypatch.setattr("app.api.v1.routes._infer_jigsaw_metadata_from_images", fake_inference)
+
+    enrich_response = client.post(
+        f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/enrich-from-images",
+        headers=_csrf_headers(),
+        json={},
+    )
+    assert enrich_response.status_code == 200
+    payload = enrich_response.get_json()["data"]
+    assert payload["jigsaw"]["title"] == "Library Puzzle"
+    assert payload["jigsaw"]["series_name"] == "My Haven Series"
+    assert payload["jigsaw"]["series_number"] == "10"
+    assert payload["jigsaw"]["manufacturer"] == "Ravensburger"
+    assert payload["jigsaw"]["artist"] == "Jane Doe"
+    assert payload["jigsaw"]["piece_count"] == 1000
+    assert "title" not in payload["applied_fields"]
+    assert "piece_count" not in payload["applied_fields"]
+    assert "series_name" in payload["applied_fields"]
+    assert payload["ai"]["prompt_tokens"] == 610
+    assert observed["count"] == 1
+    assert observed["tags"] == ["Box"]
+
+
+@pytest.mark.functional
+def test_enrich_jigsaw_from_images_rejects_without_images(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = "test-key"
+    app.config["AI_MODEL"] = "mock-vision"
+    app.config["AI_ENDPOINT_URL"] = "https://example.invalid/v1/chat/completions"
+
+    response = client.post(
+        f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/enrich-from-images",
+        headers=_csrf_headers(),
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["message"] == "Jigsaw has no associated images to enrich from."
+
+
+@pytest.mark.functional
+def test_enrich_jigsaw_from_images_rejects_without_box_tagged_images(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
+            "tag": "Completed",
+            "files": [
+                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"c" * 32), "completed-only.png", "image/png"),
+            ],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = "test-key"
+    app.config["AI_MODEL"] = "mock-vision"
+    app.config["AI_ENDPOINT_URL"] = "https://example.invalid/v1/chat/completions"
+
+    response = client.post(
+        f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/enrich-from-images",
+        headers=_csrf_headers(),
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["message"] == "Jigsaw has no box-tagged images to enrich from."

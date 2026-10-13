@@ -124,3 +124,12 @@
 - Why: cost accountability and troubleshooting need durable records beyond ephemeral request logs.
 - Decision: enforce configurable daily AI spend guardrail (`AI_DAILY_BUDGET_USD`) that blocks new create-from-image calls once reached.
 - Why: prevents uncontrolled spend escalation while keeping behavior explicit and auditable.
+
+## 2026-10-14 - Series Metadata and Non-Destructive AI Enrichment
+
+- Decision: store jigsaw series data in dedicated optional fields (`series_name`, `series_number`) instead of embedding it in `title`.
+- Why: preserves canonical puzzle titles, avoids fragile string parsing, and supports cleaner filtering/reporting.
+- Decision: update AI extraction contract to return `title`, `series_name`, and `series_number` separately.
+- Why: box text often mixes branding and title; explicit fields improve downstream normalization and editing.
+- Decision: add admin enrich-from-images flow that analyzes all assigned images and fills only empty fields by default.
+- Why: back/side images often contain missing metadata (dimensions, artist, publisher), and non-destructive behavior prevents accidental overwrites.
