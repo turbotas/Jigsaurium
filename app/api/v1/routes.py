@@ -163,6 +163,31 @@ def _serialize_diary_entry(entry):
     }
 
 
+def _serialize_diary_feed_entry(*, entry, jigsaw_title=None, source_image=None):
+    payload = _serialize_diary_entry(entry)
+    payload["entry_type"] = "diary_entry"
+    payload["jigsaw_title"] = jigsaw_title
+    payload["source_image"] = _serialize_jigsaw_image(source_image) if source_image is not None else None
+    return payload
+
+
+def _serialize_diary_feed_orphan_completed_image(image):
+    completed_at = image.captured_at or image.created_at
+    return {
+        "entry_type": "orphan_completed_image",
+        "id": image.id,
+        "jigsaw_id": None,
+        "jigsaw_title": None,
+        "source_image_id": image.id,
+        "completed_at": completed_at.isoformat() if completed_at else None,
+        "difficulty": None,
+        "notes": None,
+        "created_at": image.created_at.isoformat() if image.created_at else None,
+        "updated_at": None,
+        "source_image": _serialize_jigsaw_image(image),
+    }
+
+
 def _serialize_audit_event(event):
     return {
         "id": event.id,
@@ -963,6 +988,16 @@ def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger):
         },
     )
     return entry
+
+
+def _recompute_jigsaw_last_completed_at(db_session, jigsaw):
+    if jigsaw is None:
+        return
+
+    latest_completed_at = db_session.execute(
+        select(func.max(JigsawDiaryEntry.completed_at)).where(JigsawDiaryEntry.jigsaw_id == jigsaw.id)
+    ).scalar_one()
+    jigsaw.last_completed_at = latest_completed_at
 
 
 def _create_jigsaw_image_record(
@@ -3607,6 +3642,123 @@ def list_diary_entries(jigsaw_id):
     return _success_response(payload)
 
 
+@api_v1_bp.get("/diary-feed")
+@require_auth
+def list_diary_feed_entries():
+    raw_limit = request.args.get("limit", "200")
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "limit", "issue": "must be an integer"}],
+        )
+
+    if limit < 1 or limit > 500:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "limit", "issue": "must be between 1 and 500"}],
+        )
+
+    selected_jigsaw_id = None
+    raw_jigsaw_id = request.args.get("jigsaw_id")
+    if raw_jigsaw_id is not None and raw_jigsaw_id.strip() != "":
+        try:
+            selected_jigsaw_id = int(raw_jigsaw_id)
+        except ValueError:
+            return _error_response(
+                "validation_error",
+                "Invalid request payload.",
+                422,
+                [{"field": "jigsaw_id", "issue": "must be a positive integer"}],
+            )
+        if selected_jigsaw_id <= 0:
+            return _error_response(
+                "validation_error",
+                "Invalid request payload.",
+                422,
+                [{"field": "jigsaw_id", "issue": "must be a positive integer"}],
+            )
+
+    db_session = get_session()
+
+    if selected_jigsaw_id is not None:
+        selected_jigsaw = db_session.get(Jigsaw, selected_jigsaw_id)
+        if selected_jigsaw is None:
+            return _error_response("not_found", "Jigsaw was not found.", 404)
+        if "administrator" not in g.current_user_roles and selected_jigsaw.status == JigsawStatus.RETIRED:
+            return _error_response("not_found", "Jigsaw was not found.", 404)
+
+    diary_stmt = (
+        select(JigsawDiaryEntry, Jigsaw.title)
+        .join(Jigsaw, Jigsaw.id == JigsawDiaryEntry.jigsaw_id)
+        .order_by(JigsawDiaryEntry.completed_at.desc(), JigsawDiaryEntry.id.desc())
+        .limit(limit)
+    )
+    if "administrator" not in g.current_user_roles:
+        diary_stmt = diary_stmt.where(Jigsaw.status != JigsawStatus.RETIRED)
+    if selected_jigsaw_id is not None:
+        diary_stmt = diary_stmt.where(JigsawDiaryEntry.jigsaw_id == selected_jigsaw_id)
+
+    diary_rows = db_session.execute(diary_stmt).all()
+    source_image_ids = {
+        row[0].source_image_id
+        for row in diary_rows
+        if row[0].source_image_id is not None
+    }
+    source_images_by_id = {}
+    if source_image_ids:
+        source_images = db_session.execute(
+            select(JigsawImage).where(JigsawImage.id.in_(source_image_ids))
+        ).scalars().all()
+        source_images_by_id = {image.id: image for image in source_images}
+
+    diary_feed_items = [
+        _serialize_diary_feed_entry(
+            entry=entry,
+            jigsaw_title=jigsaw_title,
+            source_image=source_images_by_id.get(entry.source_image_id),
+        )
+        for entry, jigsaw_title in diary_rows
+    ]
+
+    orphan_feed_items = []
+    if selected_jigsaw_id is None:
+        orphan_candidates = db_session.execute(
+            select(JigsawImage)
+            .where(
+                JigsawImage.jigsaw_id.is_(None),
+                func.lower(func.coalesce(JigsawImage.tag, "")).like("completed%"),
+            )
+            .order_by(func.coalesce(JigsawImage.captured_at, JigsawImage.created_at).desc(), JigsawImage.id.desc())
+            .limit(limit)
+        ).scalars().all()
+        orphan_feed_items = [
+            _serialize_diary_feed_orphan_completed_image(image)
+            for image in orphan_candidates
+            if _is_completed_image_tag(image.tag)
+        ]
+
+    merged_items = diary_feed_items + orphan_feed_items
+
+    def _sort_key(item):
+        completed_at_raw = item.get("completed_at")
+        if not completed_at_raw:
+            return datetime.min.replace(tzinfo=timezone.utc), 0
+        completed_at = datetime.fromisoformat(str(completed_at_raw))
+        if completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=timezone.utc)
+        return completed_at, int(item.get("id") or 0)
+
+    merged_items.sort(key=_sort_key, reverse=True)
+
+    return _success_response(merged_items[:limit])
+
+
 @api_v1_bp.post("/jigsaws/<int:jigsaw_id>/diary-entries")
 @require_role("administrator")
 def create_diary_entry(jigsaw_id):
@@ -3679,11 +3831,7 @@ def delete_diary_entry(entry_id):
     db_session.delete(entry)
     db_session.flush()
 
-    if jigsaw is not None:
-        latest_completed_at = db_session.execute(
-            select(func.max(JigsawDiaryEntry.completed_at)).where(JigsawDiaryEntry.jigsaw_id == jigsaw.id)
-        ).scalar_one()
-        jigsaw.last_completed_at = latest_completed_at
+    _recompute_jigsaw_last_completed_at(db_session, jigsaw)
 
     _record_audit_event(
         action="jigsaw.diary_entry_deleted",
@@ -3694,6 +3842,80 @@ def delete_diary_entry(entry_id):
     db_session.commit()
 
     return _success_response(serialized)
+
+
+@api_v1_bp.patch("/diary-entries/<int:entry_id>")
+@require_role("administrator")
+def update_diary_entry(entry_id):
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    db_session = get_session()
+    entry = db_session.get(JigsawDiaryEntry, entry_id)
+    if entry is None:
+        return _error_response("not_found", "Diary entry was not found.", 404)
+
+    mutable_fields = {"completed_at", "difficulty", "notes"}
+    if not any(field in payload for field in mutable_fields):
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "payload", "issue": "must include at least one of: completed_at, difficulty, notes"}],
+        )
+
+    if "completed_at" in payload:
+        completed_at, error = _parse_optional_iso_datetime(payload.get("completed_at"), "completed_at")
+        if error is not None:
+            return error
+        if completed_at is None:
+            return _error_response(
+                "validation_error",
+                "Invalid request payload.",
+                422,
+                [{"field": "completed_at", "issue": "must be a valid datetime when provided"}],
+            )
+    else:
+        completed_at = entry.completed_at
+
+    if "difficulty" in payload:
+        difficulty, error = _parse_optional_difficulty(payload.get("difficulty"))
+        if error is not None:
+            return error
+    else:
+        difficulty = entry.difficulty
+
+    if "notes" in payload:
+        notes, error = _validate_optional_text_field(
+            payload.get("notes"), field_name="notes", max_length=DIARY_ENTRY_NOTES_MAX_LENGTH
+        )
+        if error is not None:
+            return error
+    else:
+        notes = entry.notes
+
+    entry.completed_at = completed_at
+    entry.difficulty = difficulty
+    entry.notes = notes
+    db_session.flush()
+
+    jigsaw = db_session.get(Jigsaw, entry.jigsaw_id)
+    _recompute_jigsaw_last_completed_at(db_session, jigsaw)
+
+    _record_audit_event(
+        action="jigsaw.diary_entry_updated",
+        entity_type="jigsaw_diary_entry",
+        entity_id=entry.id,
+        payload={
+            "jigsaw_id": entry.jigsaw_id,
+            "completed_at": entry.completed_at.isoformat(),
+            "difficulty": entry.difficulty,
+        },
+    )
+    db_session.commit()
+
+    return _success_response(_serialize_diary_entry(entry))
 
 
 @api_v1_bp.delete("/jigsaws/<int:jigsaw_id>")

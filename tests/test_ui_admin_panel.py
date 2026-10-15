@@ -278,10 +278,18 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#diary-entry-form button[type='submit']")
         page.wait_for_selector("text=Diary entry added.")
         page.wait_for_selector("#diary-entries-table-body tr:has-text('UI diary entry')")
+        diary_row = page.locator("#diary-entries-table-body tr", has_text="UI diary entry")
+        diary_row.locator("button[data-diary-edit]").click()
+        page.fill("#diary-notes", "UI diary entry edited")
+        page.select_option("#diary-difficulty", "5")
+        page.click("#diary-entry-submit")
+        page.wait_for_selector("text=Diary entry updated.")
+        page.wait_for_selector("#diary-entries-table-body tr:has-text('UI diary entry edited'):has-text('5')")
         assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(3).inner_text() != "-"
         assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(0).locator("img").count() >= 1
 
-        page.locator("#diary-entries-table-body tr", has_text="UI diary entry").locator("button[data-diary-delete]").click()
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.locator("#diary-entries-table-body tr", has_text="UI diary entry edited").locator("button[data-diary-delete]").click()
         page.wait_for_selector("text=Diary entry deleted.")
         page.wait_for_selector("#diary-entries-table-body td:has-text('No diary entries found.')")
 

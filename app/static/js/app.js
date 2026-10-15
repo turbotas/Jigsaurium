@@ -32,6 +32,7 @@
     aiUsageRecentById: {},
     imageBrowserContentCacheByImageId: {},
     diaryEntries: [],
+    diaryEditingEntryId: null,
     bulkUploadFiles: [],
     imageBrowser: {
       isOpen: false,
@@ -143,6 +144,8 @@
     imageBrowserSave: document.getElementById("image-browser-save"),
     imageBrowserClose: document.getElementById("image-browser-close"),
     diaryEntryForm: document.getElementById("diary-entry-form"),
+    diaryEntrySubmitButton: document.getElementById("diary-entry-submit"),
+    diaryEntryCancelButton: document.getElementById("diary-entry-cancel"),
     diaryJigsawId: document.getElementById("diary-jigsaw-id"),
     diaryCompletedAt: document.getElementById("diary-completed-at"),
     diaryDifficulty: document.getElementById("diary-difficulty"),
@@ -821,7 +824,7 @@
 
     const resolvedJigsawId = Number(selectedJigsawId || "0");
     if (!resolvedJigsawId) {
-      elements.diaryEntriesCaption.textContent = "Recent diary entries across completed jigsaws (most recent first)";
+      elements.diaryEntriesCaption.textContent = "Recent diary entries and unlinked completed images (most recent first)";
       return;
     }
 
@@ -829,7 +832,81 @@
     elements.diaryEntriesCaption.textContent = `Diary entries for ${jigsawTitle} (most recent first)`;
   }
 
+  function resetDiaryEntryFormEditingState({ keepJigsawSelection = true } = {}) {
+    state.diaryEditingEntryId = null;
+
+    if (elements.diaryEntrySubmitButton) {
+      elements.diaryEntrySubmitButton.textContent = "Add diary entry";
+    }
+    if (elements.diaryEntryCancelButton) {
+      elements.diaryEntryCancelButton.hidden = true;
+    }
+    if (elements.diaryJigsawId) {
+      elements.diaryJigsawId.disabled = false;
+      if (!keepJigsawSelection) {
+        elements.diaryJigsawId.value = "";
+      }
+    }
+    if (elements.diaryCompletedAt) {
+      elements.diaryCompletedAt.value = "";
+    }
+    if (elements.diaryDifficulty) {
+      elements.diaryDifficulty.value = "";
+    }
+    if (elements.diaryNotes) {
+      elements.diaryNotes.value = "";
+    }
+  }
+
+  function beginDiaryEntryEdit(entryId) {
+    const resolvedEntryId = Number(entryId || "0");
+    if (!resolvedEntryId) {
+      return;
+    }
+
+    const entry = Array.isArray(state.diaryEntries)
+      ? state.diaryEntries.find(
+        (candidate) => candidate?.entry_type !== "orphan_completed_image" && Number(candidate.id) === resolvedEntryId,
+      )
+      : null;
+    if (!entry) {
+      showFeedback("Diary entry was not found.", true);
+      return;
+    }
+
+    state.diaryEditingEntryId = resolvedEntryId;
+    if (elements.diaryJigsawId) {
+      elements.diaryJigsawId.value = String(entry.jigsaw_id || "");
+      elements.diaryJigsawId.disabled = true;
+    }
+    if (elements.diaryCompletedAt) {
+      elements.diaryCompletedAt.value = toDatetimeLocalValue(entry.completed_at);
+    }
+    if (elements.diaryDifficulty) {
+      elements.diaryDifficulty.value = entry.difficulty === null || entry.difficulty === undefined ? "" : String(entry.difficulty);
+    }
+    if (elements.diaryNotes) {
+      elements.diaryNotes.value = String(entry.notes || "");
+    }
+    if (elements.diaryEntrySubmitButton) {
+      elements.diaryEntrySubmitButton.textContent = "Save diary entry";
+    }
+    if (elements.diaryEntryCancelButton) {
+      elements.diaryEntryCancelButton.hidden = false;
+    }
+  }
+
   function getDiaryEntryImageUrls(entry) {
+    const sourceImage = entry?.source_image;
+    if (sourceImage) {
+      const sourceImageId = Number(sourceImage?.id || entry?.source_image_id || 0);
+      return {
+        thumbnailUrl: String(sourceImage?.thumbnail_url || (sourceImageId ? `/api/v1/images/${sourceImageId}/content?variant=thumbnail` : "")),
+        previewUrl: String(sourceImage?.preview_url || (sourceImageId ? `/api/v1/images/${sourceImageId}/content?variant=preview` : "")),
+        openUrl: String(sourceImage?.content_url || (sourceImageId ? `/api/v1/images/${sourceImageId}/content` : "")),
+      };
+    }
+
     const sourceImageId = Number(entry?.source_image_id || 0);
     if (!sourceImageId) {
       return {
@@ -882,6 +959,7 @@
     }
 
     if (!state.user) {
+      resetDiaryEntryFormEditingState({ keepJigsawSelection: false });
       elements.sessionSummary.textContent = "Not signed in.";
       if (elements.adminSections) {
         elements.adminSections.hidden = true;
@@ -929,6 +1007,9 @@
     }
     if (elements.accountSection) {
       elements.accountSection.hidden = false;
+    }
+    if (state.diaryEditingEntryId && (!Array.isArray(state.user.roles) || !state.user.roles.includes("administrator"))) {
+      resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
     }
     if (elements.accountUsername) {
       elements.accountUsername.value = state.user.display_name || "";
@@ -2406,11 +2487,18 @@
     entries.forEach((entry) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
+      const isFormalDiaryEntry = entry?.entry_type !== "orphan_completed_image";
 
       const sourceImageUrls = getDiaryEntryImageUrls(entry);
+      const jigsawLabel = isFormalDiaryEntry
+        ? getJigsawTitleById(entry.jigsaw_id)
+        : "Unlinked completion";
+      const identifierLabel = isFormalDiaryEntry
+        ? String(entry.id)
+        : `Image #${Number(entry?.source_image_id || entry?.id || 0)}`;
 
-      row.appendChild(buildCell(String(entry.id)));
-      row.appendChild(buildCell(getJigsawTitleById(entry.jigsaw_id)));
+      row.appendChild(buildCell(identifierLabel));
+      row.appendChild(buildCell(jigsawLabel));
       row.appendChild(
         buildThumbnailCell(sourceImageUrls.thumbnailUrl, {
           altText: `Completed image for diary entry ${entry.id}`,
@@ -2420,18 +2508,38 @@
         })
       );
       row.appendChild(buildCell(toLocalTimestamp(entry.completed_at)));
-      row.appendChild(buildCell(entry.difficulty === null || entry.difficulty === undefined ? "-" : String(entry.difficulty)));
-      row.appendChild(buildCell(String(entry.notes || "-")));
+      row.appendChild(
+        buildCell(
+          isFormalDiaryEntry && entry.difficulty !== null && entry.difficulty !== undefined
+            ? String(entry.difficulty)
+            : "-",
+        ),
+      );
+      row.appendChild(buildCell(isFormalDiaryEntry ? String(entry.notes || "-") : "-"));
 
       const actionCell = document.createElement("td");
       actionCell.className = "govuk-table__cell";
 
-      const deleteButton = document.createElement("button");
-      deleteButton.type = "button";
-      deleteButton.className = "app-action-link";
-      deleteButton.dataset.diaryDelete = String(entry.id);
-      deleteButton.textContent = "Delete";
-      actionCell.appendChild(deleteButton);
+      const isAdministrator = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
+      if (isFormalDiaryEntry && isAdministrator) {
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        editButton.setAttribute("data-module", "govuk-button");
+        editButton.dataset.diaryEdit = String(entry.id);
+        editButton.textContent = "Edit";
+
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "govuk-button govuk-button--warning app-inline-button";
+        deleteButton.setAttribute("data-module", "govuk-button");
+        deleteButton.dataset.diaryDelete = String(entry.id);
+        deleteButton.textContent = "Delete";
+        actionCell.appendChild(editButton);
+        actionCell.appendChild(deleteButton);
+      } else {
+        actionCell.textContent = "-";
+      }
 
       row.appendChild(actionCell);
       tableBody.appendChild(row);
@@ -2580,66 +2688,24 @@
 
     setDiaryEntriesCaption(selectedJigsawId);
 
-    if (!selectedJigsawId) {
-      const completedJigsawIds = (Array.isArray(state.jigsaws) ? state.jigsaws : [])
-        .filter((jigsaw) => Boolean(jigsaw.last_completed_at))
-        .map((jigsaw) => Number(jigsaw.id))
-        .filter((jigsawId) => jigsawId > 0);
-
-      if (completedJigsawIds.length === 0) {
-        state.diaryEntries = [];
-        renderDiaryEntries([], "No diary entries found for completed jigsaws.");
-        return;
-      }
-
-      try {
-        const settledResults = await Promise.allSettled(
-          completedJigsawIds.map((jigsawId) => apiRequest(`/api/v1/jigsaws/${jigsawId}/diary-entries`)),
-        );
-
-        const mergedEntries = [];
-        let firstError = null;
-        settledResults.forEach((result) => {
-          if (result.status === "fulfilled") {
-            const entries = Array.isArray(result.value?.data) ? result.value.data : [];
-            mergedEntries.push(...entries);
-            return;
-          }
-          if (!firstError) {
-            firstError = result.reason;
-          }
-        });
-
-        mergedEntries.sort((left, right) => {
-          const leftCompletedAt = Date.parse(String(left.completed_at || "")) || 0;
-          const rightCompletedAt = Date.parse(String(right.completed_at || "")) || 0;
-          if (rightCompletedAt !== leftCompletedAt) {
-            return rightCompletedAt - leftCompletedAt;
-          }
-          return Number(right.id || 0) - Number(left.id || 0);
-        });
-
-        state.diaryEntries = mergedEntries;
-        renderDiaryEntries(state.diaryEntries, "No diary entries found for completed jigsaws.");
-
-        if (firstError && mergedEntries.length === 0) {
-          throw firstError;
-        }
-      } catch (error) {
-        state.diaryEntries = [];
-        renderDiaryEntries([], "No diary entries found for completed jigsaws.");
-        showFeedback(error.message, true);
-      }
-      return;
-    }
-
     try {
-      const payload = await apiRequest(`/api/v1/jigsaws/${selectedJigsawId}/diary-entries`);
+      const query = selectedJigsawId > 0 ? `?jigsaw_id=${selectedJigsawId}` : "";
+      const payload = await apiRequest(`/api/v1/diary-feed${query}`);
       state.diaryEntries = Array.isArray(payload.data) ? payload.data : [];
-      renderDiaryEntries(state.diaryEntries);
+      renderDiaryEntries(
+        state.diaryEntries,
+        selectedJigsawId > 0
+          ? "No diary entries found."
+          : "No diary entries or unlinked completed images found.",
+      );
     } catch (error) {
       state.diaryEntries = [];
-      renderDiaryEntries([]);
+      renderDiaryEntries(
+        [],
+        selectedJigsawId > 0
+          ? "No diary entries found."
+          : "No diary entries or unlinked completed images found.",
+      );
       showFeedback(error.message, true);
     }
   }
@@ -3026,9 +3092,10 @@
 
     const form = event.currentTarget;
     const formData = new FormData(form);
+    const editingEntryId = Number(state.diaryEditingEntryId || "0");
     const jigsawId = Number(formData.get("jigsaw_id") || "0");
 
-    if (!jigsawId) {
+    if (!editingEntryId && !jigsawId) {
       showFeedback("Select a jigsaw before adding a diary entry.", true);
       return;
     }
@@ -3039,20 +3106,34 @@
       notes: String(formData.get("notes") || "").trim() || null,
     };
 
+    if (editingEntryId && !payload.completed_at) {
+      showFeedback("Completed at is required when editing a diary entry.", true);
+      return;
+    }
+
     try {
-      await apiRequest(`/api/v1/jigsaws/${jigsawId}/diary-entries`, {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      showFeedback("Diary entry added.");
-      if (elements.diaryCompletedAt) {
-        elements.diaryCompletedAt.value = "";
-      }
-      if (elements.diaryDifficulty) {
-        elements.diaryDifficulty.value = "";
-      }
-      if (elements.diaryNotes) {
-        elements.diaryNotes.value = "";
+      if (editingEntryId) {
+        await apiRequest(`/api/v1/diary-entries/${editingEntryId}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
+        showFeedback("Diary entry updated.");
+        resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
+      } else {
+        await apiRequest(`/api/v1/jigsaws/${jigsawId}/diary-entries`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        showFeedback("Diary entry added.");
+        if (elements.diaryCompletedAt) {
+          elements.diaryCompletedAt.value = "";
+        }
+        if (elements.diaryDifficulty) {
+          elements.diaryDifficulty.value = "";
+        }
+        if (elements.diaryNotes) {
+          elements.diaryNotes.value = "";
+        }
       }
       await Promise.all([loadDiaryEntriesForSelected(), loadJigsaws(), loadAuditEvents()]);
     } catch (error) {
@@ -3507,14 +3588,32 @@
       return;
     }
 
+    const diaryEditButton = event.target.closest("[data-diary-edit]");
+    if (diaryEditButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const entryId = Number(diaryEditButton.getAttribute("data-diary-edit"));
+      beginDiaryEntryEdit(entryId);
+      return;
+    }
+
     const diaryDeleteButton = event.target.closest("[data-diary-delete]");
     if (diaryDeleteButton) {
       event.preventDefault();
       clearFeedback();
 
       const entryId = Number(diaryDeleteButton.getAttribute("data-diary-delete"));
+      const shouldDelete = window.confirm("Delete this diary entry? This cannot be undone.");
+      if (!shouldDelete) {
+        return;
+      }
+
       try {
         await apiRequest(`/api/v1/diary-entries/${entryId}`, { method: "DELETE" });
+        if (state.diaryEditingEntryId === entryId) {
+          resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
+        }
         showFeedback("Diary entry deleted.");
         await Promise.all([loadDiaryEntriesForSelected(), loadJigsaws(), loadAuditEvents()]);
       } catch (error) {
@@ -3673,6 +3772,11 @@
   function handleDiarySelectionChange() {
     clearFeedback();
     loadDiaryEntriesForSelected();
+  }
+
+  function handleDiaryEntryCancelEdit() {
+    clearFeedback();
+    resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
   }
 
   function handleJigsawImageSelectionChange() {
@@ -3958,6 +4062,10 @@
 
     if (elements.diaryEntryForm) {
       elements.diaryEntryForm.addEventListener("submit", handleCreateDiaryEntry);
+    }
+
+    if (elements.diaryEntryCancelButton) {
+      elements.diaryEntryCancelButton.addEventListener("click", handleDiaryEntryCancelEdit);
     }
 
     if (elements.diaryJigsawId) {

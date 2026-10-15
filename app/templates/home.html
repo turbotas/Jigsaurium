@@ -571,7 +571,7 @@
 
     <section class="govuk-!-margin-top-6" aria-labelledby="jigsaw-diary-heading">
       <h3 id="jigsaw-diary-heading" class="govuk-heading-m">Completion diary</h3>
-      <p class="govuk-body">Log each completion with a difficulty rating (1 = easy, 5 = very hard) and notes.</p>
+      <p class="govuk-body">Log each completion with a difficulty rating (1 = easy, 5 = very hard) and notes. Existing entries can be edited or deleted from the table below.</p>
       <form id="diary-entry-form" class="govuk-!-margin-bottom-4">
         <div class="govuk-grid-row">
           <div class="govuk-grid-column-one-third">
@@ -607,12 +607,13 @@
           <label class="govuk-label" for="diary-notes">Notes</label>
           <textarea id="diary-notes" name="notes" class="govuk-textarea" rows="3" maxlength="4000"></textarea>
         </div>
-        <button type="submit" class="govuk-button" data-module="govuk-button">Add diary entry</button>
+        <button id="diary-entry-submit" type="submit" class="govuk-button" data-module="govuk-button">Add diary entry</button>
+        <button id="diary-entry-cancel" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Cancel edit</button>
       </form>
 
       <div class="table-scroll-wrap">
         <table class="govuk-table" id="diary-entries-table">
-          <caption id="diary-entries-caption" class="govuk-table__caption govuk-table__caption--m">Recent diary entries across completed jigsaws (most recent first)</caption>
+          <caption id="diary-entries-caption" class="govuk-table__caption govuk-table__caption--m">Recent diary entries and unlinked completed images (most recent first)</caption>
           <thead class="govuk-table__head">
             <tr class="govuk-table__row">
               <th class="govuk-table__header">ID</th>

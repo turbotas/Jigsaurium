@@ -60,10 +60,12 @@
 - Tagging an assigned image as `Completed`, or assigning an image already tagged `Completed`, auto-creates one diary entry per image.
 - Auto-created diary entries use image `captured_at` when available; otherwise they use current UTC time.
 - Diary entries are hard-deleted; deleting a jigsaw cascades to its diary entries.
-- Diary entry lists are visible to any authenticated user for non-retired jigsaws; create and delete are administrator-only.
+- Diary entry lists are visible to any authenticated user for non-retired jigsaws; create, update, and delete are administrator-only.
+- A merged completion feed is available to authenticated users and includes both formal diary entries and unassigned `Completed` images.
+- In merged-feed views, unassigned completed images are represented as orphan completion rows until linked to a jigsaw.
 - `jigsaws.last_completed_at` is maintained from diary activity:
   - Creating an entry moves it forward when the entry's `completed_at` is newer.
-  - Deleting an entry recomputes it to the latest remaining entry's `completed_at`, or clears it when no entries remain.
+  - Updating or deleting an entry recomputes it to the latest remaining entry's `completed_at`, or clears it when no entries remain.
   - Manual override via jigsaw update remains possible but may be overwritten by later diary activity.
 
 ## Jigsaw State Transitions

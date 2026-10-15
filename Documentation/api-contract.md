@@ -54,7 +54,9 @@
 - `POST /api/v1/image-library/images/{image_id}/create-jigsaw`
 - `GET /api/v1/images/{image_id}/content`
 - `GET /api/v1/jigsaws/{id}/diary-entries`
+- `GET /api/v1/diary-feed`
 - `POST /api/v1/jigsaws/{id}/diary-entries`
+- `PATCH /api/v1/diary-entries/{id}`
 - `DELETE /api/v1/diary-entries/{id}`
 
 ## Filtering, Sorting, Pagination
@@ -249,15 +251,26 @@
 
 - Diary endpoint notes:
   - `GET /api/v1/jigsaws/{id}/diary-entries` requires authentication; retired jigsaws return `404` for non-admin callers. Entries are ordered by `completed_at` descending.
+  - `GET /api/v1/diary-feed` requires authentication and returns a merged, newest-first feed of:
+    - formal diary entries (`entry_type = diary_entry`)
+    - unassigned completed images (`entry_type = orphan_completed_image`)
+  - `GET /api/v1/diary-feed` supports optional query params:
+    - `jigsaw_id` (positive integer): returns entries for one jigsaw; orphan rows are excluded in this mode
+    - `limit` (integer `1..500`, default `200`)
+  - Non-admin callers do not receive feed rows tied to retired jigsaws.
   - `POST /api/v1/jigsaws/{id}/diary-entries` is admin-only. Request body fields are all optional:
     - `completed_at` (UTC ISO 8601 datetime; defaults to current UTC time)
     - `difficulty` (integer 1-5, or empty)
     - `notes` (string up to 4000 characters, no control characters)
   - Creating an entry moves the parent jigsaw's `last_completed_at` forward when the entry is newer.
+  - `PATCH /api/v1/diary-entries/{id}` is admin-only and updates one or more of `completed_at`, `difficulty`, `notes`.
+    - At least one of those fields must be included.
+    - `completed_at` must be a valid datetime when provided.
+  - Updating an entry recomputes the parent jigsaw `last_completed_at` from the latest remaining diary entry timestamp.
   - Tagging an assigned image as `Completed` auto-creates one diary entry (idempotent per image) using the image `captured_at` when available; fallback is current UTC time.
   - Assigning an already-`Completed` image to a jigsaw triggers the same auto-diary behavior.
   - `DELETE /api/v1/diary-entries/{id}` is admin-only and returns the deleted entry; the parent jigsaw's `last_completed_at` is recomputed from remaining entries.
-  - Diary entry create/delete write audit events (`jigsaw.diary_entry_created`, `jigsaw.diary_entry_deleted`).
+  - Diary entry create/update/delete write audit events (`jigsaw.diary_entry_created`, `jigsaw.diary_entry_updated`, `jigsaw.diary_entry_deleted`).
 
 ## HTTP Status Rules
 

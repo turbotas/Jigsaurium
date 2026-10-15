@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.db import get_session
-from app.models import AuditEvent, Jigsaw, Role, User, UserRole
+from app.models import AuditEvent, Jigsaw, JigsawImage, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
 
 
@@ -86,12 +86,29 @@ def _get_jigsaw(client, jigsaw_id):
     return client.get(f"/api/v1/jigsaws/{jigsaw_id}")
 
 
+def _update_entry(client, entry_id, payload):
+    return client.patch(
+        f"/api/v1/diary-entries/{entry_id}",
+        json=payload,
+        headers=_csrf_headers(),
+    )
+
+
+def _list_diary_feed(client, params=None):
+    query = ""
+    if params:
+        query = "?" + "&".join(f"{key}={value}" for key, value in params.items())
+    return client.get(f"/api/v1/diary-feed{query}")
+
+
 @pytest.mark.functional
 @pytest.mark.parametrize(
     ("method", "path", "json_payload"),
     [
+        ("GET", "/api/v1/diary-feed", None),
         ("GET", "/api/v1/jigsaws/1/diary-entries", None),
         ("POST", "/api/v1/jigsaws/1/diary-entries", {"notes": "No session"}),
+        ("PATCH", "/api/v1/diary-entries/1", {"notes": "No session"}),
         ("DELETE", "/api/v1/diary-entries/1", None),
     ],
 )
@@ -120,6 +137,19 @@ def test_diary_delete_forbidden_for_borrower(client, seeded_diary_data):
 
     _set_user_session(client, seeded_diary_data["borrower_user_id"])
     response = client.delete(f"/api/v1/diary-entries/{entry_id}", headers=_csrf_headers())
+
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "forbidden"
+
+
+@pytest.mark.functional
+def test_diary_update_forbidden_for_borrower(client, seeded_diary_data):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+    created = _create_entry(client, seeded_diary_data["available_jigsaw_id"], {"notes": "Mine"})
+    entry_id = created.get_json()["data"]["id"]
+
+    _set_user_session(client, seeded_diary_data["borrower_user_id"])
+    response = _update_entry(client, entry_id, {"notes": "Nope"})
 
     assert response.status_code == 403
     assert response.get_json()["error"]["code"] == "forbidden"
@@ -318,6 +348,107 @@ def test_diary_list_orders_newest_completion_first(client, seeded_diary_data):
 
 
 @pytest.mark.functional
+def test_diary_feed_includes_orphan_completed_images(client, seeded_diary_data, app):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+    jigsaw_id = seeded_diary_data["available_jigsaw_id"]
+    _create_entry(client, jigsaw_id, {"completed_at": "2026-09-01T10:00:00Z", "notes": "formal"})
+
+    with app.app_context():
+        db_session = get_session()
+        orphan_completed = JigsawImage(
+            jigsaw_id=None,
+            tag="Completed",
+            filename="orphan-completed.png",
+            mime_type="image/png",
+            image_data=b"\x89PNG\r\n\x1a\n" + b"o" * 24,
+            captured_at=datetime(2026, 9, 2, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        orphan_untagged = JigsawImage(
+            jigsaw_id=None,
+            tag="untagged",
+            filename="orphan-untagged.png",
+            mime_type="image/png",
+            image_data=b"\x89PNG\r\n\x1a\n" + b"u" * 24,
+        )
+        db_session.add_all([orphan_completed, orphan_untagged])
+        db_session.commit()
+
+    response = _list_diary_feed(client)
+
+    assert response.status_code == 200
+    rows = response.get_json()["data"]
+    assert any(row["entry_type"] == "diary_entry" and row["notes"] == "formal" for row in rows)
+    orphan_rows = [row for row in rows if row["entry_type"] == "orphan_completed_image"]
+    assert len(orphan_rows) == 1
+    assert orphan_rows[0]["source_image"]["filename"] == "orphan-completed.png"
+
+
+@pytest.mark.functional
+def test_diary_feed_borrower_hides_retired_jigsaw_entries_but_keeps_orphans(client, seeded_diary_data, app):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+    _create_entry(client, seeded_diary_data["retired_jigsaw_id"], {"notes": "retired"})
+
+    with app.app_context():
+        db_session = get_session()
+        orphan_completed = JigsawImage(
+            jigsaw_id=None,
+            tag="Completed",
+            filename="borrower-visible-orphan.png",
+            mime_type="image/png",
+            image_data=b"\x89PNG\r\n\x1a\n" + b"v" * 24,
+        )
+        db_session.add(orphan_completed)
+        db_session.commit()
+
+    _set_user_session(client, seeded_diary_data["borrower_user_id"])
+    response = _list_diary_feed(client)
+
+    assert response.status_code == 200
+    rows = response.get_json()["data"]
+    assert not any(row["entry_type"] == "diary_entry" and row.get("jigsaw_id") == seeded_diary_data["retired_jigsaw_id"] for row in rows)
+    assert any(row["entry_type"] == "orphan_completed_image" and row["source_image"]["filename"] == "borrower-visible-orphan.png" for row in rows)
+
+
+@pytest.mark.functional
+def test_diary_feed_jigsaw_filter_excludes_orphan_rows(client, seeded_diary_data, app):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+    jigsaw_id = seeded_diary_data["available_jigsaw_id"]
+    _create_entry(client, jigsaw_id, {"notes": "only-jigsaw"})
+
+    with app.app_context():
+        db_session = get_session()
+        orphan_completed = JigsawImage(
+            jigsaw_id=None,
+            tag="Completed",
+            filename="should-not-appear.png",
+            mime_type="image/png",
+            image_data=b"\x89PNG\r\n\x1a\n" + b"w" * 24,
+        )
+        db_session.add(orphan_completed)
+        db_session.commit()
+
+    response = _list_diary_feed(client, {"jigsaw_id": jigsaw_id})
+
+    assert response.status_code == 200
+    rows = response.get_json()["data"]
+    assert any(row["entry_type"] == "diary_entry" and row["notes"] == "only-jigsaw" for row in rows)
+    assert not any(row["entry_type"] == "orphan_completed_image" for row in rows)
+
+
+@pytest.mark.functional
+def test_diary_feed_validates_query_params(client, seeded_diary_data):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+
+    bad_limit = _list_diary_feed(client, {"limit": "zero"})
+    assert bad_limit.status_code == 422
+    assert bad_limit.get_json()["error"]["details"][0]["field"] == "limit"
+
+    bad_jigsaw_id = _list_diary_feed(client, {"jigsaw_id": "abc"})
+    assert bad_jigsaw_id.status_code == 422
+    assert bad_jigsaw_id.get_json()["error"]["details"][0]["field"] == "jigsaw_id"
+
+
+@pytest.mark.functional
 def test_diary_delete_recomputes_last_completed(client, seeded_diary_data, app):
     _set_user_session(client, seeded_diary_data["admin_user_id"])
     jigsaw_id = seeded_diary_data["available_jigsaw_id"]
@@ -342,6 +473,75 @@ def test_diary_delete_recomputes_last_completed(client, seeded_diary_data, app):
         db_session = get_session()
         events = db_session.query(AuditEvent).filter_by(action="jigsaw.diary_entry_deleted").count()
         assert events == 2
+
+
+@pytest.mark.functional
+def test_diary_update_changes_fields_and_recomputes_last_completed(client, seeded_diary_data, app):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+    jigsaw_id = seeded_diary_data["available_jigsaw_id"]
+
+    earlier = _create_entry(client, jigsaw_id, {"completed_at": "2026-08-01T10:00:00Z", "notes": "earlier"}).get_json()["data"]
+    later = _create_entry(client, jigsaw_id, {"completed_at": "2026-10-01T10:00:00Z", "notes": "later"}).get_json()["data"]
+
+    response = _update_entry(
+        client,
+        later["id"],
+        {
+            "completed_at": "2026-07-01T10:00:00Z",
+            "difficulty": "2",
+            "notes": "updated",
+        },
+    )
+
+    assert response.status_code == 200
+    updated = response.get_json()["data"]
+    assert updated["difficulty"] == 2
+    assert updated["notes"] == "updated"
+    assert updated["completed_at"].startswith("2026-07-01T10:00:00")
+
+    jigsaw_payload = _get_jigsaw(client, jigsaw_id).get_json()["data"]
+    assert jigsaw_payload["last_completed_at"].startswith("2026-08-01T10:00:00")
+
+    with app.app_context():
+        db_session = get_session()
+        event = db_session.query(AuditEvent).filter_by(action="jigsaw.diary_entry_updated").one()
+        assert event.entity_type == "jigsaw_diary_entry"
+        assert event.entity_id == str(later["id"])
+
+
+@pytest.mark.functional
+def test_diary_update_validates_payload(client, seeded_diary_data):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+    created = _create_entry(client, seeded_diary_data["available_jigsaw_id"], {"notes": "entry"})
+    entry_id = created.get_json()["data"]["id"]
+
+    response = _update_entry(client, entry_id, {})
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["details"][0]["field"] == "payload"
+
+
+@pytest.mark.functional
+def test_diary_update_rejects_blank_completed_at(client, seeded_diary_data):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+    created = _create_entry(client, seeded_diary_data["available_jigsaw_id"], {"notes": "entry"})
+    entry_id = created.get_json()["data"]["id"]
+
+    response = _update_entry(client, entry_id, {"completed_at": None})
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert any(detail["field"] == "completed_at" for detail in payload["error"]["details"])
+
+
+@pytest.mark.functional
+def test_diary_update_missing_entry_returns_not_found(client, seeded_diary_data):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+
+    response = _update_entry(client, 99999, {"notes": "ghost"})
+
+    assert response.status_code == 404
 
 
 @pytest.mark.functional
