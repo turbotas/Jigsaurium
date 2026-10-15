@@ -530,6 +530,33 @@ def test_admin_can_assign_unassigned_image_to_jigsaw(client, seeded_image_librar
 
 
 @pytest.mark.functional
+def test_admin_can_unassign_assigned_image(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"u" * 24), "assigned.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    unassign_response = client.patch(
+        f"/api/v1/image-library/images/{image_id}/assign",
+        headers=_csrf_headers(),
+        json={"jigsaw_id": None},
+    )
+
+    assert unassign_response.status_code == 200
+    unassigned = unassign_response.get_json()["data"]
+    assert unassigned["jigsaw_id"] is None
+
+
+@pytest.mark.functional
 def test_assign_image_rejects_reassignment_to_different_jigsaw(client, seeded_image_library_data, app):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 
@@ -569,6 +596,21 @@ def test_assign_image_validates_payload(client, seeded_image_library_data):
         "/api/v1/image-library/images/1/assign",
         headers=_csrf_headers(),
         json={"jigsaw_id": "abc"},
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["details"][0]["field"] == "jigsaw_id"
+
+
+@pytest.mark.functional
+def test_assign_image_requires_jigsaw_id_field(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    response = client.patch(
+        "/api/v1/image-library/images/1/assign",
+        headers=_csrf_headers(),
+        json={},
     )
 
     assert response.status_code == 422

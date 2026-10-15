@@ -34,7 +34,7 @@
 - Bulk uploads default all imported images to tag `untagged` unless a tag override is provided.
 - Image-library uploads may optionally associate imported images to a jigsaw at upload time.
 - Each image can be associated to at most one jigsaw.
-- Admin assignment action can attach an unassigned image to a jigsaw; reassigning an already-associated image to a different jigsaw is blocked.
+- Admin assignment action can attach an unassigned image to a jigsaw and can unassign by setting `jigsaw_id = null`; reassigning an already-associated image to a different jigsaw is blocked.
 - Admins can permanently delete image-library records (assigned or unassigned) as cleanup actions.
 - Every image stores a SHA-256 content hash.
 - Duplicate uploads (same bytes, even with different filenames) are ignored using hash matching.

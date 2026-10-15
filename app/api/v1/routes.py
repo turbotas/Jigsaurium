@@ -716,6 +716,21 @@ def _parse_optional_positive_integer(value, field_name):
     return value, None
 
 
+def _parse_required_positive_integer_or_null(value, field_name):
+    if value is None:
+        return None, None
+
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": field_name, "issue": "must be a positive integer or null"}],
+        )
+
+    return value, None
+
+
 def _parse_optional_difficulty(value, field_name="difficulty"):
     if value is None:
         return None, None
@@ -2966,7 +2981,15 @@ def assign_image_library_item(image_id):
     if error is not None:
         return error
 
-    jigsaw_id, error = _parse_positive_integer(payload.get("jigsaw_id"), "jigsaw_id")
+    if "jigsaw_id" not in payload:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "jigsaw_id", "issue": "is required"}],
+        )
+
+    jigsaw_id, error = _parse_required_positive_integer_or_null(payload.get("jigsaw_id"), "jigsaw_id")
     if error is not None:
         return error
 
@@ -2974,6 +2997,25 @@ def assign_image_library_item(image_id):
     image = db_session.get(JigsawImage, image_id)
     if image is None:
         return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    if jigsaw_id is None:
+        if image.jigsaw_id is None:
+            return _success_response(_serialize_jigsaw_image(image))
+
+        previous_jigsaw_id = image.jigsaw_id
+        image.jigsaw_id = None
+        _record_audit_event(
+            action="jigsaw.image_unassigned",
+            entity_type="jigsaw_image",
+            entity_id=image.id,
+            payload={
+                "previous_jigsaw_id": previous_jigsaw_id,
+                "filename": image.filename,
+            },
+        )
+        db_session.commit()
+
+        return _success_response(_serialize_jigsaw_image(image))
 
     jigsaw = db_session.get(Jigsaw, jigsaw_id)
     if jigsaw is None:

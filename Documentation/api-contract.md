@@ -218,7 +218,9 @@
   - `POST /api/v1/image-library/uploads` returns a summary: `created_count`, `skipped_count`, `metadata_backfilled_count`, and per-item `created` / `skipped` details.
   - Hash duplicate handling applies to bulk imports too: duplicate image bytes are skipped and reported in `skipped`.
   - Duplicate-image skips may still backfill missing capture metadata on the existing image record when newly uploaded bytes include EXIF capture time.
-  - `PATCH /api/v1/image-library/images/{image_id}/assign` is admin-only and requires JSON body `{ "jigsaw_id": <positive integer> }`.
+  - `PATCH /api/v1/image-library/images/{image_id}/assign` is admin-only and requires JSON body with `jigsaw_id`:
+    - positive integer to assign
+    - `null` to unassign
   - `PATCH /api/v1/image-library/images/{image_id}/assign` assigns an image to one jigsaw; reassignment to a different jigsaw returns `409`.
   - `DELETE /api/v1/image-library/images/{image_id}` is admin-only and permanently deletes the image record.
   - `PATCH /api/v1/image-library/images/{image_id}/tag` is admin-only and updates image tag/classification (for example `Box`, `Completed`) even when image is unassigned.
@@ -242,6 +244,7 @@
     - `preview`
   - Bulk uploads write `jigsaw.image_bulk_uploaded` audit events.
   - Image assignment writes `jigsaw.image_assigned` audit events.
+  - Image unassignment writes `jigsaw.image_unassigned` audit events.
   - Create-from-image writes `jigsaw.created_from_image` audit events.
 
 - Diary endpoint notes:

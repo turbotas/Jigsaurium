@@ -55,7 +55,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
   - Auto-create completion diary entries from `Completed` tagged images when associated to a jigsaw.
 - Image library workflow:
   - Bulk upload one or more images (including zip archives containing image files).
-  - Store uploaded images as untagged library assets.
+  - Store uploaded images as library assets with an initial tag (default `untagged`).
   - Optionally associate uploads to a jigsaw during import.
   - Create a new jigsaw from an image via AI metadata extraction (title, series name/number, artist, manufacturer/publisher, piece count, tags, dimensions, description).
   - Enrich an existing jigsaw from associated box images (front/back/side) to populate missing fields.

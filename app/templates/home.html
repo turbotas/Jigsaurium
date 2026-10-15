@@ -417,15 +417,29 @@
 
     <section class="govuk-!-margin-top-6" aria-labelledby="image-library-heading">
       <h3 id="image-library-heading" class="govuk-heading-m">Image library bulk upload</h3>
-      <p class="govuk-body">Upload one or more image files, or a zip containing image files. Images are stored as <code>untagged</code> in the library and can optionally be linked to a jigsaw now.</p>
+      <p class="govuk-body">Upload one or more image files, or a zip containing image files. Choose an initial tag and optionally link uploads to a jigsaw now.</p>
       <button id="image-browser-open" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Open image browser</button>
       <form id="image-library-upload-form" class="govuk-!-margin-bottom-4">
         <div class="govuk-grid-row">
-          <div class="govuk-grid-column-one-half">
+          <div class="govuk-grid-column-one-third">
             <div class="govuk-form-group">
               <label class="govuk-label" for="image-library-jigsaw-id">Optional jigsaw association</label>
               <select id="image-library-jigsaw-id" name="jigsaw_id" class="govuk-select">
                 <option value="">Unassigned (image library only)</option>
+              </select>
+            </div>
+          </div>
+          <div class="govuk-grid-column-one-third">
+            <div class="govuk-form-group">
+              <label class="govuk-label" for="image-library-tag">Initial image tag</label>
+              <select id="image-library-tag" name="tag" class="govuk-select">
+                <option value="untagged" selected>untagged</option>
+                <option value="Box">Box</option>
+                <option value="Box front">Box front</option>
+                <option value="Box side">Box side</option>
+                <option value="Box back">Box back</option>
+                <option value="Completed">Completed</option>
+                <option value="In progress">In progress</option>
               </select>
             </div>
           </div>

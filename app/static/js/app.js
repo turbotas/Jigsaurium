@@ -5,6 +5,15 @@
   const IMAGE_BROWSER_TAG_BOX_SIDE = "Box side";
   const IMAGE_BROWSER_TAG_BOX_BACK = "Box back";
   const IMAGE_BROWSER_TAG_IN_PROGRESS = "In progress";
+  const IMAGE_LIBRARY_STANDARD_TAGS = [
+    "untagged",
+    IMAGE_BROWSER_TAG_BOX,
+    IMAGE_BROWSER_TAG_BOX_FRONT,
+    IMAGE_BROWSER_TAG_BOX_SIDE,
+    IMAGE_BROWSER_TAG_BOX_BACK,
+    IMAGE_BROWSER_TAG_COMPLETED,
+    IMAGE_BROWSER_TAG_IN_PROGRESS,
+  ];
   const THUMBNAIL_DISPLAY_WIDTH_PX = 150;
 
   const state = {
@@ -100,6 +109,7 @@
     jigsawImagesTableBody: document.getElementById("jigsaw-images-table-body"),
     imageLibraryUploadForm: document.getElementById("image-library-upload-form"),
     imageLibraryJigsawId: document.getElementById("image-library-jigsaw-id"),
+    imageLibraryTag: document.getElementById("image-library-tag"),
     imageLibraryDropzone: document.getElementById("image-library-dropzone"),
     imageLibraryBrowseButton: document.getElementById("image-library-browse-button"),
     imageLibraryFilesInput: document.getElementById("image-library-files"),
@@ -577,6 +587,16 @@
 
   function toImageTagKey(value) {
     return normalizeImageTagLabel(value).toLowerCase();
+  }
+
+  function getImageTagDropdownValues(currentTag) {
+    const options = [...IMAGE_LIBRARY_STANDARD_TAGS];
+    const normalizedCurrentTag = normalizeImageTagLabel(currentTag);
+    const hasCurrentTag = options.some((value) => toImageTagKey(value) === toImageTagKey(normalizedCurrentTag));
+    if (!hasCurrentTag && normalizedCurrentTag) {
+      options.push(normalizedCurrentTag);
+    }
+    return options;
   }
 
   function imageMatchesAssignmentFilters(image) {
@@ -1459,7 +1479,39 @@
       );
       row.appendChild(buildCell(String(image.filename || "-")));
       row.appendChild(buildCell(associationLabel));
-      row.appendChild(buildCell(String(image.tag || "-")));
+
+      const tagCell = document.createElement("td");
+      tagCell.className = "govuk-table__cell";
+      const tagControls = document.createElement("div");
+      tagControls.className = "app-inline-controls app-image-actions__row";
+
+      const tagSelect = document.createElement("select");
+      tagSelect.className = "govuk-select";
+      tagSelect.dataset.imageTagSelect = String(image.id);
+
+      const normalizedCurrentTag = normalizeImageTagLabel(image.tag);
+      getImageTagDropdownValues(image.tag).forEach((tagValue) => {
+        const option = document.createElement("option");
+        option.value = tagValue;
+        option.textContent = tagValue;
+        if (toImageTagKey(tagValue) === toImageTagKey(normalizedCurrentTag)) {
+          option.selected = true;
+        }
+        tagSelect.appendChild(option);
+      });
+
+      const tagButton = document.createElement("button");
+      tagButton.type = "button";
+      tagButton.className = "govuk-button govuk-button--secondary app-inline-button";
+      tagButton.setAttribute("data-module", "govuk-button");
+      tagButton.dataset.imageTagSet = String(image.id);
+      tagButton.textContent = "Set tag";
+
+      tagControls.appendChild(tagSelect);
+      tagControls.appendChild(tagButton);
+      tagCell.appendChild(tagControls);
+      row.appendChild(tagCell);
+
       row.appendChild(buildCell(toCapturedLabel(image)));
 
       const actionCell = document.createElement("td");
@@ -1506,6 +1558,14 @@
         const assignedNote = document.createElement("span");
         assignedNote.textContent = "Assigned";
         assignControls.appendChild(assignedNote);
+
+        const unassignButton = document.createElement("button");
+        unassignButton.type = "button";
+        unassignButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        unassignButton.setAttribute("data-module", "govuk-button");
+        unassignButton.dataset.imageUnassign = String(image.id);
+        unassignButton.textContent = "Unassign";
+        assignControls.appendChild(unassignButton);
       }
 
       if (!image.jigsaw_id) {
@@ -3105,8 +3165,12 @@
 
     const formData = new FormData();
     const jigsawIdValue = String(elements.imageLibraryJigsawId?.value || "").trim();
+    const tagValue = String(elements.imageLibraryTag?.value || "").trim();
     if (jigsawIdValue) {
       formData.append("jigsaw_id", jigsawIdValue);
+    }
+    if (tagValue) {
+      formData.append("tag", tagValue);
     }
 
     state.bulkUploadFiles.forEach((file) => {
@@ -3482,6 +3546,60 @@
         });
         showFeedback("Image assigned to jigsaw.");
         await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
+    const imageTagButton = event.target.closest("[data-image-tag-set]");
+    if (imageTagButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const imageId = Number(imageTagButton.getAttribute("data-image-tag-set"));
+      const select = elements.imageLibraryTableBody?.querySelector(
+        `[data-image-tag-select="${imageId}"]`,
+      );
+      const selectedTag = String(select?.value || "").trim();
+
+      if (!selectedTag) {
+        showFeedback("Choose a tag before saving.", true);
+        return;
+      }
+
+      try {
+        await apiRequest(`/api/v1/image-library/images/${imageId}/tag`, {
+          method: "PATCH",
+          body: JSON.stringify({ tag: selectedTag }),
+        });
+        showFeedback(`Image tagged as ${selectedTag}.`);
+        await Promise.all([
+          loadImageLibraryImages(),
+          loadJigsawImagesForSelected(),
+          loadJigsaws(),
+          loadDiaryEntriesForSelected(),
+          loadAuditEvents(),
+        ]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
+    const imageUnassignButton = event.target.closest("[data-image-unassign]");
+    if (imageUnassignButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const imageId = Number(imageUnassignButton.getAttribute("data-image-unassign"));
+      try {
+        await apiRequest(`/api/v1/image-library/images/${imageId}/assign`, {
+          method: "PATCH",
+          body: JSON.stringify({ jigsaw_id: null }),
+        });
+        showFeedback("Image unassigned from jigsaw.");
+        await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadJigsaws(), loadAuditEvents()]);
       } catch (error) {
         showFeedback(error.message, true);
       }
