@@ -1,5 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from io import BytesIO
+import json
 import zipfile
 
 import pytest
@@ -141,6 +143,127 @@ def test_borrower_cannot_use_image_library_admin_endpoints(client, seeded_image_
         json={},
     )
     assert enrich_response.status_code == 403
+
+    diagnostics_response = client.get("/api/v1/ai-usage/diagnostics")
+    assert diagnostics_response.status_code == 403
+
+
+@pytest.mark.functional
+def test_admin_can_view_ai_usage_diagnostics(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    with app.app_context():
+        db_session = get_session()
+        image = JigsawImage(
+            jigsaw_id=None,
+            tag="untagged",
+            filename="diag.png",
+            mime_type="image/png",
+            image_data=b"\x89PNG\r\n\x1a\n" + b"d" * 48,
+        )
+        db_session.add(image)
+        db_session.flush()
+
+        now = datetime.now(timezone.utc)
+        events = [
+            AiUsageEvent(
+                actor_user_id=seeded_image_library_data["admin_user_id"],
+                image_id=image.id,
+                operation="image_to_jigsaw",
+                status="success",
+                model="mock-vision-mini",
+                endpoint_url="https://example.invalid/v1/chat/completions",
+                prompt_tokens=100,
+                completion_tokens=20,
+                total_tokens=120,
+                final_cost_usd=Decimal("0.120000"),
+                request_id="req_success",
+                created_at=now - timedelta(minutes=30),
+            ),
+            AiUsageEvent(
+                actor_user_id=seeded_image_library_data["admin_user_id"],
+                image_id=image.id,
+                operation="image_to_jigsaw",
+                status="error",
+                model="mock-vision-mini",
+                endpoint_url="https://example.invalid/v1/chat/completions",
+                prompt_tokens=80,
+                completion_tokens=10,
+                total_tokens=90,
+                final_cost_usd=Decimal("0"),
+                error_code="provider_error",
+                error_message="AI provider returned HTTP 413",
+                request_id="req_error",
+                created_at=now - timedelta(minutes=20),
+            ),
+            AiUsageEvent(
+                actor_user_id=seeded_image_library_data["admin_user_id"],
+                image_id=image.id,
+                operation="image_to_jigsaw",
+                status="blocked",
+                model="mock-vision-mini",
+                endpoint_url="https://example.invalid/v1/chat/completions",
+                total_tokens=None,
+                final_cost_usd=Decimal("0"),
+                error_code="daily_budget_exceeded",
+                request_id="req_blocked",
+                created_at=now - timedelta(minutes=10),
+            ),
+            AiUsageEvent(
+                actor_user_id=seeded_image_library_data["admin_user_id"],
+                image_id=image.id,
+                operation="jigsaw_enrich_from_images",
+                status="success",
+                model="mock-vision-mini",
+                endpoint_url="https://example.invalid/v1/chat/completions",
+                prompt_tokens=210,
+                completion_tokens=40,
+                total_tokens=250,
+                final_cost_usd=Decimal("0.230000"),
+                request_id="req_old_success",
+                created_at=now - timedelta(days=8),
+            ),
+        ]
+        db_session.add_all(events)
+        db_session.commit()
+
+    response = client.get("/api/v1/ai-usage/diagnostics?limit=10")
+
+    assert response.status_code == 200
+    payload = response.get_json()["data"]
+
+    assert payload["windows"]["today"]["calls"] == 3
+    assert payload["windows"]["today"]["success"] == 1
+    assert payload["windows"]["today"]["tokens"] == 210
+    assert payload["windows"]["today"]["cost_usd"] == "0.120000"
+
+    assert payload["windows"]["last_7_days"]["calls"] == 3
+    assert payload["windows"]["last_30_days"]["calls"] == 4
+    assert payload["windows"]["last_30_days"]["success"] == 2
+    assert payload["windows"]["last_30_days"]["tokens"] == 460
+    assert payload["windows"]["last_30_days"]["cost_usd"] == "0.350000"
+
+    by_operation = {entry["operation"]: entry for entry in payload["by_operation_30d"]}
+    assert by_operation["image_to_jigsaw"]["calls"] == 3
+    assert by_operation["image_to_jigsaw"]["success"] == 1
+    assert by_operation["image_to_jigsaw"]["tokens"] == 210
+    assert by_operation["image_to_jigsaw"]["cost_usd"] == "0.120000"
+    assert by_operation["jigsaw_enrich_from_images"]["calls"] == 1
+
+    by_model = {entry["model"]: entry for entry in payload["by_model_30d"]}
+    assert by_model["mock-vision-mini"]["calls"] == 4
+    assert by_model["mock-vision-mini"]["success"] == 2
+    assert by_model["mock-vision-mini"]["tokens"] == 460
+    assert by_model["mock-vision-mini"]["cost_usd"] == "0.350000"
+
+    recent_calls = payload["recent_calls"]
+    assert len(recent_calls) == 4
+    error_row = next(row for row in recent_calls if row["status"] == "error")
+    assert error_row["provider_http_status"] == 413
+    assert error_row["error_code"] == "provider_error"
+    assert error_row["image"]["filename"] == "diag.png"
+    assert error_row["image"]["mime_type"] == "image/png"
+    assert isinstance(error_row["image"]["size_bytes"], int)
 
 
 @pytest.mark.functional
@@ -734,6 +857,16 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
                 "dimensions_cm": "70 x 50 cm",
                 "description": "Inferred from box image",
             },
+            "provider_response": {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"title":"Inferred Puzzle","series_name":"My Haven Series"}'
+                        }
+                    }
+                ]
+            },
+            "provider_response_text": '{"choices":[{"message":{"content":"{\\"title\\":\\"Inferred Puzzle\\"}"}}]}',
             "prompt_tokens": 500,
             "completion_tokens": 120,
             "total_tokens": 620,
@@ -766,6 +899,124 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
         db_session = get_session()
         usage_rows = db_session.query(AiUsageEvent).filter_by(operation="image_to_jigsaw", status="success").all()
         assert len(usage_rows) == 1
+        payload = json.loads(usage_rows[0].payload_json)
+        assert isinstance(payload.get("provider_response"), dict)
+        assert "provider_response_text" in payload
+
+
+@pytest.mark.functional
+def test_create_jigsaw_from_image_tolerates_messy_ai_payload_types(client, seeded_image_library_data, app, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"m" * 24), "messy-payload.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = "test-key"
+    app.config["AI_MODEL"] = "mock-vision"
+    app.config["AI_ENDPOINT_URL"] = "https://example.invalid/v1/chat/completions"
+    app.config["AI_DAILY_BUDGET_USD"] = 10.0
+
+    def fake_inference(_image):
+        return {
+            "metadata": {
+                "title": "Messy Inference",
+                "series_name": 123,
+                "series_number": True,
+                "manufacturer": "Ravensburger",
+                "artist": ["not", "a", "string"],
+                "piece_count": "1,000 pieces",
+                "tags": ["landscape", 42, None, {"bad": "value"}],
+                "dimensions_cm": "70 x 50 cm",
+                "description": "Text extracted from the box",
+            },
+            "prompt_tokens": 123,
+            "completion_tokens": 45,
+            "total_tokens": 168,
+            "provider_cost_usd": None,
+            "computed_cost_usd": None,
+            "final_cost_usd": 0.03,
+            "model": "mock-vision",
+            "endpoint_url": "https://example.invalid/v1/chat/completions",
+        }
+
+    monkeypatch.setattr("app.api.v1.routes._infer_jigsaw_metadata_from_image", fake_inference)
+
+    create_response = client.post(
+        f"/api/v1/image-library/images/{image_id}/create-jigsaw",
+        headers=_csrf_headers(),
+        json={},
+    )
+
+    assert create_response.status_code == 201
+    payload = create_response.get_json()["data"]
+    assert payload["jigsaw"]["title"] == "Messy Inference"
+    assert payload["jigsaw"]["piece_count"] == 1000
+    assert payload["jigsaw"]["manufacturer"] == "Ravensburger"
+    assert payload["jigsaw"]["series_name"] == "123"
+    assert payload["jigsaw"]["series_number"] is None
+    assert payload["jigsaw"]["artist"] is None
+    assert payload["jigsaw"]["tags"] == "landscape, 42"
+
+
+@pytest.mark.functional
+def test_create_jigsaw_from_image_invalid_payload_stores_provider_response(client, seeded_image_library_data, app, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"r" * 24), "invalid-shape.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = "test-key"
+    app.config["AI_MODEL"] = "mock-vision"
+    app.config["AI_ENDPOINT_URL"] = "https://example.invalid/v1/chat/completions"
+    app.config["AI_DAILY_BUDGET_USD"] = 10.0
+
+    def fake_inference(_image):
+        return {
+            "metadata": "not-a-dict",
+            "provider_response": {"choices": [{"message": {"content": "not-a-dict"}}]},
+            "provider_response_text": '{"choices":[{"message":{"content":"not-a-dict"}}]}',
+            "prompt_tokens": 5,
+            "completion_tokens": 3,
+            "total_tokens": 8,
+            "provider_cost_usd": None,
+            "computed_cost_usd": None,
+            "final_cost_usd": 0.0,
+            "model": "mock-vision",
+            "endpoint_url": "https://example.invalid/v1/chat/completions",
+        }
+
+    monkeypatch.setattr("app.api.v1.routes._infer_jigsaw_metadata_from_image", fake_inference)
+
+    response = client.post(
+        f"/api/v1/image-library/images/{image_id}/create-jigsaw",
+        headers=_csrf_headers(),
+        json={},
+    )
+
+    assert response.status_code == 502
+
+    diagnostics_response = client.get("/api/v1/ai-usage/diagnostics?limit=10")
+    assert diagnostics_response.status_code == 200
+    recent_calls = diagnostics_response.get_json()["data"]["recent_calls"]
+    error_row = next(row for row in recent_calls if row["error_code"] == "invalid_ai_payload")
+    assert isinstance(error_row["payload"], dict)
+    assert error_row["payload"]["provider_response"] == {"choices": [{"message": {"content": "not-a-dict"}}]}
 
 
 @pytest.mark.functional

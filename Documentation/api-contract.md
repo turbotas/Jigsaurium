@@ -38,6 +38,7 @@
 - `PATCH /api/v1/users/{id}`
 - `GET /api/v1/roles`
 - `GET /api/v1/audit-events`
+- `GET /api/v1/ai-usage/diagnostics`
 - `GET /api/v1/loans`
 - `POST /api/v1/loans`
 - `POST /api/v1/loans/{id}/return`
@@ -158,6 +159,14 @@
 - Audit endpoint notes:
   - `GET /api/v1/audit-events` is admin-only.
   - Optional query param `limit` must be an integer from `1` to `200` (default `50`).
+
+- AI diagnostics endpoint notes:
+  - `GET /api/v1/ai-usage/diagnostics` is admin-only.
+  - Optional query param `limit` must be an integer from `1` to `200` (default `50`).
+  - Response includes:
+    - spend/call/token summaries for `today`, `last_7_days`, and `last_30_days`
+    - 30-day grouped breakdowns by operation and by model
+    - recent call diagnostics including status, token/cost fields, request id, image metadata, provider error hints (for example parsed HTTP status from provider error text), and stored per-call payload details for troubleshooting
 
 - Loan endpoint notes:
   - `GET /api/v1/loans` is admin-only in the initial administrative rollout.

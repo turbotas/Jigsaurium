@@ -100,6 +100,7 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
         ("GET", "/api/v1/roles", None),
         ("GET", "/api/v1/jigsaws", None),
         ("GET", "/api/v1/loans", None),
+        ("GET", "/api/v1/ai-usage/diagnostics", None),
         ("GET", "/api/v1/jigsaws/1/images", None),
         ("GET", "/api/v1/jigsaws/1", None),
         ("PATCH", "/api/v1/auth/me", {"display_name": "No Session"}),

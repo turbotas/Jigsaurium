@@ -272,3 +272,93 @@
 .app-image-browser__canvas.is-cropping {
   cursor: crosshair;
 }
+
+.app-ai-usage-cards {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.app-ai-usage-card {
+  border: 1px solid #b1b4b6;
+  border-radius: 6px;
+  background: #fff;
+  padding: 16px;
+}
+
+.app-ai-usage-card .govuk-body {
+  margin-bottom: 8px;
+}
+
+.app-ai-status-tag {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-weight: 700;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.app-ai-status-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.app-ai-status-button:focus-visible {
+  outline: 3px solid #ffdd00;
+  outline-offset: 2px;
+}
+
+.app-ai-status-tag--success {
+  background: #00703c;
+  color: #fff;
+}
+
+.app-ai-status-tag--error {
+  background: #d4351c;
+  color: #fff;
+}
+
+.app-ai-status-tag--blocked {
+  background: #f3f2f1;
+  color: #0b0c0c;
+  border: 1px solid #b1b4b6;
+}
+
+.app-ai-usage-detail-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(11, 12, 12, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.app-ai-usage-detail-modal[hidden] {
+  display: none !important;
+}
+
+.app-ai-usage-detail-modal__panel {
+  width: min(960px, 96vw);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  border-radius: 6px;
+  background: #fff;
+  padding: 16px;
+}
+
+.app-ai-usage-detail-modal__payload {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f3f2f1;
+  border: 1px solid #b1b4b6;
+  border-radius: 4px;
+  padding: 12px;
+  max-height: 55vh;
+  overflow: auto;
+}

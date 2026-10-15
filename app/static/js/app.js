@@ -19,6 +19,8 @@
     imageLibraryFilterAssigned: true,
     imageLibraryFilterUnassigned: true,
     imageLibraryFilterTagSelections: {},
+    aiUsageDiagnostics: null,
+    aiUsageRecentById: {},
     imageBrowserContentCacheByImageId: {},
     diaryEntries: [],
     bulkUploadFiles: [],
@@ -135,12 +137,35 @@
     diaryCompletedAt: document.getElementById("diary-completed-at"),
     diaryDifficulty: document.getElementById("diary-difficulty"),
     diaryNotes: document.getElementById("diary-notes"),
+    diaryEntriesCaption: document.getElementById("diary-entries-caption"),
     diaryEntriesTableBody: document.getElementById("diary-entries-table-body"),
     loanCreateForm: document.getElementById("loan-create-form"),
     loanBorrowerUserId: document.getElementById("loan-borrower-user-id"),
     loanJigsawId: document.getElementById("loan-jigsaw-id"),
     loansTableBody: document.getElementById("loans-table-body"),
     auditTableBody: document.getElementById("audit-table-body"),
+    aiUsageTodayCost: document.getElementById("ai-usage-today-cost"),
+    aiUsageTodayCalls: document.getElementById("ai-usage-today-calls"),
+    aiUsageTodaySuccess: document.getElementById("ai-usage-today-success"),
+    aiUsageTodayTokens: document.getElementById("ai-usage-today-tokens"),
+    aiUsage7dCost: document.getElementById("ai-usage-7d-cost"),
+    aiUsage7dCalls: document.getElementById("ai-usage-7d-calls"),
+    aiUsage7dSuccess: document.getElementById("ai-usage-7d-success"),
+    aiUsage7dTokens: document.getElementById("ai-usage-7d-tokens"),
+    aiUsage30dCost: document.getElementById("ai-usage-30d-cost"),
+    aiUsage30dCalls: document.getElementById("ai-usage-30d-calls"),
+    aiUsage30dSuccess: document.getElementById("ai-usage-30d-success"),
+    aiUsage30dTokens: document.getElementById("ai-usage-30d-tokens"),
+    aiUsageDailyBudget: document.getElementById("ai-usage-daily-budget"),
+    aiUsageDailySpend: document.getElementById("ai-usage-daily-spend"),
+    aiUsageBudgetReached: document.getElementById("ai-usage-budget-reached"),
+    aiUsageOperationBody: document.getElementById("ai-usage-operation-body"),
+    aiUsageModelBody: document.getElementById("ai-usage-model-body"),
+    aiUsageRecentBody: document.getElementById("ai-usage-recent-body"),
+    aiUsageDetailModal: document.getElementById("ai-usage-detail-modal"),
+    aiUsageDetailSummary: document.getElementById("ai-usage-detail-summary"),
+    aiUsageDetailPayload: document.getElementById("ai-usage-detail-payload"),
+    aiUsageDetailCloseButton: document.getElementById("ai-usage-detail-close"),
   };
 
   function showFeedback(message, isError = false) {
@@ -357,6 +382,102 @@
     }
 
     return parsedDate.toLocaleString();
+  }
+
+  function toIntegerLabel(value) {
+    const parsed = Number(value || 0);
+    if (!Number.isFinite(parsed)) {
+      return "0";
+    }
+    return Math.trunc(parsed).toLocaleString();
+  }
+
+  function toUsdLabel(value) {
+    const parsed = Number.parseFloat(String(value ?? "0"));
+    if (!Number.isFinite(parsed)) {
+      return "$0.0000";
+    }
+    return `$${parsed.toFixed(4)}`;
+  }
+
+  function buildAiStatusTag(statusValue) {
+    const normalizedStatus = String(statusValue || "").trim().toLowerCase();
+    const tag = document.createElement("span");
+    tag.className = "app-ai-status-tag";
+
+    if (normalizedStatus === "success") {
+      tag.classList.add("app-ai-status-tag--success");
+      tag.textContent = "OK";
+      return tag;
+    }
+
+    if (normalizedStatus === "error") {
+      tag.classList.add("app-ai-status-tag--error");
+      tag.textContent = "ERROR";
+      return tag;
+    }
+
+    tag.classList.add("app-ai-status-tag--blocked");
+    tag.textContent = normalizedStatus ? normalizedStatus.toUpperCase() : "-";
+    return tag;
+  }
+
+  function buildAiFailureHintForImage(imageId, requestId) {
+    const diagnostics = state.aiUsageDiagnostics;
+    const recentCalls = Array.isArray(diagnostics?.recent_calls) ? diagnostics.recent_calls : [];
+    if (recentCalls.length === 0) {
+      return "";
+    }
+
+    let matchingCall = null;
+    if (requestId) {
+      matchingCall = recentCalls.find((entry) => String(entry?.request_id || "") === String(requestId));
+    }
+    if (!matchingCall && imageId) {
+      matchingCall = recentCalls.find((entry) => Number(entry?.image_id || 0) === Number(imageId) && String(entry?.status || "") === "error");
+    }
+    if (!matchingCall) {
+      return "";
+    }
+
+    const parts = [];
+    if (matchingCall.error_code) {
+      parts.push(matchingCall.error_code);
+    }
+    if (matchingCall.provider_http_status) {
+      parts.push(`HTTP ${matchingCall.provider_http_status}`);
+    }
+    if (matchingCall.error_message) {
+      parts.push(matchingCall.error_message);
+    }
+
+    return parts.length > 0 ? parts.join(" | ") : "";
+  }
+
+  function closeAiUsageDetailModal() {
+    if (elements.aiUsageDetailModal) {
+      elements.aiUsageDetailModal.hidden = true;
+    }
+  }
+
+  function openAiUsageDetailModal(entry) {
+    if (!entry || !elements.aiUsageDetailModal || !elements.aiUsageDetailPayload || !elements.aiUsageDetailSummary) {
+      return;
+    }
+
+    const summaryParts = [
+      `id ${entry.id}`,
+      entry.operation || "-",
+      entry.status || "-",
+      entry.model || "-",
+      toLocalTimestamp(entry.created_at),
+      entry.request_id ? `request ${entry.request_id}` : "request -",
+    ];
+    elements.aiUsageDetailSummary.textContent = summaryParts.join(" | ");
+
+    const payloadText = JSON.stringify(entry.payload ?? null, null, 2);
+    elements.aiUsageDetailPayload.textContent = payloadText;
+    elements.aiUsageDetailModal.hidden = false;
   }
 
   function toCapturedLabel(image) {
@@ -640,7 +761,7 @@
 
     const placeholder = document.createElement("option");
     placeholder.value = "";
-    placeholder.textContent = "Choose jigsaw";
+    placeholder.textContent = "All completed jigsaws (recent first)";
     elements.diaryJigsawId.appendChild(placeholder);
 
     const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
@@ -654,6 +775,59 @@
     if (currentJigsawId && sortedJigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
       elements.diaryJigsawId.value = currentJigsawId;
     }
+  }
+
+  function getJigsawTitleById(jigsawId) {
+    const resolvedJigsawId = Number(jigsawId || "0");
+    if (!resolvedJigsawId) {
+      return "-";
+    }
+
+    const matchingJigsaw = Array.isArray(state.jigsaws)
+      ? state.jigsaws.find((jigsaw) => Number(jigsaw.id) === resolvedJigsawId)
+      : null;
+
+    if (matchingJigsaw && matchingJigsaw.title) {
+      return String(matchingJigsaw.title);
+    }
+
+    return `Jigsaw #${resolvedJigsawId}`;
+  }
+
+  function setDiaryEntriesCaption(selectedJigsawId) {
+    if (!elements.diaryEntriesCaption) {
+      return;
+    }
+
+    const resolvedJigsawId = Number(selectedJigsawId || "0");
+    if (!resolvedJigsawId) {
+      elements.diaryEntriesCaption.textContent = "Recent diary entries across completed jigsaws (most recent first)";
+      return;
+    }
+
+    const jigsawTitle = getJigsawTitleById(resolvedJigsawId);
+    elements.diaryEntriesCaption.textContent = `Diary entries for ${jigsawTitle} (most recent first)`;
+  }
+
+  function getDiaryEntryImageUrls(entry) {
+    const sourceImageId = Number(entry?.source_image_id || 0);
+    if (!sourceImageId) {
+      return {
+        thumbnailUrl: "",
+        previewUrl: "",
+        openUrl: "",
+      };
+    }
+
+    const matchingImage = Array.isArray(state.imageLibraryImages)
+      ? state.imageLibraryImages.find((image) => Number(image.id) === sourceImageId)
+      : null;
+
+    return {
+      thumbnailUrl: String(matchingImage?.thumbnail_url || `/api/v1/images/${sourceImageId}/content?variant=thumbnail`),
+      previewUrl: String(matchingImage?.preview_url || `/api/v1/images/${sourceImageId}/content?variant=preview`),
+      openUrl: String(matchingImage?.content_url || `/api/v1/images/${sourceImageId}/content`),
+    };
   }
 
   function populateImageLibraryJigsawOptions() {
@@ -986,6 +1160,168 @@
       row.appendChild(buildCell(timestamp));
 
       tableBody.appendChild(row);
+    });
+  }
+
+  function renderAiUsageDiagnostics(diagnostics) {
+    const windows = diagnostics?.windows || {};
+    const today = windows.today || {};
+    const sevenDays = windows.last_7_days || {};
+    const thirtyDays = windows.last_30_days || {};
+
+    if (elements.aiUsageTodayCost) {
+      elements.aiUsageTodayCost.textContent = toUsdLabel(today.cost_usd);
+    }
+    if (elements.aiUsageTodayCalls) {
+      elements.aiUsageTodayCalls.textContent = toIntegerLabel(today.calls);
+    }
+    if (elements.aiUsageTodaySuccess) {
+      elements.aiUsageTodaySuccess.textContent = toIntegerLabel(today.success);
+    }
+    if (elements.aiUsageTodayTokens) {
+      elements.aiUsageTodayTokens.textContent = toIntegerLabel(today.tokens);
+    }
+
+    if (elements.aiUsage7dCost) {
+      elements.aiUsage7dCost.textContent = toUsdLabel(sevenDays.cost_usd);
+    }
+    if (elements.aiUsage7dCalls) {
+      elements.aiUsage7dCalls.textContent = toIntegerLabel(sevenDays.calls);
+    }
+    if (elements.aiUsage7dSuccess) {
+      elements.aiUsage7dSuccess.textContent = toIntegerLabel(sevenDays.success);
+    }
+    if (elements.aiUsage7dTokens) {
+      elements.aiUsage7dTokens.textContent = toIntegerLabel(sevenDays.tokens);
+    }
+
+    if (elements.aiUsage30dCost) {
+      elements.aiUsage30dCost.textContent = toUsdLabel(thirtyDays.cost_usd);
+    }
+    if (elements.aiUsage30dCalls) {
+      elements.aiUsage30dCalls.textContent = toIntegerLabel(thirtyDays.calls);
+    }
+    if (elements.aiUsage30dSuccess) {
+      elements.aiUsage30dSuccess.textContent = toIntegerLabel(thirtyDays.success);
+    }
+    if (elements.aiUsage30dTokens) {
+      elements.aiUsage30dTokens.textContent = toIntegerLabel(thirtyDays.tokens);
+    }
+
+    if (elements.aiUsageDailyBudget) {
+      elements.aiUsageDailyBudget.textContent = diagnostics?.daily_budget_usd ? toUsdLabel(diagnostics.daily_budget_usd) : "Not configured";
+    }
+    if (elements.aiUsageDailySpend) {
+      elements.aiUsageDailySpend.textContent = toUsdLabel(diagnostics?.daily_spend_usd);
+    }
+    if (elements.aiUsageBudgetReached) {
+      elements.aiUsageBudgetReached.textContent = diagnostics?.daily_budget_reached ? "Yes" : "No";
+    }
+
+    const operationTableBody = elements.aiUsageOperationBody;
+    clearTableBody(operationTableBody);
+    const byOperation = Array.isArray(diagnostics?.by_operation_30d) ? diagnostics.by_operation_30d : [];
+    if (byOperation.length === 0) {
+      appendEmptyRow(operationTableBody, 5, "No AI calls found for this period.");
+    } else {
+      byOperation.forEach((entry) => {
+        const row = document.createElement("tr");
+        row.className = "govuk-table__row";
+        row.appendChild(buildCell(String(entry.operation || "-")));
+        row.appendChild(buildCell(toIntegerLabel(entry.calls)));
+        row.appendChild(buildCell(toIntegerLabel(entry.success)));
+        row.appendChild(buildCell(toIntegerLabel(entry.tokens)));
+        row.appendChild(buildCell(toUsdLabel(entry.cost_usd)));
+        operationTableBody.appendChild(row);
+      });
+    }
+
+    const modelTableBody = elements.aiUsageModelBody;
+    clearTableBody(modelTableBody);
+    const byModel = Array.isArray(diagnostics?.by_model_30d) ? diagnostics.by_model_30d : [];
+    if (byModel.length === 0) {
+      appendEmptyRow(modelTableBody, 5, "No AI calls found for this period.");
+    } else {
+      byModel.forEach((entry) => {
+        const row = document.createElement("tr");
+        row.className = "govuk-table__row";
+        row.appendChild(buildCell(String(entry.model || "(unspecified)")));
+        row.appendChild(buildCell(toIntegerLabel(entry.calls)));
+        row.appendChild(buildCell(toIntegerLabel(entry.success)));
+        row.appendChild(buildCell(toIntegerLabel(entry.tokens)));
+        row.appendChild(buildCell(toUsdLabel(entry.cost_usd)));
+        modelTableBody.appendChild(row);
+      });
+    }
+
+    const recentTableBody = elements.aiUsageRecentBody;
+    clearTableBody(recentTableBody);
+    const recentCalls = Array.isArray(diagnostics?.recent_calls) ? diagnostics.recent_calls : [];
+    state.aiUsageRecentById = {};
+    if (recentCalls.length === 0) {
+      appendEmptyRow(recentTableBody, 9, "No AI calls found.");
+      return;
+    }
+
+    recentCalls.forEach((entry) => {
+      state.aiUsageRecentById[String(entry.id)] = entry;
+      const row = document.createElement("tr");
+      row.className = "govuk-table__row";
+
+      row.appendChild(buildCell(toLocalTimestamp(entry.created_at)));
+      row.appendChild(buildCell(String(entry.operation || "-")));
+      row.appendChild(buildCell(String(entry.model || "-")));
+
+      const statusCell = document.createElement("td");
+      statusCell.className = "govuk-table__cell";
+      const statusTag = buildAiStatusTag(entry.status);
+      const hasPayload = entry.payload !== null && entry.payload !== undefined;
+      if (hasPayload) {
+        const detailButton = document.createElement("button");
+        detailButton.type = "button";
+        detailButton.className = "app-ai-status-button";
+        detailButton.dataset.aiUsageDetail = String(entry.id);
+        detailButton.title = "View AI call details";
+        detailButton.appendChild(statusTag);
+        statusCell.appendChild(detailButton);
+      } else {
+        statusCell.appendChild(statusTag);
+      }
+      row.appendChild(statusCell);
+
+      const image = entry?.image || {};
+      const imageLabelParts = [];
+      if (entry.image_id) {
+        imageLabelParts.push(`#${entry.image_id}`);
+      }
+      if (image.filename) {
+        imageLabelParts.push(image.filename);
+      }
+      if (image.mime_type) {
+        imageLabelParts.push(image.mime_type);
+      }
+      if (image.size_bytes) {
+        imageLabelParts.push(`${toIntegerLabel(image.size_bytes)} bytes`);
+      }
+      row.appendChild(buildCell(imageLabelParts.length > 0 ? imageLabelParts.join(" | ") : "-"));
+
+      row.appendChild(buildCell(toIntegerLabel(entry.total_tokens)));
+      row.appendChild(buildCell(toUsdLabel(entry.final_cost_usd)));
+      row.appendChild(buildCell(String(entry.request_id || "-")));
+
+      const errorParts = [];
+      if (entry.error_code) {
+        errorParts.push(entry.error_code);
+      }
+      if (entry.provider_http_status) {
+        errorParts.push(`HTTP ${entry.provider_http_status}`);
+      }
+      if (entry.error_message) {
+        errorParts.push(entry.error_message);
+      }
+      row.appendChild(buildCell(errorParts.length > 0 ? errorParts.join(" | ") : "-"));
+
+      recentTableBody.appendChild(row);
     });
   }
 
@@ -1563,6 +1899,15 @@
     try {
       await loadCurrentImageIntoBrowser();
     } catch (error) {
+      if (error.status === 502) {
+        await loadAiUsageDiagnostics();
+        const requestId = error?.payload?.meta?.request_id;
+        const hint = buildAiFailureHintForImage(item.id, requestId);
+        if (hint) {
+          showFeedback(`${error.message} Diagnostic: ${hint}`, true);
+          return;
+        }
+      }
       showFeedback(error.message, true);
     }
   }
@@ -1596,6 +1941,9 @@
     try {
       await loadCurrentImageIntoBrowser();
     } catch (error) {
+      if (error.status === 502) {
+        await loadAiUsageDiagnostics();
+      }
       showFeedback(error.message, true);
     }
   }
@@ -1694,7 +2042,7 @@
       const createdTitle = payload?.data?.jigsaw?.title || "(untitled)";
       showFeedback(`Jigsaw created from image: ${createdTitle}.`);
 
-      await Promise.all([loadJigsaws(), loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
+      await Promise.all([loadJigsaws(), loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents(), loadAiUsageDiagnostics()]);
       setImageBrowserIndexByImageId(item.id);
       await loadCurrentImageIntoBrowser();
     } catch (error) {
@@ -1986,12 +2334,12 @@
     }
   }
 
-  function renderDiaryEntries(entries) {
+  function renderDiaryEntries(entries, emptyMessage = "No diary entries found.") {
     const tableBody = elements.diaryEntriesTableBody;
     clearTableBody(tableBody);
 
     if (!Array.isArray(entries) || entries.length === 0) {
-      appendEmptyRow(tableBody, 5, "No diary entries found.");
+      appendEmptyRow(tableBody, 7, emptyMessage);
       return;
     }
 
@@ -1999,7 +2347,18 @@
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
+      const sourceImageUrls = getDiaryEntryImageUrls(entry);
+
       row.appendChild(buildCell(String(entry.id)));
+      row.appendChild(buildCell(getJigsawTitleById(entry.jigsaw_id)));
+      row.appendChild(
+        buildThumbnailCell(sourceImageUrls.thumbnailUrl, {
+          altText: `Completed image for diary entry ${entry.id}`,
+          previewUrl: sourceImageUrls.previewUrl,
+          openUrl: sourceImageUrls.openUrl,
+          fallbackText: "No image",
+        })
+      );
       row.appendChild(buildCell(toLocalTimestamp(entry.completed_at)));
       row.appendChild(buildCell(entry.difficulty === null || entry.difficulty === undefined ? "-" : String(entry.difficulty)));
       row.appendChild(buildCell(String(entry.notes || "-")));
@@ -2152,9 +2511,65 @@
 
   async function loadDiaryEntriesForSelected() {
     const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
-    if (!state.user || !selectedJigsawId) {
+    if (!state.user) {
       state.diaryEntries = [];
+      setDiaryEntriesCaption(0);
       renderDiaryEntries([]);
+      return;
+    }
+
+    setDiaryEntriesCaption(selectedJigsawId);
+
+    if (!selectedJigsawId) {
+      const completedJigsawIds = (Array.isArray(state.jigsaws) ? state.jigsaws : [])
+        .filter((jigsaw) => Boolean(jigsaw.last_completed_at))
+        .map((jigsaw) => Number(jigsaw.id))
+        .filter((jigsawId) => jigsawId > 0);
+
+      if (completedJigsawIds.length === 0) {
+        state.diaryEntries = [];
+        renderDiaryEntries([], "No diary entries found for completed jigsaws.");
+        return;
+      }
+
+      try {
+        const settledResults = await Promise.allSettled(
+          completedJigsawIds.map((jigsawId) => apiRequest(`/api/v1/jigsaws/${jigsawId}/diary-entries`)),
+        );
+
+        const mergedEntries = [];
+        let firstError = null;
+        settledResults.forEach((result) => {
+          if (result.status === "fulfilled") {
+            const entries = Array.isArray(result.value?.data) ? result.value.data : [];
+            mergedEntries.push(...entries);
+            return;
+          }
+          if (!firstError) {
+            firstError = result.reason;
+          }
+        });
+
+        mergedEntries.sort((left, right) => {
+          const leftCompletedAt = Date.parse(String(left.completed_at || "")) || 0;
+          const rightCompletedAt = Date.parse(String(right.completed_at || "")) || 0;
+          if (rightCompletedAt !== leftCompletedAt) {
+            return rightCompletedAt - leftCompletedAt;
+          }
+          return Number(right.id || 0) - Number(left.id || 0);
+        });
+
+        state.diaryEntries = mergedEntries;
+        renderDiaryEntries(state.diaryEntries, "No diary entries found for completed jigsaws.");
+
+        if (firstError && mergedEntries.length === 0) {
+          throw firstError;
+        }
+      } catch (error) {
+        state.diaryEntries = [];
+        renderDiaryEntries([], "No diary entries found for completed jigsaws.");
+        showFeedback(error.message, true);
+      }
       return;
     }
 
@@ -2208,6 +2623,27 @@
     }
   }
 
+  async function loadAiUsageDiagnostics() {
+    if (!state.user) {
+      state.aiUsageDiagnostics = null;
+      renderAiUsageDiagnostics(null);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest("/api/v1/ai-usage/diagnostics?limit=50");
+      state.aiUsageDiagnostics = payload?.data || null;
+      renderAiUsageDiagnostics(state.aiUsageDiagnostics);
+    } catch (error) {
+      if (error.status === 403) {
+        state.aiUsageDiagnostics = null;
+        renderAiUsageDiagnostics(null);
+        return;
+      }
+      showFeedback(error.message, true);
+    }
+  }
+
   async function handleLoginSubmit(event) {
     event.preventDefault();
     clearFeedback();
@@ -2232,7 +2668,7 @@
       state.csrfToken = payload.data.csrf_token;
       setSessionSummary();
       showFeedback("Signed in successfully.");
-      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadImageLibraryImages()]);
+      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadAiUsageDiagnostics(), loadImageLibraryImages()]);
       await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
     } catch (error) {
       showFeedback(error.message, true);
@@ -2260,6 +2696,7 @@
       state.imageLibraryFilterAssigned = true;
       state.imageLibraryFilterUnassigned = true;
       state.imageLibraryFilterTagSelections = {};
+      state.aiUsageDiagnostics = null;
       state.imageBrowserContentCacheByImageId = {};
       state.diaryEntries = [];
       state.jigsawSearchQuery = "";
@@ -2271,6 +2708,8 @@
       renderJigsawImages([]);
       renderImageLibraryImages([]);
       renderDiaryEntries([]);
+      renderAiUsageDiagnostics(null);
+      closeAiUsageDetailModal();
       clearBulkUploadFiles();
       closeImageBrowser();
       if (elements.jigsawSearchInput) {
@@ -2846,7 +3285,7 @@
       } else {
         showFeedback("Jigsaw enrichment completed. No empty fields could be updated.");
       }
-      await Promise.all([loadJigsaws(), loadJigsawImagesForSelected(), loadAuditEvents()]);
+      await Promise.all([loadJigsaws(), loadJigsawImagesForSelected(), loadAuditEvents(), loadAiUsageDiagnostics()]);
       openJigsawEditor(jigsawId);
     } catch (error) {
       showFeedback(error.message, true);
@@ -2880,6 +3319,17 @@
   }
 
   async function handleTableActions(event) {
+    const aiUsageDetailButton = event.target.closest("[data-ai-usage-detail]");
+    if (aiUsageDetailButton) {
+      event.preventDefault();
+      const eventId = String(aiUsageDetailButton.getAttribute("data-ai-usage-detail") || "");
+      const entry = state.aiUsageRecentById[eventId];
+      if (entry) {
+        openAiUsageDetailModal(entry);
+      }
+      return;
+    }
+
     const editJigsawButton = event.target.closest("[data-jigsaw-edit]");
     if (editJigsawButton) {
       event.preventDefault();
@@ -3056,8 +3506,18 @@
           loadImageLibraryImages(),
           loadJigsawImagesForSelected(),
           loadAuditEvents(),
+          loadAiUsageDiagnostics(),
         ]);
       } catch (error) {
+        if (error.status === 502) {
+          await loadAiUsageDiagnostics();
+          const requestId = error?.payload?.meta?.request_id;
+          const hint = buildAiFailureHintForImage(imageId, requestId);
+          if (hint) {
+            showFeedback(`${error.message} Diagnostic: ${hint}`, true);
+            return;
+          }
+        }
         showFeedback(error.message, true);
       }
     }
@@ -3429,6 +3889,22 @@
     if (elements.jigsawSearchInput) {
       elements.jigsawSearchInput.addEventListener("input", handleJigsawSearchInput);
     }
+
+    if (elements.aiUsageRecentBody) {
+      elements.aiUsageRecentBody.addEventListener("click", handleTableActions);
+    }
+
+    if (elements.aiUsageDetailCloseButton) {
+      elements.aiUsageDetailCloseButton.addEventListener("click", closeAiUsageDetailModal);
+    }
+
+    if (elements.aiUsageDetailModal) {
+      elements.aiUsageDetailModal.addEventListener("click", (event) => {
+        if (event.target === elements.aiUsageDetailModal) {
+          closeAiUsageDetailModal();
+        }
+      });
+    }
   }
 
   async function init() {
@@ -3438,7 +3914,7 @@
     renderBulkUploadFiles();
     const isAuthenticated = await refreshSession();
     if (isAuthenticated) {
-      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadImageLibraryImages()]);
+      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadAiUsageDiagnostics(), loadImageLibraryImages()]);
       await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
     } else {
       renderUsers([]);
@@ -3448,6 +3924,8 @@
       renderImageLibraryImages([]);
       renderDiaryEntries([]);
       renderAuditEvents([]);
+      renderAiUsageDiagnostics(null);
+      closeAiUsageDetailModal();
       renderBulkUploadFiles();
       populateLoanFormOptions();
       populateJigsawImageOptions();

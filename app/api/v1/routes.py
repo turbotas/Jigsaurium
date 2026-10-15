@@ -14,7 +14,7 @@ from functools import wraps
 
 from flask import Blueprint, current_app, g, request, session
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import DataError
 
 from app.db import get_session
@@ -72,6 +72,13 @@ IMAGE_VARIANT_THUMBNAIL = "thumbnail"
 IMAGE_VARIANT_PREVIEW = "preview"
 THUMBNAIL_TARGET_WIDTH = 150
 PREVIEW_TARGET_WIDTH = 600
+
+
+class AiProviderRequestError(RuntimeError):
+    def __init__(self, message, *, status_code=None, response_text=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_text = response_text
 
 
 def _success_response(data, status_code=200):
@@ -172,6 +179,100 @@ def _serialize_audit_event(event):
         "payload_json": event.payload_json,
         "created_at": event.created_at.isoformat() if event.created_at else None,
     }
+
+
+def _deserialize_json_text(raw_text):
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        return None
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        return raw_text
+
+
+def _serialize_ai_usage_event(event, image_filename=None, image_mime_type=None, image_size_bytes=None):
+    provider_http_status = None
+    if isinstance(event.error_message, str):
+        match = re.search(r"HTTP\s+(\d{3})", event.error_message)
+        if match is not None:
+            try:
+                provider_http_status = int(match.group(1))
+            except ValueError:
+                provider_http_status = None
+
+    return {
+        "id": event.id,
+        "actor_user_id": event.actor_user_id,
+        "image_id": event.image_id,
+        "operation": event.operation,
+        "status": event.status,
+        "model": event.model,
+        "endpoint_url": event.endpoint_url,
+        "prompt_tokens": event.prompt_tokens,
+        "completion_tokens": event.completion_tokens,
+        "total_tokens": event.total_tokens,
+        "provider_cost_usd": str(_to_decimal(event.provider_cost_usd) or Decimal("0")),
+        "computed_cost_usd": str(_to_decimal(event.computed_cost_usd) or Decimal("0")),
+        "final_cost_usd": str(_to_decimal(event.final_cost_usd) or Decimal("0")),
+        "error_code": event.error_code,
+        "error_message": event.error_message,
+        "provider_http_status": provider_http_status,
+        "request_id": event.request_id,
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+        "payload": _deserialize_json_text(event.payload_json),
+        "image": {
+            "filename": image_filename,
+            "mime_type": image_mime_type,
+            "size_bytes": image_size_bytes,
+        },
+    }
+
+
+def _build_ai_usage_window_summary(db_session, *, start_at, end_at):
+    row = db_session.execute(
+        select(
+            func.count(AiUsageEvent.id),
+            func.coalesce(func.sum(case((AiUsageEvent.status == AI_USAGE_STATUS_SUCCESS, 1), else_=0)), 0),
+            func.coalesce(func.sum(AiUsageEvent.total_tokens), 0),
+            func.coalesce(func.sum(AiUsageEvent.final_cost_usd), 0),
+        ).where(AiUsageEvent.created_at >= start_at, AiUsageEvent.created_at < end_at)
+    ).one()
+
+    return {
+        "calls": int(row[0] or 0),
+        "success": int(row[1] or 0),
+        "tokens": int(row[2] or 0),
+        "cost_usd": str(_to_decimal(row[3]) or Decimal("0")),
+    }
+
+
+def _summarize_ai_usage_by_field(db_session, *, field_name, start_at, end_at):
+    field = getattr(AiUsageEvent, field_name)
+    rows = db_session.execute(
+        select(
+            field,
+            func.count(AiUsageEvent.id),
+            func.coalesce(func.sum(case((AiUsageEvent.status == AI_USAGE_STATUS_SUCCESS, 1), else_=0)), 0),
+            func.coalesce(func.sum(AiUsageEvent.total_tokens), 0),
+            func.coalesce(func.sum(AiUsageEvent.final_cost_usd), 0),
+        )
+        .where(AiUsageEvent.created_at >= start_at, AiUsageEvent.created_at < end_at)
+        .group_by(field)
+        .order_by(func.coalesce(func.sum(AiUsageEvent.final_cost_usd), 0).desc(), func.count(AiUsageEvent.id).desc())
+    ).all()
+
+    payload = []
+    for group_value, calls, success, tokens, cost_usd in rows:
+        payload.append(
+            {
+                field_name: group_value,
+                "calls": int(calls or 0),
+                "success": int(success or 0),
+                "tokens": int(tokens or 0),
+                "cost_usd": str(_to_decimal(cost_usd) or Decimal("0")),
+            }
+        )
+    return payload
 
 
 def _serialize_loan(loan):
@@ -1190,14 +1291,19 @@ def _extract_json_object_from_text(raw_text):
 def _build_ai_image_prompt():
     return (
         "You are extracting metadata from a jigsaw puzzle box image. "
-        "Return strictly valid JSON with keys: "
-        "title, series_name, series_number, manufacturer, artist, piece_count, tags, dimensions_cm, description. "
-        "Use null when unknown. "
+        "Return one JSON object only, with exactly these keys and types: "
+        "title (string|null), series_name (string|null), series_number (string|null), manufacturer (string|null), "
+        "artist (string|null), piece_count (integer|null), tags (string|array|null), dimensions_cm (string|null), "
+        "description (string|null). "
+        "All keys must always be present. "
+        "Use null when unknown or not visible. "
         "Keep title and series fields separate. "
+        "Prefer manufacturer key; publisher is acceptable only when manufacturer text is not available. "
         "Do not guess missing values. "
         "piece_count must be an integer when present. "
         "tags must be either a comma-separated string or an array of short strings. "
-        "Do not include markdown or extra commentary."
+        "Do not include markdown, code fences, comments, or any text before/after the JSON object. "
+        "Output must be parseable by json.loads without preprocessing."
     )
 
 
@@ -1307,26 +1413,61 @@ def _normalize_ai_tags(raw_tags):
     if isinstance(raw_tags, list):
         normalized_items = []
         for item in raw_tags:
+            if item is None:
+                continue
+            if isinstance(item, (int, float)) and not isinstance(item, bool):
+                item = str(item)
+            if not isinstance(item, str):
+                continue
             tag, error = _validate_optional_text_field(item, field_name="tags", max_length=64)
             if error is not None:
-                return None, _error_response(
-                    "validation_error",
-                    "Invalid request payload.",
-                    422,
-                    [{"field": "tags", "issue": "must be a string, null, or list of short strings"}],
-                )
+                continue
             if tag:
                 normalized_items.append(tag)
 
         joined = ", ".join(normalized_items)
         return _validate_optional_text_field(joined, field_name="tags", max_length=JIGSAW_TAGS_MAX_LENGTH)
 
-    return None, _error_response(
-        "validation_error",
-        "Invalid request payload.",
-        422,
-        [{"field": "tags", "issue": "must be a string, null, or list of strings"}],
-    )
+    if isinstance(raw_tags, (int, float)) and not isinstance(raw_tags, bool):
+        return _validate_optional_text_field(str(raw_tags), field_name="tags", max_length=JIGSAW_TAGS_MAX_LENGTH)
+
+    return None, None
+
+
+def _parse_optional_ai_piece_count(value):
+    piece_count, error = _parse_optional_positive_integer(value, "piece_count")
+    if error is None:
+        return piece_count, None
+
+    if not isinstance(value, str):
+        return None, None
+
+    digit_match = re.search(r"\d[\d,\.\s]*", value)
+    if digit_match is None:
+        return None, None
+
+    numeric_text = re.sub(r"[^0-9]", "", digit_match.group(0))
+    if not numeric_text:
+        return None, None
+
+    try:
+        parsed = int(numeric_text)
+    except ValueError:
+        return None, None
+
+    if parsed <= 0:
+        return None, None
+    return parsed, None
+
+
+def _coerce_ai_optional_text_field(value, *, field_name, max_length):
+    if value is None:
+        return None, None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        value = str(value)
+    if not isinstance(value, str):
+        return None, None
+    return _validate_optional_text_field(value, field_name=field_name, max_length=max_length)
 
 
 def _normalize_ai_jigsaw_payload(raw_payload):
@@ -1338,64 +1479,64 @@ def _normalize_ai_jigsaw_payload(raw_payload):
             [{"field": "ai_response", "issue": "must be a JSON object"}],
         )
 
-    title, error = _validate_optional_text_field(raw_payload.get("title"), field_name="title", max_length=JIGSAW_TITLE_MAX_LENGTH)
+    title, error = _coerce_ai_optional_text_field(raw_payload.get("title"), field_name="title", max_length=JIGSAW_TITLE_MAX_LENGTH)
     if error is not None:
-        return None, error
+        title = None
 
-    series_name, error = _validate_optional_text_field(
+    series_name, error = _coerce_ai_optional_text_field(
         raw_payload.get("series_name"),
         field_name="series_name",
         max_length=JIGSAW_SERIES_NAME_MAX_LENGTH,
     )
     if error is not None:
-        return None, error
+        series_name = None
 
-    series_number, error = _validate_optional_text_field(
+    series_number, error = _coerce_ai_optional_text_field(
         raw_payload.get("series_number"),
         field_name="series_number",
         max_length=JIGSAW_SERIES_NUMBER_MAX_LENGTH,
     )
     if error is not None:
-        return None, error
+        series_number = None
 
     manufacturer_source = raw_payload.get("manufacturer")
     if manufacturer_source is None:
         manufacturer_source = raw_payload.get("publisher")
-    manufacturer, error = _validate_optional_text_field(
+    manufacturer, error = _coerce_ai_optional_text_field(
         manufacturer_source,
         field_name="manufacturer",
         max_length=JIGSAW_MANUFACTURER_MAX_LENGTH,
     )
     if error is not None:
-        return None, error
+        manufacturer = None
 
-    artist, error = _validate_optional_text_field(raw_payload.get("artist"), field_name="artist", max_length=JIGSAW_ARTIST_MAX_LENGTH)
+    artist, error = _coerce_ai_optional_text_field(raw_payload.get("artist"), field_name="artist", max_length=JIGSAW_ARTIST_MAX_LENGTH)
     if error is not None:
-        return None, error
+        artist = None
 
-    dimensions_cm, error = _validate_optional_text_field(
+    dimensions_cm, error = _coerce_ai_optional_text_field(
         raw_payload.get("dimensions_cm"),
         field_name="dimensions_cm",
         max_length=JIGSAW_DIMENSIONS_MAX_LENGTH,
     )
     if error is not None:
-        return None, error
+        dimensions_cm = None
 
-    description, error = _validate_optional_text_field(
+    description, error = _coerce_ai_optional_text_field(
         raw_payload.get("description"),
         field_name="description",
         max_length=JIGSAW_DESCRIPTION_MAX_LENGTH,
     )
     if error is not None:
-        return None, error
+        description = None
 
-    piece_count, error = _parse_optional_positive_integer(raw_payload.get("piece_count"), "piece_count")
+    piece_count, error = _parse_optional_ai_piece_count(raw_payload.get("piece_count"))
     if error is not None:
-        return None, error
+        piece_count = None
 
     tags, error = _normalize_ai_tags(raw_payload.get("tags"))
     if error is not None:
-        return None, error
+        tags = None
 
     return {
         "title": title,
@@ -1479,9 +1620,27 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text):
         with urllib.request.urlopen(http_request, timeout=timeout_seconds) as response:
             response_raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as error:
-        raise RuntimeError(f"AI provider returned HTTP {error.code}") from error
+        provider_body = ""
+        try:
+            provider_body = error.read().decode("utf-8", errors="replace")
+        except OSError:
+            provider_body = ""
+
+        compact_body = re.sub(r"\s+", " ", provider_body).strip()
+        if compact_body:
+            compact_preview = compact_body[:600]
+            raise AiProviderRequestError(
+                f"AI provider returned HTTP {error.code}: {compact_preview}",
+                status_code=error.code,
+                response_text=provider_body,
+            ) from error
+        raise AiProviderRequestError(
+            f"AI provider returned HTTP {error.code}",
+            status_code=error.code,
+            response_text=provider_body or None,
+        ) from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise RuntimeError("AI provider request failed") from error
+        raise AiProviderRequestError(f"AI provider request failed: {error}") from error
 
     try:
         result_payload = json.loads(response_raw)
@@ -1502,6 +1661,8 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text):
     cost_payload = _build_ai_usage_costs(result_payload)
     return {
         "metadata": parsed_payload,
+        "provider_response": result_payload,
+        "provider_response_text": response_raw,
         "prompt_tokens": cost_payload["prompt_tokens"],
         "completion_tokens": cost_payload["completion_tokens"],
         "total_tokens": cost_payload["total_tokens"],
@@ -1775,6 +1936,91 @@ def list_audit_events():
     db_session = get_session()
     events = db_session.execute(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(limit)).scalars().all()
     payload = [_serialize_audit_event(event) for event in events]
+    return _success_response(payload)
+
+
+@api_v1_bp.get("/ai-usage/diagnostics")
+@require_role("administrator")
+def get_ai_usage_diagnostics():
+    raw_limit = request.args.get("limit", "50")
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        return _error_response(
+            "validation_error",
+            "Invalid request query.",
+            422,
+            [{"field": "limit", "issue": "must be an integer"}],
+        )
+
+    if limit < 1 or limit > 200:
+        return _error_response(
+            "validation_error",
+            "Invalid request query.",
+            422,
+            [{"field": "limit", "issue": "must be between 1 and 200"}],
+        )
+
+    now = datetime.now(timezone.utc)
+    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    seven_days_start = now - timedelta(days=7)
+    thirty_days_start = now - timedelta(days=30)
+
+    db_session = get_session()
+
+    windows = {
+        "today": _build_ai_usage_window_summary(db_session, start_at=today_start, end_at=now),
+        "last_7_days": _build_ai_usage_window_summary(db_session, start_at=seven_days_start, end_at=now),
+        "last_30_days": _build_ai_usage_window_summary(db_session, start_at=thirty_days_start, end_at=now),
+    }
+
+    by_operation = _summarize_ai_usage_by_field(
+        db_session,
+        field_name="operation",
+        start_at=thirty_days_start,
+        end_at=now,
+    )
+    by_model = _summarize_ai_usage_by_field(
+        db_session,
+        field_name="model",
+        start_at=thirty_days_start,
+        end_at=now,
+    )
+
+    recent_rows = db_session.execute(
+        select(
+            AiUsageEvent,
+            JigsawImage.filename,
+            JigsawImage.mime_type,
+            func.length(JigsawImage.image_data).label("image_size_bytes"),
+        )
+        .outerjoin(JigsawImage, JigsawImage.id == AiUsageEvent.image_id)
+        .order_by(AiUsageEvent.id.desc())
+        .limit(limit)
+    ).all()
+    recent_calls = [
+        _serialize_ai_usage_event(
+            event=row[0],
+            image_filename=row[1],
+            image_mime_type=row[2],
+            image_size_bytes=int(row[3]) if row[3] is not None else None,
+        )
+        for row in recent_rows
+    ]
+
+    budget_usd = _to_decimal(current_app.config.get("AI_DAILY_BUDGET_USD"))
+    daily_spend_usd = _get_daily_ai_spend(db_session)
+    payload = {
+        "windows": windows,
+        "by_operation_30d": by_operation,
+        "by_model_30d": by_model,
+        "recent_calls": recent_calls,
+        "daily_budget_usd": str(budget_usd) if budget_usd is not None else None,
+        "daily_spend_usd": str(daily_spend_usd),
+        "daily_budget_reached": bool(
+            budget_usd is not None and budget_usd >= Decimal("0") and daily_spend_usd >= budget_usd
+        ),
+    }
     return _success_response(payload)
 
 
@@ -2947,6 +3193,12 @@ def create_jigsaw_from_image(image_id):
     try:
         inference = _infer_jigsaw_metadata_from_image(image)
     except RuntimeError as error:
+        error_payload = None
+        if isinstance(error, AiProviderRequestError):
+            error_payload = {
+                "provider_status_code": error.status_code,
+                "provider_response_text": error.response_text,
+            }
         _record_ai_usage_event(
             db_session=db_session,
             operation=AI_IMAGE_CREATE_OPERATION,
@@ -2957,6 +3209,7 @@ def create_jigsaw_from_image(image_id):
             error_code="provider_error",
             error_message=str(error),
             final_cost_usd=Decimal("0"),
+            payload=error_payload,
         )
         db_session.commit()
         return _error_response("bad_gateway", "AI metadata extraction failed.", 502)
@@ -2978,7 +3231,11 @@ def create_jigsaw_from_image(image_id):
             final_cost_usd=inference.get("final_cost_usd") or Decimal("0"),
             error_code="invalid_ai_payload",
             error_message="AI metadata payload could not be normalized.",
-            payload={"raw_metadata": inference.get("metadata")},
+            payload={
+                "raw_metadata": inference.get("metadata"),
+                "provider_response": inference.get("provider_response"),
+                "provider_response_text": inference.get("provider_response_text"),
+            },
         )
         db_session.commit()
         return _error_response("bad_gateway", "AI metadata could not be normalized.", 502)
@@ -3016,7 +3273,13 @@ def create_jigsaw_from_image(image_id):
         provider_cost_usd=inference.get("provider_cost_usd"),
         computed_cost_usd=inference.get("computed_cost_usd"),
         final_cost_usd=inference.get("final_cost_usd") or Decimal("0"),
-        payload={"metadata": normalized_payload, "created_jigsaw_id": jigsaw.id},
+        payload={
+            "metadata": normalized_payload,
+            "raw_metadata": inference.get("metadata"),
+            "provider_response": inference.get("provider_response"),
+            "provider_response_text": inference.get("provider_response_text"),
+            "created_jigsaw_id": jigsaw.id,
+        },
     )
 
     _record_audit_event(
@@ -3126,6 +3389,13 @@ def enrich_jigsaw_from_images(jigsaw_id):
     try:
         inference = _infer_jigsaw_metadata_from_images(images, instruction_text)
     except RuntimeError as runtime_error:
+        error_payload = {
+            "jigsaw_id": jigsaw.id,
+            "image_ids": [image.id for image in images],
+        }
+        if isinstance(runtime_error, AiProviderRequestError):
+            error_payload["provider_status_code"] = runtime_error.status_code
+            error_payload["provider_response_text"] = runtime_error.response_text
         _record_ai_usage_event(
             db_session=db_session,
             operation=AI_JIGSAW_ENRICH_OPERATION,
@@ -3136,7 +3406,7 @@ def enrich_jigsaw_from_images(jigsaw_id):
             error_code="provider_error",
             error_message=str(runtime_error),
             final_cost_usd=Decimal("0"),
-            payload={"jigsaw_id": jigsaw.id, "image_ids": [image.id for image in images]},
+            payload=error_payload,
         )
         db_session.commit()
         return _error_response("bad_gateway", "AI metadata extraction failed.", 502)
@@ -3158,7 +3428,12 @@ def enrich_jigsaw_from_images(jigsaw_id):
             final_cost_usd=inference.get("final_cost_usd") or Decimal("0"),
             error_code="invalid_ai_payload",
             error_message="AI metadata payload could not be normalized.",
-            payload={"raw_metadata": inference.get("metadata"), "jigsaw_id": jigsaw.id},
+            payload={
+                "raw_metadata": inference.get("metadata"),
+                "provider_response": inference.get("provider_response"),
+                "provider_response_text": inference.get("provider_response_text"),
+                "jigsaw_id": jigsaw.id,
+            },
         )
         db_session.commit()
         return _error_response("bad_gateway", "AI metadata could not be normalized.", 502)
@@ -3187,6 +3462,9 @@ def enrich_jigsaw_from_images(jigsaw_id):
             "image_ids": [image.id for image in images],
             "overwrite_existing": overwrite_existing,
             "metadata": normalized_payload,
+            "raw_metadata": inference.get("metadata"),
+            "provider_response": inference.get("provider_response"),
+            "provider_response_text": inference.get("provider_response_text"),
             "applied_fields": applied_fields,
             "skipped_fields": skipped_fields,
         },

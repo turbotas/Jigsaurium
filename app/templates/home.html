@@ -564,7 +564,7 @@
             <div class="govuk-form-group">
               <label class="govuk-label" for="diary-jigsaw-id">Jigsaw</label>
               <select id="diary-jigsaw-id" name="jigsaw_id" class="govuk-select" required>
-                <option value="">Choose jigsaw</option>
+                <option value="">All completed jigsaws (recent first)</option>
               </select>
             </div>
           </div>
@@ -598,10 +598,12 @@
 
       <div class="table-scroll-wrap">
         <table class="govuk-table" id="diary-entries-table">
-          <caption class="govuk-table__caption govuk-table__caption--m">Diary entries for selected jigsaw</caption>
+          <caption id="diary-entries-caption" class="govuk-table__caption govuk-table__caption--m">Recent diary entries across completed jigsaws (most recent first)</caption>
           <thead class="govuk-table__head">
             <tr class="govuk-table__row">
               <th class="govuk-table__header">ID</th>
+              <th class="govuk-table__header">Jigsaw</th>
+              <th class="govuk-table__header">Completed image</th>
               <th class="govuk-table__header">Completed</th>
               <th class="govuk-table__header">Difficulty</th>
               <th class="govuk-table__header">Notes</th>
@@ -612,6 +614,108 @@
         </table>
       </div>
     </section>
+  </section>
+
+  <section class="govuk-!-margin-top-8" aria-labelledby="ai-usage-heading">
+    <h2 id="ai-usage-heading" class="govuk-heading-l">AI spend and diagnostics</h2>
+    <p class="govuk-body">Track AI cost and inspect recent call failures without direct database access.</p>
+
+    <div class="app-ai-usage-cards govuk-!-margin-bottom-5">
+      <div class="app-ai-usage-card">
+        <h3 class="govuk-heading-m">Today</h3>
+        <p class="govuk-body">Cost: <strong id="ai-usage-today-cost">$0.0000</strong></p>
+        <p class="govuk-body">Calls: <strong id="ai-usage-today-calls">0</strong></p>
+        <p class="govuk-body">Success: <strong id="ai-usage-today-success">0</strong></p>
+        <p class="govuk-body govuk-!-margin-bottom-0">Tokens: <strong id="ai-usage-today-tokens">0</strong></p>
+      </div>
+      <div class="app-ai-usage-card">
+        <h3 class="govuk-heading-m">Last 7 days</h3>
+        <p class="govuk-body">Cost: <strong id="ai-usage-7d-cost">$0.0000</strong></p>
+        <p class="govuk-body">Calls: <strong id="ai-usage-7d-calls">0</strong></p>
+        <p class="govuk-body">Success: <strong id="ai-usage-7d-success">0</strong></p>
+        <p class="govuk-body govuk-!-margin-bottom-0">Tokens: <strong id="ai-usage-7d-tokens">0</strong></p>
+      </div>
+      <div class="app-ai-usage-card">
+        <h3 class="govuk-heading-m">Last 30 days</h3>
+        <p class="govuk-body">Cost: <strong id="ai-usage-30d-cost">$0.0000</strong></p>
+        <p class="govuk-body">Calls: <strong id="ai-usage-30d-calls">0</strong></p>
+        <p class="govuk-body">Success: <strong id="ai-usage-30d-success">0</strong></p>
+        <p class="govuk-body govuk-!-margin-bottom-0">Tokens: <strong id="ai-usage-30d-tokens">0</strong></p>
+      </div>
+    </div>
+
+    <p class="govuk-body govuk-!-margin-bottom-4">
+      Daily budget: <strong id="ai-usage-daily-budget">-</strong>
+      | Spend today: <strong id="ai-usage-daily-spend">$0.0000</strong>
+      | Budget reached: <strong id="ai-usage-budget-reached">No</strong>
+    </p>
+
+    <div class="govuk-grid-row govuk-!-margin-bottom-6">
+      <div class="govuk-grid-column-one-half">
+        <h3 class="govuk-heading-m">By operation (30 days)</h3>
+        <div class="table-scroll-wrap">
+          <table class="govuk-table" id="ai-usage-operation-table">
+            <thead class="govuk-table__head">
+              <tr class="govuk-table__row">
+                <th class="govuk-table__header">Operation</th>
+                <th class="govuk-table__header">Calls</th>
+                <th class="govuk-table__header">Success</th>
+                <th class="govuk-table__header">Tokens</th>
+                <th class="govuk-table__header">Cost</th>
+              </tr>
+            </thead>
+            <tbody class="govuk-table__body" id="ai-usage-operation-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="govuk-grid-column-one-half">
+        <h3 class="govuk-heading-m">By model (30 days)</h3>
+        <div class="table-scroll-wrap">
+          <table class="govuk-table" id="ai-usage-model-table">
+            <thead class="govuk-table__head">
+              <tr class="govuk-table__row">
+                <th class="govuk-table__header">Model</th>
+                <th class="govuk-table__header">Calls</th>
+                <th class="govuk-table__header">Success</th>
+                <th class="govuk-table__header">Tokens</th>
+                <th class="govuk-table__header">Cost</th>
+              </tr>
+            </thead>
+            <tbody class="govuk-table__body" id="ai-usage-model-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <h3 class="govuk-heading-m">Recent AI calls</h3>
+    <div class="table-scroll-wrap">
+      <table class="govuk-table" id="ai-usage-recent-table">
+        <thead class="govuk-table__head">
+          <tr class="govuk-table__row">
+            <th class="govuk-table__header">When</th>
+            <th class="govuk-table__header">Operation</th>
+            <th class="govuk-table__header">Model</th>
+            <th class="govuk-table__header">Status</th>
+            <th class="govuk-table__header">Image</th>
+            <th class="govuk-table__header">Tokens</th>
+            <th class="govuk-table__header">Cost</th>
+            <th class="govuk-table__header">Request</th>
+            <th class="govuk-table__header">Error</th>
+          </tr>
+        </thead>
+        <tbody class="govuk-table__body" id="ai-usage-recent-body"></tbody>
+      </table>
+    </div>
+
+    <div id="ai-usage-detail-modal" class="app-ai-usage-detail-modal" hidden>
+      <div class="app-ai-usage-detail-modal__panel" role="dialog" aria-modal="true" aria-labelledby="ai-usage-detail-title">
+        <h4 id="ai-usage-detail-title" class="govuk-heading-m">AI call details</h4>
+        <p id="ai-usage-detail-summary" class="govuk-body"></p>
+        <pre id="ai-usage-detail-payload" class="app-ai-usage-detail-modal__payload"></pre>
+        <button id="ai-usage-detail-close" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Close details</button>
+      </div>
+    </div>
   </section>
 
   <section class="govuk-!-margin-top-8" aria-labelledby="audit-heading">
