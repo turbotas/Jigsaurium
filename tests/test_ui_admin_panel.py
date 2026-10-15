@@ -166,11 +166,9 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
 
         page.wait_for_selector("text=Loan created.")
         page.wait_for_selector("#loans-table-body tr button[data-loan-return]")
-        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("text=on_loan").count() >= 1
 
         page.locator("#loans-table-body tr", has_text="active").locator("button[data-loan-return]").first.click()
         page.wait_for_selector("text=Loan returned.")
-        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("text=available").count() >= 1
 
         page.select_option("#jigsaw-image-jigsaw-id", jigsaw_option_value)
         page.fill("#jigsaw-image-tag", "completed puzzle")
@@ -266,7 +264,8 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#diary-entry-form button[type='submit']")
         page.wait_for_selector("text=Diary entry added.")
         page.wait_for_selector("#diary-entries-table-body tr:has-text('UI diary entry')")
-        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(4).inner_text() != "-"
+        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(3).inner_text() != "-"
+        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(0).locator("img").count() >= 1
 
         page.locator("#diary-entries-table-body tr", has_text="UI diary entry").locator("button[data-diary-delete]").click()
         page.wait_for_selector("text=Diary entry deleted.")

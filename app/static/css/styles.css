@@ -53,6 +53,11 @@
   overflow-wrap: anywhere;
 }
 
+.app-jigsaws-table .govuk-table__header:nth-child(1),
+.app-jigsaws-table .govuk-table__cell:nth-child(1) {
+  width: 170px;
+}
+
 .app-image-library-table {
   table-layout: fixed;
   width: 100%;
@@ -65,7 +70,7 @@
 
 .app-image-library-table .govuk-table__header:nth-child(1),
 .app-image-library-table .govuk-table__cell:nth-child(1) {
-  width: 56px;
+  width: 170px;
 }
 
 .app-image-library-table .govuk-table__header:nth-child(6),
@@ -91,6 +96,77 @@
 
 .app-inline-button {
   margin-bottom: 0;
+}
+
+.app-thumbnail-cell {
+  position: relative;
+}
+
+.app-thumbnail-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 150px;
+  min-height: 92px;
+  border: 1px solid #b1b4b6;
+  border-radius: 4px;
+  background: #fff;
+  padding: 2px;
+  cursor: zoom-in;
+  text-decoration: none;
+}
+
+.app-thumbnail-trigger:focus-visible {
+  outline: 3px solid #ffdd00;
+  outline-offset: 1px;
+}
+
+.app-thumbnail-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: cover;
+}
+
+.app-thumbnail-fallback {
+  font-size: 0.875rem;
+  color: #505a5f;
+}
+
+.app-thumbnail-preview {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 10px);
+  width: min(420px, 55vw);
+  max-height: 70vh;
+  overflow: hidden;
+  border: 2px solid #1d70b8;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(11, 12, 12, 0.25);
+  padding: 4px;
+  z-index: 20;
+  display: none;
+  pointer-events: none;
+}
+
+.app-thumbnail-preview img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.app-thumbnail-cell:hover .app-thumbnail-preview,
+.app-thumbnail-cell:focus-within .app-thumbnail-preview {
+  display: block;
+}
+
+@media (max-width: 900px) {
+  .app-thumbnail-preview {
+    left: 0;
+    top: calc(100% + 8px);
+    width: min(90vw, 420px);
+  }
 }
 
 .app-image-actions {
@@ -158,6 +234,18 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.app-image-browser__filters {
+  flex: 1 1 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.app-image-browser__filters .govuk-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 
 .app-image-browser__controls .govuk-button {

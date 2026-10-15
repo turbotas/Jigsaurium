@@ -267,10 +267,9 @@
         <caption class="govuk-table__caption govuk-table__caption--m">Jigsaw inventory</caption>
         <thead class="govuk-table__head">
           <tr class="govuk-table__row">
-            <th class="govuk-table__header">ID</th>
+            <th class="govuk-table__header">Thumbnail</th>
             <th class="govuk-table__header">Title</th>
             <th class="govuk-table__header">Pieces</th>
-            <th class="govuk-table__header">Status</th>
             <th class="govuk-table__header">Last completed</th>
             <th class="govuk-table__header">Action</th>
           </tr>
@@ -404,7 +403,7 @@
           <caption class="govuk-table__caption govuk-table__caption--m">Tagged images for selected jigsaw</caption>
           <thead class="govuk-table__head">
             <tr class="govuk-table__row">
-              <th class="govuk-table__header">ID</th>
+              <th class="govuk-table__header">Thumbnail</th>
               <th class="govuk-table__header">Tag</th>
               <th class="govuk-table__header">Filename</th>
               <th class="govuk-table__header">Uploaded</th>
@@ -490,7 +489,7 @@
           <caption class="govuk-table__caption govuk-table__caption--m">Recent image library uploads</caption>
           <thead class="govuk-table__head">
             <tr class="govuk-table__row">
-              <th class="govuk-table__header">ID</th>
+              <th class="govuk-table__header">Thumbnail</th>
               <th class="govuk-table__header">Filename</th>
               <th class="govuk-table__header">Associated jigsaw</th>
               <th class="govuk-table__header">Tag</th>
@@ -510,6 +509,24 @@
           </div>
 
           <div class="app-image-browser__controls govuk-!-margin-bottom-3">
+            <fieldset class="govuk-fieldset app-image-browser__filters" aria-describedby="image-browser-filters-hint">
+              <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">Browser filter</legend>
+              <div id="image-browser-filters-hint" class="govuk-hint govuk-!-margin-bottom-1">Show images matching any selected option.</div>
+              <div class="govuk-checkboxes govuk-checkboxes--small">
+                <div class="govuk-checkboxes__item">
+                  <input id="image-browser-filter-unassigned" class="govuk-checkboxes__input" type="checkbox" checked>
+                  <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-unassigned">Unassigned</label>
+                </div>
+                <div class="govuk-checkboxes__item">
+                  <input id="image-browser-filter-box" class="govuk-checkboxes__input" type="checkbox">
+                  <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-box">Box</label>
+                </div>
+                <div class="govuk-checkboxes__item">
+                  <input id="image-browser-filter-completed" class="govuk-checkboxes__input" type="checkbox">
+                  <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-completed">Completed</label>
+                </div>
+              </div>
+            </fieldset>
             <button id="image-browser-prev" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Previous</button>
             <button id="image-browser-next" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Next</button>
             <button id="image-browser-rotate-left" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate left</button>

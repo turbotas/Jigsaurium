@@ -5,6 +5,7 @@
   const IMAGE_BROWSER_TAG_BOX_SIDE = "Box side";
   const IMAGE_BROWSER_TAG_BOX_BACK = "Box back";
   const IMAGE_BROWSER_TAG_IN_PROGRESS = "In progress";
+  const THUMBNAIL_DISPLAY_WIDTH_PX = 150;
 
   const state = {
     csrfToken: null,
@@ -24,6 +25,9 @@
     imageBrowser: {
       isOpen: false,
       index: 0,
+      filterUnassigned: true,
+      filterBox: false,
+      filterCompleted: false,
       sourceDataUrl: null,
       workingDataUrl: null,
       workingImage: null,
@@ -105,6 +109,9 @@
     imageBrowserOpen: document.getElementById("image-browser-open"),
     imageBrowserModal: document.getElementById("image-browser-modal"),
     imageBrowserStatus: document.getElementById("image-browser-status"),
+    imageBrowserFilterUnassigned: document.getElementById("image-browser-filter-unassigned"),
+    imageBrowserFilterBox: document.getElementById("image-browser-filter-box"),
+    imageBrowserFilterCompleted: document.getElementById("image-browser-filter-completed"),
     imageBrowserCanvas: document.getElementById("image-browser-canvas"),
     imageBrowserPrev: document.getElementById("image-browser-prev"),
     imageBrowserNext: document.getElementById("image-browser-next"),
@@ -240,6 +247,103 @@
     cell.className = "govuk-table__cell";
     cell.textContent = text;
     return cell;
+  }
+
+  function buildThumbnailCell(contentUrl, options = {}) {
+    const cell = document.createElement("td");
+    cell.className = "govuk-table__cell app-thumbnail-cell";
+
+    const altText = String(options.altText || "Thumbnail image");
+    const fallbackText = String(options.fallbackText || "No image");
+    const previewUrl = String(options.previewUrl || contentUrl || "");
+    const openUrl = String(options.openUrl || contentUrl || "");
+
+    if (!contentUrl) {
+      const fallback = document.createElement("div");
+      fallback.className = "app-thumbnail-trigger";
+      fallback.style.width = `${THUMBNAIL_DISPLAY_WIDTH_PX}px`;
+
+      const fallbackLabel = document.createElement("span");
+      fallbackLabel.className = "app-thumbnail-fallback";
+      fallbackLabel.textContent = fallbackText;
+      fallback.appendChild(fallbackLabel);
+
+      cell.appendChild(fallback);
+      return cell;
+    }
+
+    const trigger = document.createElement("a");
+    trigger.className = "app-thumbnail-trigger";
+    trigger.style.width = `${THUMBNAIL_DISPLAY_WIDTH_PX}px`;
+    trigger.href = openUrl;
+    trigger.target = "_blank";
+    trigger.rel = "noopener noreferrer";
+    trigger.setAttribute("aria-label", `Open ${altText}`);
+
+    const image = document.createElement("img");
+    image.className = "app-thumbnail-image";
+    image.src = String(contentUrl);
+    image.alt = altText;
+    image.loading = "lazy";
+    image.decoding = "async";
+    trigger.appendChild(image);
+
+    const preview = document.createElement("div");
+    preview.className = "app-thumbnail-preview";
+    preview.setAttribute("aria-hidden", "true");
+
+    const previewImage = document.createElement("img");
+    previewImage.src = previewUrl;
+    previewImage.alt = "";
+    previewImage.loading = "lazy";
+    previewImage.decoding = "async";
+    preview.appendChild(previewImage);
+
+    cell.appendChild(trigger);
+    cell.appendChild(preview);
+    return cell;
+  }
+
+  function imageTagPriority(tag) {
+    const normalized = toImageTagKey(tag);
+    if (normalized === toImageTagKey(IMAGE_BROWSER_TAG_BOX)) {
+      return 0;
+    }
+    if (normalized === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED)) {
+      return 1;
+    }
+    return 2;
+  }
+
+  function buildPreferredJigsawImageByJigsawId(images) {
+    const preferredByJigsawId = new Map();
+    if (!Array.isArray(images)) {
+      return preferredByJigsawId;
+    }
+
+    images.forEach((image) => {
+      const jigsawId = Number(image?.jigsaw_id || 0);
+      if (!jigsawId || !image?.content_url) {
+        return;
+      }
+
+      const existing = preferredByJigsawId.get(jigsawId);
+      if (!existing) {
+        preferredByJigsawId.set(jigsawId, image);
+        return;
+      }
+
+      const candidatePriority = imageTagPriority(image.tag);
+      const existingPriority = imageTagPriority(existing.tag);
+      const candidateId = Number(image.id || 0);
+      const existingId = Number(existing.id || 0);
+
+      if (candidatePriority < existingPriority || (candidatePriority === existingPriority && candidateId > existingId)) {
+        preferredByJigsawId.set(jigsawId, image);
+      }
+    });
+
+    return preferredByJigsawId;
   }
 
   function toLocalTimestamp(value) {
@@ -786,24 +890,32 @@
     clearTableBody(tableBody);
 
     if (!Array.isArray(jigsaws) || jigsaws.length === 0) {
-      appendEmptyRow(tableBody, 6, "No jigsaws found.");
+      appendEmptyRow(tableBody, 5, "No jigsaws found.");
       return;
     }
 
     const filteredJigsaws = jigsaws.filter((jigsaw) => jigsawMatchesSearchQuery(jigsaw, state.jigsawSearchQuery));
     if (filteredJigsaws.length === 0) {
-      appendEmptyRow(tableBody, 6, "No matching jigsaws found.");
+      appendEmptyRow(tableBody, 5, "No matching jigsaws found.");
       return;
     }
+
+    const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.imageLibraryImages);
 
     filteredJigsaws.forEach((jigsaw) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
-      row.appendChild(buildCell(String(jigsaw.id)));
+      const preferredImage = preferredImagesByJigsawId.get(Number(jigsaw.id));
+      row.appendChild(
+        buildThumbnailCell(preferredImage?.thumbnail_url || preferredImage?.content_url, {
+          altText: `Thumbnail for ${jigsaw.title || "jigsaw"}`,
+          previewUrl: preferredImage?.preview_url || preferredImage?.content_url,
+          openUrl: preferredImage?.content_url,
+        })
+      );
       row.appendChild(buildCell(String(jigsaw.title || "-")));
       row.appendChild(buildCell(String(jigsaw.piece_count || "-")));
-      row.appendChild(buildCell(String(jigsaw.status || "-")));
       row.appendChild(buildCell(toLocalTimestamp(jigsaw.last_completed_at)));
 
       const actionCell = document.createElement("td");
@@ -940,7 +1052,13 @@
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
-      row.appendChild(buildCell(String(image.id)));
+      row.appendChild(
+        buildThumbnailCell(image.thumbnail_url || image.content_url, {
+          altText: `Tagged image ${image.filename || "image"}`,
+          previewUrl: image.preview_url || image.content_url,
+          openUrl: image.content_url,
+        })
+      );
       row.appendChild(buildCell(String(image.tag || "-")));
       row.appendChild(buildCell(String(image.filename || "-")));
       row.appendChild(buildCell(toLocalTimestamp(image.created_at)));
@@ -996,7 +1114,13 @@
           ? `id ${image.jigsaw_id}`
           : "unassigned";
 
-      row.appendChild(buildCell(String(image.id)));
+      row.appendChild(
+        buildThumbnailCell(image.thumbnail_url || image.content_url, {
+          altText: `Library image ${image.filename || "image"}`,
+          previewUrl: image.preview_url || image.content_url,
+          openUrl: image.content_url,
+        })
+      );
       row.appendChild(buildCell(String(image.filename || "-")));
       row.appendChild(buildCell(associationLabel));
       row.appendChild(buildCell(String(image.tag || "-")));
@@ -1119,13 +1243,67 @@
     return normalized;
   }
 
-  function getCurrentImageBrowserItem() {
+  function imageMatchesBrowserFilters(image) {
+    const selected = [];
+    if (state.imageBrowser.filterUnassigned) {
+      selected.push("unassigned");
+    }
+    if (state.imageBrowser.filterBox) {
+      selected.push("box");
+    }
+    if (state.imageBrowser.filterCompleted) {
+      selected.push("completed");
+    }
+    if (selected.length === 0) {
+      return false;
+    }
+
+    const isUnassigned = !image?.jigsaw_id;
+    if (isUnassigned && state.imageBrowser.filterUnassigned) {
+      return true;
+    }
+
+    const tagKey = toImageTagKey(image?.tag);
+    if (state.imageBrowser.filterBox && tagKey === toImageTagKey(IMAGE_BROWSER_TAG_BOX)) {
+      return true;
+    }
+    if (state.imageBrowser.filterCompleted && tagKey === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED)) {
+      return true;
+    }
+    return false;
+  }
+
+  function getImageBrowserFilteredImages() {
     if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
+      return [];
+    }
+    return state.imageLibraryImages.filter((image) => imageMatchesBrowserFilters(image));
+  }
+
+  function getCurrentImageBrowserItem() {
+    const filtered = getImageBrowserFilteredImages();
+    if (filtered.length === 0) {
+      state.imageBrowser.index = 0;
       return null;
     }
-    const index = Math.max(0, Math.min(state.imageBrowser.index, state.imageLibraryImages.length - 1));
+    const index = Math.max(0, Math.min(state.imageBrowser.index, filtered.length - 1));
     state.imageBrowser.index = index;
-    return state.imageLibraryImages[index] || null;
+    return filtered[index] || null;
+  }
+
+  function setImageBrowserIndexByImageId(imageId) {
+    const filtered = getImageBrowserFilteredImages();
+    if (!imageId || filtered.length === 0) {
+      state.imageBrowser.index = 0;
+      return false;
+    }
+    const foundIndex = filtered.findIndex((image) => Number(image.id) === Number(imageId));
+    if (foundIndex >= 0) {
+      state.imageBrowser.index = foundIndex;
+      return true;
+    }
+    state.imageBrowser.index = 0;
+    return false;
   }
 
   function browserHasPendingEdits() {
@@ -1239,17 +1417,19 @@
 
     const item = getCurrentImageBrowserItem();
     if (!item) {
-      elements.imageBrowserStatus.textContent = "No images available.";
+      elements.imageBrowserStatus.textContent = "No images match the active browser filters.";
       return;
     }
 
-    const total = state.imageLibraryImages.length;
+    const filtered = getImageBrowserFilteredImages();
+    const total = filtered.length;
+    const totalUnfiltered = Array.isArray(state.imageLibraryImages) ? state.imageLibraryImages.length : 0;
     const index = state.imageBrowser.index + 1;
     const association = item.jigsaw_id ? `assigned to jigsaw ${item.jigsaw_id}` : "unassigned";
     const capturedAtLabel = item.captured_at ? toLocalTimestamp(item.captured_at) : "-";
     const captureSourceLabel = item.captured_at_source || "unknown";
     const dirty = browserHasPendingEdits() ? " | unsaved edits" : "";
-    elements.imageBrowserStatus.textContent = `Image ${index}/${total}: ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association} | captured: ${capturedAtLabel} (${captureSourceLabel})${dirty}`;
+    elements.imageBrowserStatus.textContent = `Image ${index}/${total} (filtered from ${totalUnfiltered}): ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association} | captured: ${capturedAtLabel} (${captureSourceLabel})${dirty}`;
   }
 
   function clearImageBrowserWorkingState() {
@@ -1296,12 +1476,13 @@
   }
 
   async function prefetchImageBrowserByIndex(index) {
-    if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
+    const filtered = getImageBrowserFilteredImages();
+    if (filtered.length === 0) {
       return;
     }
 
-    const normalizedIndex = ((index % state.imageLibraryImages.length) + state.imageLibraryImages.length) % state.imageLibraryImages.length;
-    const item = state.imageLibraryImages[normalizedIndex];
+    const normalizedIndex = ((index % filtered.length) + filtered.length) % filtered.length;
+    const item = filtered[normalizedIndex];
     if (!item || !item.id || getCachedImageBrowserContent(item.id)) {
       return;
     }
@@ -1370,8 +1551,9 @@
     if (!elements.imageBrowserModal) {
       return;
     }
-    if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
-      showFeedback("No images available in the image library yet.", true);
+    const filtered = getImageBrowserFilteredImages();
+    if (filtered.length === 0) {
+      showFeedback("No images match the active browser filters.", true);
       return;
     }
 
@@ -1395,7 +1577,8 @@
   }
 
   async function navigateImageBrowser(direction) {
-    if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
+    const filtered = getImageBrowserFilteredImages();
+    if (filtered.length === 0) {
       return;
     }
 
@@ -1406,7 +1589,7 @@
       }
     }
 
-    const total = state.imageLibraryImages.length;
+    const total = filtered.length;
     const current = state.imageBrowser.index;
     state.imageBrowser.index = (current + direction + total) % total;
 
@@ -1439,7 +1622,7 @@
 
       showFeedback(`Image tagged as ${tag}.`);
       renderImageLibraryImages(state.imageLibraryImages);
-      updateImageBrowserStatus();
+      await loadCurrentImageIntoBrowser();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -1451,10 +1634,16 @@
       return;
     }
 
+    const filtered = getImageBrowserFilteredImages();
+    if (filtered.length === 0) {
+      showFeedback("No images match the active browser filters.", true);
+      return;
+    }
+
     const neighborLabel = offset < 0 ? "previous" : "next";
     const neighborIndex = state.imageBrowser.index + offset;
 
-    if (neighborIndex < 0 || neighborIndex >= state.imageLibraryImages.length) {
+    if (neighborIndex < 0 || neighborIndex >= filtered.length) {
       showFeedback(`No ${neighborLabel} image available to copy assignment from.`);
       return;
     }
@@ -1464,7 +1653,7 @@
       return;
     }
 
-    const neighbor = state.imageLibraryImages[neighborIndex];
+    const neighbor = filtered[neighborIndex];
     if (!neighbor?.jigsaw_id) {
       showFeedback(`${neighborLabel.charAt(0).toUpperCase()}${neighborLabel.slice(1)} image is not assigned to a jigsaw.`);
       return;
@@ -1479,11 +1668,8 @@
       showFeedback(`Image assigned to jigsaw from ${neighborLabel} image.`);
       await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadJigsaws(), loadAuditEvents()]);
 
-      const refreshedIndex = state.imageLibraryImages.findIndex((image) => Number(image.id) === Number(item.id));
-      if (refreshedIndex >= 0) {
-        state.imageBrowser.index = refreshedIndex;
-      }
-      updateImageBrowserStatus();
+      setImageBrowserIndexByImageId(item.id);
+      await loadCurrentImageIntoBrowser();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -1509,11 +1695,8 @@
       showFeedback(`Jigsaw created from image: ${createdTitle}.`);
 
       await Promise.all([loadJigsaws(), loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
-      const refreshedIndex = state.imageLibraryImages.findIndex((image) => Number(image.id) === Number(item.id));
-      if (refreshedIndex >= 0) {
-        state.imageBrowser.index = refreshedIndex;
-      }
-      updateImageBrowserStatus();
+      setImageBrowserIndexByImageId(item.id);
+      await loadCurrentImageIntoBrowser();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -1537,15 +1720,18 @@
       clearCachedImageBrowserContent(item.id);
       showFeedback("Image deleted.");
 
-      const previousIndex = state.imageBrowser.index;
+      const previousItemId = item.id;
       await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
 
-      if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
+      const filtered = getImageBrowserFilteredImages();
+      if (filtered.length === 0) {
         closeImageBrowser();
         return;
       }
 
-      state.imageBrowser.index = Math.min(previousIndex, state.imageLibraryImages.length - 1);
+      if (!setImageBrowserIndexByImageId(previousItemId)) {
+        state.imageBrowser.index = Math.min(state.imageBrowser.index, filtered.length - 1);
+      }
       await loadCurrentImageIntoBrowser();
     } catch (error) {
       showFeedback(error.message, true);
@@ -1712,10 +1898,7 @@
       clearCachedImageBrowserContent(item.id);
       showFeedback("Image overwritten successfully.");
       await loadImageLibraryImages();
-      const refreshedIndex = state.imageLibraryImages.findIndex((image) => Number(image.id) === Number(item.id));
-      if (refreshedIndex >= 0) {
-        state.imageBrowser.index = refreshedIndex;
-      }
+      setImageBrowserIndexByImageId(item.id);
       await loadCurrentImageIntoBrowser();
     } catch (error) {
       showFeedback(error.message, true);
@@ -1932,6 +2115,7 @@
       state.imageLibraryImages = [];
       state.imageBrowserContentCacheByImageId = {};
       renderImageLibraryImages([]);
+      renderJigsaws(state.jigsaws);
       return;
     }
 
@@ -1940,19 +2124,28 @@
       state.imageLibraryImages = Array.isArray(payload.data) ? payload.data : [];
       pruneImageBrowserContentCache(state.imageLibraryImages);
       renderImageLibraryImages(state.imageLibraryImages);
+      renderJigsaws(state.jigsaws);
       if (state.imageBrowser.isOpen) {
-        updateImageBrowserStatus();
+        await loadCurrentImageIntoBrowser();
       }
     } catch (error) {
       if (error.status === 403) {
         state.imageLibraryImages = [];
         state.imageBrowserContentCacheByImageId = {};
         renderImageLibraryImages([]);
+        renderJigsaws(state.jigsaws);
+        if (state.imageBrowser.isOpen) {
+          await loadCurrentImageIntoBrowser();
+        }
         return;
       }
       state.imageLibraryImages = [];
       state.imageBrowserContentCacheByImageId = {};
       renderImageLibraryImages([]);
+      renderJigsaws(state.jigsaws);
+      if (state.imageBrowser.isOpen) {
+        await loadCurrentImageIntoBrowser();
+      }
       showFeedback(error.message, true);
     }
   }
@@ -2935,6 +3128,67 @@
     renderImageLibraryImages(state.imageLibraryImages);
   }
 
+  function setImageBrowserFilterInputsFromState() {
+    if (elements.imageBrowserFilterUnassigned) {
+      elements.imageBrowserFilterUnassigned.checked = Boolean(state.imageBrowser.filterUnassigned);
+    }
+    if (elements.imageBrowserFilterBox) {
+      elements.imageBrowserFilterBox.checked = Boolean(state.imageBrowser.filterBox);
+    }
+    if (elements.imageBrowserFilterCompleted) {
+      elements.imageBrowserFilterCompleted.checked = Boolean(state.imageBrowser.filterCompleted);
+    }
+  }
+
+  function syncImageBrowserFilterStateFromInputs() {
+    state.imageBrowser.filterUnassigned = Boolean(elements.imageBrowserFilterUnassigned?.checked);
+    state.imageBrowser.filterBox = Boolean(elements.imageBrowserFilterBox?.checked);
+    state.imageBrowser.filterCompleted = Boolean(elements.imageBrowserFilterCompleted?.checked);
+  }
+
+  async function handleImageBrowserFilterChange() {
+    const previousItemId = getCurrentImageBrowserItem()?.id || null;
+    const previousIndex = state.imageBrowser.index;
+    const hadPendingEdits = browserHasPendingEdits();
+    const previousFilters = {
+      unassigned: state.imageBrowser.filterUnassigned,
+      box: state.imageBrowser.filterBox,
+      completed: state.imageBrowser.filterCompleted,
+    };
+    syncImageBrowserFilterStateFromInputs();
+
+    if (state.imageBrowser.isOpen && hadPendingEdits) {
+      const willKeepCurrent = previousItemId ? setImageBrowserIndexByImageId(previousItemId) : false;
+      if (!willKeepCurrent) {
+        const shouldDiscard = window.confirm("Discard unsaved image edits and apply browser filters?");
+        if (!shouldDiscard) {
+          state.imageBrowser.filterUnassigned = previousFilters.unassigned;
+          state.imageBrowser.filterBox = previousFilters.box;
+          state.imageBrowser.filterCompleted = previousFilters.completed;
+          state.imageBrowser.index = previousIndex;
+          setImageBrowserFilterInputsFromState();
+          return;
+        }
+      }
+    }
+
+    if (previousItemId) {
+      setImageBrowserIndexByImageId(previousItemId);
+    } else {
+      state.imageBrowser.index = 0;
+    }
+
+    if (!state.imageBrowser.isOpen) {
+      return;
+    }
+
+    try {
+      await loadCurrentImageIntoBrowser();
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
   function attachEvents() {
     if (elements.loginForm) {
       elements.loginForm.addEventListener("submit", handleLoginSubmit);
@@ -3003,6 +3257,18 @@
       elements.imageBrowserOpen.addEventListener("click", () => {
         openImageBrowser();
       });
+    }
+
+    if (elements.imageBrowserFilterUnassigned) {
+      elements.imageBrowserFilterUnassigned.addEventListener("change", handleImageBrowserFilterChange);
+    }
+
+    if (elements.imageBrowserFilterBox) {
+      elements.imageBrowserFilterBox.addEventListener("change", handleImageBrowserFilterChange);
+    }
+
+    if (elements.imageBrowserFilterCompleted) {
+      elements.imageBrowserFilterCompleted.addEventListener("change", handleImageBrowserFilterChange);
     }
 
     if (elements.imageBrowserClose) {
@@ -3166,6 +3432,8 @@
   }
 
   async function init() {
+    setImageBrowserFilterInputsFromState();
+    syncImageBrowserFilterStateFromInputs();
     attachEvents();
     renderBulkUploadFiles();
     const isAuthenticated = await refreshSession();

@@ -20,6 +20,14 @@ class JigsawImage(Base):
     filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
     image_data: Mapped[bytes] = mapped_column(LargeBinary().with_variant(mysql.LONGBLOB(), "mysql"), nullable=False)
+    thumbnail_mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    thumbnail_data: Mapped[bytes | None] = mapped_column(
+        LargeBinary().with_variant(mysql.LONGBLOB(), "mysql"), nullable=True
+    )
+    preview_mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    preview_data: Mapped[bytes | None] = mapped_column(
+        LargeBinary().with_variant(mysql.LONGBLOB(), "mysql"), nullable=True
+    )
     image_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     captured_at_source: Mapped[str | None] = mapped_column(String(32), nullable=True)

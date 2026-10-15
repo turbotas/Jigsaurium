@@ -339,9 +339,34 @@ def test_unassigned_image_content_is_accessible_to_authenticated_users(client, s
 
     _set_user_session(client, seeded_image_library_data["borrower_user_id"])
     content_response = client.get(image["content_url"])
+    thumbnail_response = client.get(image["thumbnail_url"])
+    preview_response = client.get(image["preview_url"])
 
     assert content_response.status_code == 200
     assert content_response.mimetype == "image/png"
+    assert thumbnail_response.status_code == 200
+    assert preview_response.status_code == 200
+
+
+@pytest.mark.functional
+def test_image_content_variant_query_is_validated(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"v" * 24), "variant.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image = upload_response.get_json()["data"]["created"][0]
+
+    invalid_variant_response = client.get(f"{image['content_url']}?variant=unsupported")
+    assert invalid_variant_response.status_code == 422
+    payload = invalid_variant_response.get_json()
+    assert payload["error"]["details"][0]["field"] == "variant"
 
 
 @pytest.mark.functional

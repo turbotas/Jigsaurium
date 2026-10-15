@@ -190,6 +190,10 @@
     - `tag` (optional string, defaults to `untagged` when omitted)
     - `image` (required file, image MIME type)
   - Uploaded images are stored in the database for v1.
+  - Image payloads include derivative URLs:
+    - `content_url` (original)
+    - `thumbnail_url` (`variant=thumbnail`, optimized for inventory/list tables)
+    - `preview_url` (`variant=preview`, optimized for hover/magnify preview)
   - Image content hash (`SHA-256`) is used for duplicate suppression; uploading identical bytes returns the existing image instead of creating a duplicate row.
   - Image payloads include optional capture metadata: `captured_at` (UTC ISO 8601) and `captured_at_source`.
   - `GET /api/v1/jigsaws/{id}/images/{image_id}/content` remains supported for jigsaw-associated images.
@@ -223,6 +227,10 @@
   - Enrichment is non-destructive by default (`overwrite_existing=false`): only empty fields are populated.
   - Enrichment request body optionally accepts `overwrite_existing` (boolean).
   - `GET /api/v1/images/{image_id}/content` returns binary image content for authenticated users, including unassigned library images.
+  - `GET /api/v1/images/{image_id}/content` and `GET /api/v1/jigsaws/{id}/images/{image_id}/content` accept optional query param `variant`:
+    - `original` (default)
+    - `thumbnail`
+    - `preview`
   - Bulk uploads write `jigsaw.image_bulk_uploaded` audit events.
   - Image assignment writes `jigsaw.image_assigned` audit events.
   - Create-from-image writes `jigsaw.created_from_image` audit events.

@@ -26,6 +26,7 @@
 
 - Jigsaw images are stored in the database in v1.
 - Each image record includes a tag (for example `Completed`, `Box front`, `Box side`) and binary image content.
+- Each image record also stores derived variants (`thumbnail`, `preview`) for faster admin list rendering.
 - Image create/list endpoints are administrator-only in the initial rollout.
 - A jigsaw image may be unassigned (`jigsaw_id = null`) while it sits in the image library.
 - Image library bulk upload accepts one or more image files and/or zip archives containing image files.

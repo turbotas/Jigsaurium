@@ -761,6 +761,8 @@ def test_admin_can_upload_and_list_jigsaw_images(client, seeded_identity_data):
     assert uploaded["tag"] == "Box front"
     assert uploaded["mime_type"] == "image/png"
     assert uploaded["content_url"].endswith("/content")
+    assert uploaded["thumbnail_url"].endswith("/content?variant=thumbnail")
+    assert uploaded["preview_url"].endswith("/content?variant=preview")
 
     list_response = client.get(f"/api/v1/jigsaws/{jigsaw_id}/images")
     assert list_response.status_code == 200
@@ -771,6 +773,12 @@ def test_admin_can_upload_and_list_jigsaw_images(client, seeded_identity_data):
     content_response = client.get(uploaded["content_url"])
     assert content_response.status_code == 200
     assert content_response.mimetype == "image/png"
+
+    thumbnail_response = client.get(uploaded["thumbnail_url"])
+    assert thumbnail_response.status_code == 200
+
+    preview_response = client.get(uploaded["preview_url"])
+    assert preview_response.status_code == 200
 
 
 @pytest.mark.functional

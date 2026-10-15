@@ -142,3 +142,10 @@
 - Why: enables low-risk metadata backfill in dev/prod without content overwrite.
 - Decision: automatically create one diary entry per image when an assigned image is tagged `Completed` or a `Completed` image is assigned.
 - Why: removes repetitive manual completion logging and ties diary provenance to source images.
+
+## 2026-10-14 - Stored Image Variants for Admin SPA Performance
+
+- Decision: add persisted image derivatives (`thumbnail` and `preview`) to `jigsaw_images` and backfill existing rows via migration.
+- Why: admin inventory/image tables now render many thumbnails at once, and repeatedly loading full-resolution originals caused poor perceived performance.
+- Decision: serve variants through existing image-content endpoints via `variant` query parameter (`original`/`thumbnail`/`preview`) and include variant URLs in serialized image payloads.
+- Why: keeps authz and endpoint surface stable while enabling the SPA to request fit-for-purpose image sizes.

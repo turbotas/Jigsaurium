@@ -23,9 +23,10 @@ from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
 
 try:  # pragma: no cover - optional dependency fallback
-    from PIL import Image, UnidentifiedImageError
+    from PIL import Image, ImageOps, UnidentifiedImageError
 except ImportError:  # pragma: no cover
     Image = None
+    ImageOps = None
 
     class UnidentifiedImageError(Exception):
         pass
@@ -66,6 +67,11 @@ AI_BOX_IMAGE_TAG = "Box"
 DIARY_ENTRY_NOTES_MAX_LENGTH = 4000
 DIARY_ENTRY_DIFFICULTY_MIN = 1
 DIARY_ENTRY_DIFFICULTY_MAX = 5
+IMAGE_VARIANT_ORIGINAL = "original"
+IMAGE_VARIANT_THUMBNAIL = "thumbnail"
+IMAGE_VARIANT_PREVIEW = "preview"
+THUMBNAIL_TARGET_WIDTH = 150
+PREVIEW_TARGET_WIDTH = 600
 
 
 def _success_response(data, status_code=200):
@@ -129,6 +135,8 @@ def _serialize_jigsaw_image(image):
         "filename": image.filename,
         "mime_type": image.mime_type,
         "content_url": f"/api/v1/images/{image.id}/content",
+        "thumbnail_url": f"/api/v1/images/{image.id}/content?variant={IMAGE_VARIANT_THUMBNAIL}",
+        "preview_url": f"/api/v1/images/{image.id}/content?variant={IMAGE_VARIANT_PREVIEW}",
         "captured_at": image.captured_at.isoformat() if image.captured_at else None,
         "captured_at_source": image.captured_at_source,
         "created_at": image.created_at.isoformat() if image.created_at else None,
@@ -854,12 +862,17 @@ def _create_jigsaw_image_record(
     captured_at_source=None,
     captured_at_raw=None,
 ):
+    variants = _build_image_variants(image_data, mime_type)
     image = JigsawImage(
         jigsaw_id=jigsaw_id,
         tag=tag,
         filename=filename,
         mime_type=mime_type,
         image_data=image_data,
+        thumbnail_mime_type=variants["thumbnail_mime_type"],
+        thumbnail_data=variants["thumbnail_data"],
+        preview_mime_type=variants["preview_mime_type"],
+        preview_data=variants["preview_data"],
         image_sha256=image_sha256,
         captured_at=captured_at,
         captured_at_source=captured_at_source,
@@ -999,15 +1012,108 @@ def _extract_bulk_image_items(uploads):
     return image_items, issues
 
 
-def _build_image_content_response(image):
-    response = current_app.response_class(image.image_data, mimetype=image.mime_type)
-    if image.filename:
+def _resize_image_for_width(image, target_width):
+    if target_width <= 0:
+        return image.copy()
+
+    width = max(1, int(image.width))
+    height = max(1, int(image.height))
+    if width <= target_width:
+        return image.copy()
+
+    ratio = target_width / float(width)
+    next_size = (target_width, max(1, int(round(height * ratio))))
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    return image.resize(next_size, resampling)
+
+
+def _encode_variant_image(image):
+    has_alpha = "A" in image.getbands() or image.mode in {"LA", "RGBA", "PA"}
+    output_buffer = BytesIO()
+    if has_alpha:
+        encoded = image.convert("RGBA")
+        encoded.save(output_buffer, format="PNG", optimize=True)
+        return "image/png", output_buffer.getvalue()
+
+    encoded = image.convert("RGB")
+    encoded.save(output_buffer, format="JPEG", quality=82, optimize=True, progressive=True)
+    return "image/jpeg", output_buffer.getvalue()
+
+
+def _build_image_variants(image_data, mime_type):
+    fallback = {
+        "thumbnail_mime_type": mime_type,
+        "thumbnail_data": image_data,
+        "preview_mime_type": mime_type,
+        "preview_data": image_data,
+    }
+    if Image is None or ImageOps is None:
+        return fallback
+
+    try:
+        with Image.open(BytesIO(image_data)) as source_image:
+            normalized = ImageOps.exif_transpose(source_image)
+            thumbnail_image = _resize_image_for_width(normalized, THUMBNAIL_TARGET_WIDTH)
+            preview_image = _resize_image_for_width(normalized, PREVIEW_TARGET_WIDTH)
+            thumbnail_mime_type, thumbnail_data = _encode_variant_image(thumbnail_image)
+            preview_mime_type, preview_data = _encode_variant_image(preview_image)
+    except (UnidentifiedImageError, OSError, ValueError):
+        return fallback
+
+    return {
+        "thumbnail_mime_type": thumbnail_mime_type,
+        "thumbnail_data": thumbnail_data,
+        "preview_mime_type": preview_mime_type,
+        "preview_data": preview_data,
+    }
+
+
+def _resolve_image_variant_payload(image, variant):
+    if variant == IMAGE_VARIANT_THUMBNAIL:
+        return image.thumbnail_data or image.image_data, image.thumbnail_mime_type or image.mime_type
+    if variant == IMAGE_VARIANT_PREVIEW:
+        return image.preview_data or image.image_data, image.preview_mime_type or image.mime_type
+    return image.image_data, image.mime_type
+
+
+def _build_image_content_response(image, variant):
+    image_bytes, mime_type = _resolve_image_variant_payload(image, variant)
+    response = current_app.response_class(image_bytes, mimetype=mime_type)
+    response.headers["Cache-Control"] = "no-store"
+    if variant != IMAGE_VARIANT_ORIGINAL:
+        response.headers["Vary"] = "Accept"
+    if image.filename and variant == IMAGE_VARIANT_ORIGINAL:
         response.headers["Content-Disposition"] = f'inline; filename="{image.filename}"'
     return response
 
 
 def _compute_image_sha256(image_data):
     return hashlib.sha256(image_data).hexdigest()
+
+
+def _parse_image_variant(raw_variant):
+    if raw_variant is None:
+        return IMAGE_VARIANT_ORIGINAL, None
+    normalized = str(raw_variant).strip().lower()
+    if not normalized:
+        return IMAGE_VARIANT_ORIGINAL, None
+    aliases = {
+        "content": IMAGE_VARIANT_ORIGINAL,
+        "full": IMAGE_VARIANT_ORIGINAL,
+        "thumb": IMAGE_VARIANT_THUMBNAIL,
+        "thumbnail": IMAGE_VARIANT_THUMBNAIL,
+        "mini": IMAGE_VARIANT_PREVIEW,
+        "preview": IMAGE_VARIANT_PREVIEW,
+    }
+    variant = aliases.get(normalized)
+    if variant is None:
+        return None, _error_response(
+            "validation_error",
+            "Invalid request query.",
+            422,
+            [{"field": "variant", "issue": "must be one of: original, thumbnail, preview"}],
+        )
+    return variant, None
 
 
 def _validate_image_browser_tag(value):
@@ -2773,9 +2879,14 @@ def replace_image_library_item_content(image_id):
     previous_hash = image.image_sha256
     new_content_hash = _compute_image_sha256(image_data)
     captured_at, captured_at_source, captured_at_raw = _extract_image_captured_at(image_data)
+    variants = _build_image_variants(image_data, mime_type)
     image.image_data = image_data
     image.mime_type = mime_type
     image.filename = filename
+    image.thumbnail_mime_type = variants["thumbnail_mime_type"]
+    image.thumbnail_data = variants["thumbnail_data"]
+    image.preview_mime_type = variants["preview_mime_type"]
+    image.preview_data = variants["preview_data"]
     if captured_at is not None:
         image.captured_at = captured_at
         image.captured_at_source = captured_at_source
@@ -3114,6 +3225,10 @@ def enrich_jigsaw_from_images(jigsaw_id):
 @api_v1_bp.get("/images/<int:image_id>/content")
 @require_auth
 def get_image_content(image_id):
+    variant, error = _parse_image_variant(request.args.get("variant"))
+    if error is not None:
+        return error
+
     db_session = get_session()
     image = db_session.get(JigsawImage, image_id)
     if image is None:
@@ -3127,12 +3242,16 @@ def get_image_content(image_id):
         if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
             return _error_response("not_found", "Jigsaw image was not found.", 404)
 
-    return _build_image_content_response(image)
+    return _build_image_content_response(image, variant)
 
 
 @api_v1_bp.get("/jigsaws/<int:jigsaw_id>/images/<int:image_id>/content")
 @require_auth
 def get_jigsaw_image_content(jigsaw_id, image_id):
+    variant, error = _parse_image_variant(request.args.get("variant"))
+    if error is not None:
+        return error
+
     db_session = get_session()
     image = db_session.get(JigsawImage, image_id)
     if image is None or image.jigsaw_id != jigsaw_id:
@@ -3145,7 +3264,7 @@ def get_jigsaw_image_content(jigsaw_id, image_id):
     if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
         return _error_response("not_found", "Jigsaw image was not found.", 404)
 
-    return _build_image_content_response(image)
+    return _build_image_content_response(image, variant)
 
 
 @api_v1_bp.get("/jigsaws/<int:jigsaw_id>/diary-entries")

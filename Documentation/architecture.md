@@ -47,7 +47,9 @@
 - `jigsaws`
   - title, series_name, series_number, manufacturer, artist, dimensions_cm, description, piece_count, condition, status, metadata
 - `jigsaw_images`
-  - jigsaw_id, tag, filename, mime_type, image_data, capture metadata, timestamp
+  - jigsaw_id, tag, filename, mime_type, image_data
+  - stored derivative variants for UI performance (thumbnail + preview blobs with mime types)
+  - capture metadata, timestamp
 - `loans`
   - borrower, jigsaw, checkout date, due date, return date, status
 - `audit_events`
