@@ -39,6 +39,7 @@ class Config:
     AI_MODEL = os.getenv("AI_MODEL", "")
     AI_TIMEOUT_SECONDS = _parse_optional_int(os.getenv("AI_TIMEOUT_SECONDS")) or 60
     AI_DAILY_BUDGET_USD = _parse_optional_float(os.getenv("AI_DAILY_BUDGET_USD"))
+    BULK_AI_CREATE_INLINE = _parse_bool(os.getenv("BULK_AI_CREATE_INLINE"), default=False)
     SESSION_COOKIE_SECURE = APP_ENV != "dev"
     REMEMBER_COOKIE_SECURE = APP_ENV != "dev"
     PREFERRED_URL_SCHEME = "https" if APP_ENV != "dev" else "http"

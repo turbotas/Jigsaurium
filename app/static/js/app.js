@@ -15,6 +15,7 @@
     IMAGE_BROWSER_TAG_IN_PROGRESS,
   ];
   const THUMBNAIL_DISPLAY_WIDTH_PX = 150;
+  const ADMIN_LIST_PAGE_SIZE = 25;
 
   const state = {
     csrfToken: null,
@@ -22,7 +23,10 @@
     users: [],
     jigsaws: [],
     jigsawSearchQuery: "",
+    jigsawFilterWithoutDiaryEntries: false,
     loans: [],
+    auditEvents: [],
+    auditEventsMeta: null,
     jigsawImages: [],
     imageLibraryImages: [],
     imageLibraryFilterAssigned: true,
@@ -34,6 +38,15 @@
     diaryEntries: [],
     diaryEditingEntryId: null,
     bulkUploadFiles: [],
+    bulkCreateJobId: null,
+    bulkCreateJobPollTimer: null,
+    pagination: {
+      jigsaws: 1,
+      imageLibrary: 1,
+      diary: 1,
+      aiRecent: 1,
+      audit: 1,
+    },
     imageBrowser: {
       isOpen: false,
       index: 0,
@@ -102,7 +115,9 @@
     editJigsawStatus: document.getElementById("edit-jigsaw-status"),
     editJigsawTags: document.getElementById("edit-jigsaw-tags"),
     jigsawSearchInput: document.getElementById("jigsaw-search-input"),
+    jigsawFilterNoDiary: document.getElementById("jigsaw-filter-no-diary"),
     jigsawsTableBody: document.getElementById("jigsaws-table-body"),
+    jigsawsPagination: document.getElementById("jigsaws-pagination"),
     jigsawImageForm: document.getElementById("jigsaw-image-form"),
     jigsawImageJigsawId: document.getElementById("jigsaw-image-jigsaw-id"),
     jigsawImageTag: document.getElementById("jigsaw-image-tag"),
@@ -111,6 +126,10 @@
     imageLibraryUploadForm: document.getElementById("image-library-upload-form"),
     imageLibraryJigsawId: document.getElementById("image-library-jigsaw-id"),
     imageLibraryTag: document.getElementById("image-library-tag"),
+    imageLibraryBulkCreateWrap: document.getElementById("image-library-bulk-create-wrap"),
+    imageLibraryBulkCreate: document.getElementById("image-library-bulk-create"),
+    imageLibraryBulkCreateProgress: document.getElementById("image-library-bulk-create-progress"),
+    imageLibraryBulkCreateProgressText: document.getElementById("image-library-bulk-create-progress-text"),
     imageLibraryDropzone: document.getElementById("image-library-dropzone"),
     imageLibraryBrowseButton: document.getElementById("image-library-browse-button"),
     imageLibraryFilesInput: document.getElementById("image-library-files"),
@@ -119,6 +138,7 @@
     imageLibraryFilterUnassigned: document.getElementById("image-library-filter-unassigned"),
     imageLibraryTagFilters: document.getElementById("image-library-tag-filters"),
     imageLibraryTableBody: document.getElementById("image-library-table-body"),
+    imageLibraryPagination: document.getElementById("image-library-pagination"),
     imageBrowserOpen: document.getElementById("image-browser-open"),
     imageBrowserModal: document.getElementById("image-browser-modal"),
     imageBrowserStatus: document.getElementById("image-browser-status"),
@@ -152,6 +172,7 @@
     diaryNotes: document.getElementById("diary-notes"),
     diaryEntriesCaption: document.getElementById("diary-entries-caption"),
     diaryEntriesTableBody: document.getElementById("diary-entries-table-body"),
+    diaryPagination: document.getElementById("diary-pagination"),
     loanCreateForm: document.getElementById("loan-create-form"),
     loanBorrowerUserId: document.getElementById("loan-borrower-user-id"),
     loanJigsawId: document.getElementById("loan-jigsaw-id"),
@@ -175,10 +196,12 @@
     aiUsageOperationBody: document.getElementById("ai-usage-operation-body"),
     aiUsageModelBody: document.getElementById("ai-usage-model-body"),
     aiUsageRecentBody: document.getElementById("ai-usage-recent-body"),
+    aiUsageRecentPagination: document.getElementById("ai-usage-recent-pagination"),
     aiUsageDetailModal: document.getElementById("ai-usage-detail-modal"),
     aiUsageDetailSummary: document.getElementById("ai-usage-detail-summary"),
     aiUsageDetailPayload: document.getElementById("ai-usage-detail-payload"),
     aiUsageDetailCloseButton: document.getElementById("ai-usage-detail-close"),
+    auditPagination: document.getElementById("audit-pagination"),
   };
 
   function showFeedback(message, isError = false) {
@@ -263,6 +286,88 @@
     }
   }
 
+  function clearPagination(container) {
+    if (!container) {
+      return;
+    }
+    container.innerHTML = "";
+  }
+
+  function clampPageNumber(page, totalItems, pageSize) {
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+    const normalizedPage = Number.isFinite(page) ? Math.trunc(page) : 1;
+    return Math.min(Math.max(1, normalizedPage), totalPages);
+  }
+
+  function paginateItems(items, paginationKey) {
+    const sourceItems = Array.isArray(items) ? items : [];
+    const totalItems = sourceItems.length;
+    const totalPages = Math.max(1, Math.ceil(totalItems / ADMIN_LIST_PAGE_SIZE));
+    const currentPage = clampPageNumber(state.pagination[paginationKey], totalItems, ADMIN_LIST_PAGE_SIZE);
+    const startIndex = (currentPage - 1) * ADMIN_LIST_PAGE_SIZE;
+    const endIndex = startIndex + ADMIN_LIST_PAGE_SIZE;
+
+    state.pagination[paginationKey] = currentPage;
+    return {
+      page: currentPage,
+      totalItems,
+      totalPages,
+      startIndex,
+      endIndex: Math.min(endIndex, totalItems),
+      rows: sourceItems.slice(startIndex, endIndex),
+    };
+  }
+
+  function renderPagination(container, paginationKey, pageResult) {
+    if (!container) {
+      return;
+    }
+
+    clearPagination(container);
+    if (!pageResult || pageResult.totalItems <= 0) {
+      return;
+    }
+
+    const summary = document.createElement("p");
+    summary.className = "govuk-body-s app-pagination__summary";
+    summary.textContent = `Showing ${pageResult.startIndex + 1}-${pageResult.endIndex} of ${pageResult.totalItems}`;
+    container.appendChild(summary);
+
+    if (pageResult.totalPages <= 1) {
+      return;
+    }
+
+    const controls = document.createElement("div");
+    controls.className = "app-pagination__controls";
+
+    const previousButton = document.createElement("button");
+    previousButton.type = "button";
+    previousButton.className = "govuk-button govuk-button--secondary app-inline-button app-pagination__button";
+    previousButton.setAttribute("data-module", "govuk-button");
+    previousButton.dataset.paginationList = paginationKey;
+    previousButton.dataset.paginationPage = String(pageResult.page - 1);
+    previousButton.disabled = pageResult.page <= 1;
+    previousButton.textContent = "Previous";
+    controls.appendChild(previousButton);
+
+    const pageLabel = document.createElement("span");
+    pageLabel.className = "govuk-body-s app-pagination__page";
+    pageLabel.textContent = `Page ${pageResult.page} of ${pageResult.totalPages}`;
+    controls.appendChild(pageLabel);
+
+    const nextButton = document.createElement("button");
+    nextButton.type = "button";
+    nextButton.className = "govuk-button govuk-button--secondary app-inline-button app-pagination__button";
+    nextButton.setAttribute("data-module", "govuk-button");
+    nextButton.dataset.paginationList = paginationKey;
+    nextButton.dataset.paginationPage = String(pageResult.page + 1);
+    nextButton.disabled = pageResult.page >= pageResult.totalPages;
+    nextButton.textContent = "Next";
+    controls.appendChild(nextButton);
+
+    container.appendChild(controls);
+  }
+
   function appendEmptyRow(tableBody, columnCount, text) {
     if (!tableBody) {
       return;
@@ -331,10 +436,22 @@
     preview.setAttribute("aria-hidden", "true");
 
     const previewImage = document.createElement("img");
-    previewImage.src = previewUrl;
+    previewImage.dataset.previewSrc = previewUrl;
     previewImage.alt = "";
     previewImage.loading = "lazy";
     previewImage.decoding = "async";
+
+    const loadPreviewImage = () => {
+      const nextPreviewSrc = String(previewImage.dataset.previewSrc || "");
+      if (!nextPreviewSrc || previewImage.src) {
+        return;
+      }
+      previewImage.src = nextPreviewSrc;
+    };
+
+    trigger.addEventListener("mouseenter", loadPreviewImage, { once: true });
+    trigger.addEventListener("focus", loadPreviewImage, { once: true });
+
     preview.appendChild(previewImage);
 
     cell.appendChild(trigger);
@@ -559,6 +676,13 @@
     return searchTerms.every((term) => searchableText.includes(term));
   }
 
+  function jigsawMatchesDiaryFilter(jigsaw, onlyWithoutDiaryEntries) {
+    if (!onlyWithoutDiaryEntries) {
+      return true;
+    }
+    return !jigsaw?.last_completed_at;
+  }
+
   function normalizeImageTagLabel(value) {
     const rawValue = String(value || "").trim();
     if (!rawValue) {
@@ -634,7 +758,7 @@
       if (Object.prototype.hasOwnProperty.call(state.imageLibraryFilterTagSelections, tagKey)) {
         nextSelections[tagKey] = Boolean(state.imageLibraryFilterTagSelections[tagKey]);
       } else {
-        nextSelections[tagKey] = true;
+        nextSelections[tagKey] = tagKey === toImageTagKey("untagged");
       }
     });
     state.imageLibraryFilterTagSelections = nextSelections;
@@ -832,6 +956,12 @@
     elements.diaryEntriesCaption.textContent = `Diary entries for ${jigsawTitle} (most recent first)`;
   }
 
+  function getDiaryEntriesEmptyMessage(selectedJigsawId) {
+    return Number(selectedJigsawId || "0") > 0
+      ? "No diary entries found."
+      : "No diary entries or unlinked completed images found.";
+  }
+
   function resetDiaryEntryFormEditingState({ keepJigsawSelection = true } = {}) {
     state.diaryEditingEntryId = null;
 
@@ -951,6 +1081,8 @@
     if (currentJigsawId && sortedJigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
       elements.imageLibraryJigsawId.value = currentJigsawId;
     }
+
+    syncBulkCreateFromUploadVisibility();
   }
 
   function setSessionSummary() {
@@ -1165,19 +1297,32 @@
     clearTableBody(tableBody);
 
     if (!Array.isArray(jigsaws) || jigsaws.length === 0) {
+      clearPagination(elements.jigsawsPagination);
       appendEmptyRow(tableBody, 5, "No jigsaws found.");
       return;
     }
 
-    const filteredJigsaws = jigsaws.filter((jigsaw) => jigsawMatchesSearchQuery(jigsaw, state.jigsawSearchQuery));
+    const filteredJigsaws = jigsaws.filter(
+      (jigsaw) =>
+        jigsawMatchesSearchQuery(jigsaw, state.jigsawSearchQuery)
+        && jigsawMatchesDiaryFilter(jigsaw, state.jigsawFilterWithoutDiaryEntries),
+    );
     if (filteredJigsaws.length === 0) {
-      appendEmptyRow(tableBody, 5, "No matching jigsaws found.");
+      clearPagination(elements.jigsawsPagination);
+      appendEmptyRow(
+        tableBody,
+        5,
+        state.jigsawFilterWithoutDiaryEntries
+          ? "No matching jigsaws found without diary entries."
+          : "No matching jigsaws found.",
+      );
       return;
     }
 
+    const pageResult = paginateItems(filteredJigsaws, "jigsaws");
     const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.imageLibraryImages);
 
-    filteredJigsaws.forEach((jigsaw) => {
+    pageResult.rows.forEach((jigsaw) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
@@ -1237,6 +1382,8 @@
       row.appendChild(actionCell);
       tableBody.appendChild(row);
     });
+
+    renderPagination(elements.jigsawsPagination, "jigsaws", pageResult);
   }
 
   function renderAuditEvents(events) {
@@ -1244,11 +1391,31 @@
     clearTableBody(tableBody);
 
     if (!Array.isArray(events) || events.length === 0) {
+      clearPagination(elements.auditPagination);
       appendEmptyRow(tableBody, 5, "No audit events found.");
       return;
     }
 
-    events.forEach((event) => {
+    const apiMeta = state.auditEventsMeta;
+    const hasApiPagination =
+      apiMeta &&
+      Number.isFinite(Number(apiMeta.page)) &&
+      Number.isFinite(Number(apiMeta.page_size)) &&
+      Number.isFinite(Number(apiMeta.total_items)) &&
+      Number.isFinite(Number(apiMeta.total_pages));
+
+    const pageResult = hasApiPagination
+      ? {
+          page: Number(apiMeta.page),
+          totalItems: Number(apiMeta.total_items),
+          totalPages: Number(apiMeta.total_pages),
+          startIndex: Math.max(0, (Number(apiMeta.page) - 1) * Number(apiMeta.page_size)),
+          endIndex: Math.min(Number(apiMeta.total_items), ((Number(apiMeta.page) - 1) * Number(apiMeta.page_size)) + events.length),
+          rows: events,
+        }
+      : paginateItems(events, "audit");
+
+    pageResult.rows.forEach((event) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
@@ -1262,6 +1429,8 @@
 
       tableBody.appendChild(row);
     });
+
+    renderPagination(elements.auditPagination, "audit", pageResult);
   }
 
   function renderAiUsageDiagnostics(diagnostics) {
@@ -1358,14 +1527,39 @@
     const recentTableBody = elements.aiUsageRecentBody;
     clearTableBody(recentTableBody);
     const recentCalls = Array.isArray(diagnostics?.recent_calls) ? diagnostics.recent_calls : [];
+    const recentCallsPagination = diagnostics?.recent_calls_pagination || null;
     state.aiUsageRecentById = {};
+    recentCalls.forEach((entry) => {
+      state.aiUsageRecentById[String(entry.id)] = entry;
+    });
     if (recentCalls.length === 0) {
+      clearPagination(elements.aiUsageRecentPagination);
       appendEmptyRow(recentTableBody, 9, "No AI calls found.");
       return;
     }
 
-    recentCalls.forEach((entry) => {
-      state.aiUsageRecentById[String(entry.id)] = entry;
+    const hasApiPagination =
+      recentCallsPagination &&
+      Number.isFinite(Number(recentCallsPagination.page)) &&
+      Number.isFinite(Number(recentCallsPagination.page_size)) &&
+      Number.isFinite(Number(recentCallsPagination.total_items)) &&
+      Number.isFinite(Number(recentCallsPagination.total_pages));
+
+    const pageResult = hasApiPagination
+      ? {
+          page: Number(recentCallsPagination.page),
+          totalItems: Number(recentCallsPagination.total_items),
+          totalPages: Number(recentCallsPagination.total_pages),
+          startIndex: Math.max(0, (Number(recentCallsPagination.page) - 1) * Number(recentCallsPagination.page_size)),
+          endIndex: Math.min(
+            Number(recentCallsPagination.total_items),
+            ((Number(recentCallsPagination.page) - 1) * Number(recentCallsPagination.page_size)) + recentCalls.length,
+          ),
+          rows: recentCalls,
+        }
+      : paginateItems(recentCalls, "aiRecent");
+
+    pageResult.rows.forEach((entry) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
@@ -1424,6 +1618,8 @@
 
       recentTableBody.appendChild(row);
     });
+
+    renderPagination(elements.aiUsageRecentPagination, "aiRecent", pageResult);
   }
 
   function renderLoans(loans) {
@@ -1525,6 +1721,7 @@
     if (!Array.isArray(images) || images.length === 0) {
       state.imageLibraryFilterTagSelections = {};
       renderImageLibraryTagFilters([]);
+      clearPagination(elements.imageLibraryPagination);
       appendEmptyRow(tableBody, 6, "No image library items found.");
       return;
     }
@@ -1534,13 +1731,15 @@
 
     const filteredImages = images.filter((image) => imageLibraryRowMatchesFilters(image));
     if (filteredImages.length === 0) {
+      clearPagination(elements.imageLibraryPagination);
       appendEmptyRow(tableBody, 6, "No matching image library items found.");
       return;
     }
 
+    const pageResult = paginateItems(filteredImages, "imageLibrary");
     const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
     const jigsawsById = new Map(state.jigsaws.map((jigsaw) => [Number(jigsaw.id), jigsaw]));
-    filteredImages.forEach((image) => {
+    pageResult.rows.forEach((image) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
@@ -1684,6 +1883,8 @@
       row.appendChild(actionCell);
       tableBody.appendChild(row);
     });
+
+    renderPagination(elements.imageLibraryPagination, "imageLibrary", pageResult);
   }
 
   function renderBulkUploadFiles() {
@@ -2155,7 +2356,7 @@
       });
 
       showFeedback(`Image assigned to jigsaw from ${neighborLabel} image.`);
-      await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadJigsaws(), loadAuditEvents()]);
+      await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
 
       setImageBrowserIndexByImageId(item.id);
       await loadCurrentImageIntoBrowser();
@@ -2480,11 +2681,14 @@
     clearTableBody(tableBody);
 
     if (!Array.isArray(entries) || entries.length === 0) {
+      clearPagination(elements.diaryPagination);
       appendEmptyRow(tableBody, 7, emptyMessage);
       return;
     }
 
-    entries.forEach((entry) => {
+    const pageResult = paginateItems(entries, "diary");
+
+    pageResult.rows.forEach((entry) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
       const isFormalDiaryEntry = entry?.entry_type !== "orphan_completed_image";
@@ -2544,6 +2748,8 @@
       row.appendChild(actionCell);
       tableBody.appendChild(row);
     });
+
+    renderPagination(elements.diaryPagination, "diary", pageResult);
   }
   async function refreshSession() {
     try {
@@ -2681,31 +2887,26 @@
     const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
     if (!state.user) {
       state.diaryEntries = [];
+      state.pagination.diary = 1;
       setDiaryEntriesCaption(0);
-      renderDiaryEntries([]);
+      renderDiaryEntries([], getDiaryEntriesEmptyMessage(0));
       return;
     }
 
     setDiaryEntriesCaption(selectedJigsawId);
 
     try {
-      const query = selectedJigsawId > 0 ? `?jigsaw_id=${selectedJigsawId}` : "";
+      const query = selectedJigsawId > 0
+        ? `?jigsaw_id=${selectedJigsawId}&limit=500`
+        : "?limit=500";
       const payload = await apiRequest(`/api/v1/diary-feed${query}`);
       state.diaryEntries = Array.isArray(payload.data) ? payload.data : [];
-      renderDiaryEntries(
-        state.diaryEntries,
-        selectedJigsawId > 0
-          ? "No diary entries found."
-          : "No diary entries or unlinked completed images found.",
-      );
+      state.pagination.diary = 1;
+      renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
     } catch (error) {
       state.diaryEntries = [];
-      renderDiaryEntries(
-        [],
-        selectedJigsawId > 0
-          ? "No diary entries found."
-          : "No diary entries or unlinked completed images found.",
-      );
+      state.pagination.diary = 1;
+      renderDiaryEntries([], getDiaryEntriesEmptyMessage(selectedJigsawId));
       showFeedback(error.message, true);
     }
   }
@@ -2733,18 +2934,29 @@
 
   async function loadAuditEvents() {
     if (!state.user) {
+      state.auditEvents = [];
+      state.auditEventsMeta = null;
       renderAuditEvents([]);
       return;
     }
 
     try {
-      const payload = await apiRequest("/api/v1/audit-events?limit=50");
-      renderAuditEvents(payload.data);
+      const payload = await apiRequest(
+        `/api/v1/audit-events?page=${state.pagination.audit}&page_size=${ADMIN_LIST_PAGE_SIZE}`,
+      );
+      state.auditEvents = Array.isArray(payload.data) ? payload.data : [];
+      state.auditEventsMeta = payload?.meta || null;
+      renderAuditEvents(state.auditEvents);
     } catch (error) {
       if (error.status === 403) {
+        state.auditEvents = [];
+        state.auditEventsMeta = null;
         renderAuditEvents([]);
         return;
       }
+      state.auditEvents = [];
+      state.auditEventsMeta = null;
+      renderAuditEvents([]);
       showFeedback(error.message, true);
     }
   }
@@ -2757,7 +2969,9 @@
     }
 
     try {
-      const payload = await apiRequest("/api/v1/ai-usage/diagnostics?limit=50");
+      const payload = await apiRequest(
+        `/api/v1/ai-usage/diagnostics?page=${state.pagination.aiRecent}&page_size=${ADMIN_LIST_PAGE_SIZE}`,
+      );
       state.aiUsageDiagnostics = payload?.data || null;
       renderAiUsageDiagnostics(state.aiUsageDiagnostics);
     } catch (error) {
@@ -2817,6 +3031,8 @@
       state.users = [];
       state.jigsaws = [];
       state.loans = [];
+      state.auditEvents = [];
+      state.auditEventsMeta = null;
       state.jigsawImages = [];
       state.imageLibraryImages = [];
       state.imageLibraryFilterAssigned = true;
@@ -2826,6 +3042,14 @@
       state.imageBrowserContentCacheByImageId = {};
       state.diaryEntries = [];
       state.jigsawSearchQuery = "";
+      state.jigsawFilterWithoutDiaryEntries = false;
+      state.pagination = {
+        jigsaws: 1,
+        imageLibrary: 1,
+        diary: 1,
+        aiRecent: 1,
+        audit: 1,
+      };
       renderUsers([]);
       closeUserEditor();
       renderJigsaws([]);
@@ -2837,9 +3061,13 @@
       renderAiUsageDiagnostics(null);
       closeAiUsageDetailModal();
       clearBulkUploadFiles();
+      clearBulkCreateProgress();
       closeImageBrowser();
       if (elements.jigsawSearchInput) {
         elements.jigsawSearchInput.value = "";
+      }
+      if (elements.jigsawFilterNoDiary) {
+        elements.jigsawFilterNoDiary.checked = false;
       }
       if (elements.imageLibraryFilterAssigned) {
         elements.imageLibraryFilterAssigned.checked = true;
@@ -3235,6 +3463,114 @@
     }
   }
 
+  function shouldShowBulkCreateFromUploadOption() {
+    const selectedJigsawId = String(elements.imageLibraryJigsawId?.value || "").trim();
+    const selectedTag = normalizeImageTagLabel(elements.imageLibraryTag?.value || "");
+    return !selectedJigsawId && toImageTagKey(selectedTag) === toImageTagKey(IMAGE_BROWSER_TAG_BOX);
+  }
+
+  function syncBulkCreateFromUploadVisibility() {
+    const shouldShow = shouldShowBulkCreateFromUploadOption();
+    if (elements.imageLibraryBulkCreateWrap) {
+      elements.imageLibraryBulkCreateWrap.hidden = !shouldShow;
+    }
+    if (!shouldShow && elements.imageLibraryBulkCreate) {
+      elements.imageLibraryBulkCreate.checked = false;
+    }
+  }
+
+  function setBulkCreateProgressText(message, isVisible = true) {
+    if (elements.imageLibraryBulkCreateProgressText) {
+      elements.imageLibraryBulkCreateProgressText.textContent = String(message || "");
+    }
+    if (elements.imageLibraryBulkCreateProgress) {
+      elements.imageLibraryBulkCreateProgress.hidden = !isVisible;
+    }
+  }
+
+  function clearBulkCreateProgress() {
+    if (state.bulkCreateJobPollTimer) {
+      window.clearTimeout(state.bulkCreateJobPollTimer);
+      state.bulkCreateJobPollTimer = null;
+    }
+    state.bulkCreateJobId = null;
+    setBulkCreateProgressText("", false);
+  }
+
+  async function pollBulkCreateJobStatus(jobId) {
+    if (!jobId) {
+      return;
+    }
+
+    try {
+      const payload = await apiRequest(`/api/v1/image-library/bulk-create-jigsaws/${Number(jobId)}`);
+      const job = payload?.data?.job || null;
+      if (!job) {
+        clearBulkCreateProgress();
+        return;
+      }
+
+      const summary = `Bulk AI create job #${job.id}: ${job.processed_items}/${job.total_items} processed, ${job.succeeded_items} succeeded, ${job.failed_items} failed.`;
+
+      if (job.status === "queued" || job.status === "running") {
+        setBulkCreateProgressText(`${summary} (${job.status})`);
+        state.bulkCreateJobPollTimer = window.setTimeout(() => {
+          pollBulkCreateJobStatus(job.id);
+        }, 1500);
+        return;
+      }
+
+      setBulkCreateProgressText(`${summary} (${job.status})`, true);
+      if (job.status === "completed") {
+        showFeedback(`Bulk AI create completed. ${summary}`);
+      } else if (job.status === "failed") {
+        showFeedback(`Bulk AI create finished with failures. ${summary}`, true);
+      }
+
+      await Promise.all([
+        loadImageLibraryImages(),
+        loadJigsaws(),
+        loadJigsawImagesForSelected(),
+        loadDiaryEntriesForSelected(),
+        loadAuditEvents(),
+        loadAiUsageDiagnostics(),
+      ]);
+      state.bulkCreateJobPollTimer = window.setTimeout(() => {
+        clearBulkCreateProgress();
+      }, 4000);
+    } catch (error) {
+      setBulkCreateProgressText(`Bulk AI create status check failed: ${error.message}`, true);
+      state.bulkCreateJobPollTimer = window.setTimeout(() => {
+        pollBulkCreateJobStatus(jobId);
+      }, 2500);
+    }
+  }
+
+  async function startBulkCreateJobForUploadedImages(uploadPayloadData) {
+    const createdItems = Array.isArray(uploadPayloadData?.created) ? uploadPayloadData.created : [];
+    const unassignedImageIds = createdItems
+      .map((item) => Number(item?.id || 0))
+      .filter((imageId, index, values) => imageId > 0 && values.indexOf(imageId) === index);
+    if (unassignedImageIds.length === 0) {
+      return null;
+    }
+
+    const response = await apiRequest("/api/v1/image-library/bulk-create-jigsaws", {
+      method: "POST",
+      body: JSON.stringify({ image_ids: unassignedImageIds }),
+    });
+
+    const job = response?.data?.job || null;
+    if (!job || !job.id) {
+      return null;
+    }
+
+    state.bulkCreateJobId = Number(job.id);
+    setBulkCreateProgressText(`Bulk AI create job #${job.id} queued for ${unassignedImageIds.length} image(s).`);
+    pollBulkCreateJobStatus(state.bulkCreateJobId);
+    return state.bulkCreateJobId;
+  }
+
   async function handleImageLibraryUpload(event) {
     event.preventDefault();
     clearFeedback();
@@ -3247,6 +3583,9 @@
     const formData = new FormData();
     const jigsawIdValue = String(elements.imageLibraryJigsawId?.value || "").trim();
     const tagValue = String(elements.imageLibraryTag?.value || "").trim();
+    const shouldCreateJigsaws = Boolean(
+      elements.imageLibraryBulkCreate?.checked && shouldShowBulkCreateFromUploadOption(),
+    );
     if (jigsawIdValue) {
       formData.append("jigsaw_id", jigsawIdValue);
     }
@@ -3267,6 +3606,8 @@
       const createdCount = Number(payload?.data?.created_count || 0);
       const skippedCount = Number(payload?.data?.skipped_count || 0);
       const metadataBackfilledCount = Number(payload?.data?.metadata_backfilled_count || 0);
+      let bulkCreateSummary = "";
+
       let metadataSuffix = "";
       if (metadataBackfilledCount > 0) {
         const skippedItems = Array.isArray(payload?.data?.skipped) ? payload.data.skipped : [];
@@ -3280,9 +3621,23 @@
           : "";
         metadataSuffix = ` Backfilled metadata on ${metadataBackfilledCount} existing image(s)${namesSuffix}.`;
       }
-      showFeedback(`Image library upload complete. Added ${createdCount} image(s), skipped ${skippedCount}.${metadataSuffix}`);
+      showFeedback(`Image library upload complete. Added ${createdCount} image(s), skipped ${skippedCount}.${metadataSuffix}${bulkCreateSummary}`);
       clearBulkUploadFiles();
-      await Promise.all([loadImageLibraryImages(), loadJigsaws(), loadAuditEvents()]);
+      if (elements.imageLibraryBulkCreate) {
+        elements.imageLibraryBulkCreate.checked = false;
+      }
+
+      if (shouldCreateJigsaws) {
+        clearBulkCreateProgress();
+        await Promise.all([loadImageLibraryImages(), loadAuditEvents()]);
+        const jobId = await startBulkCreateJobForUploadedImages(payload?.data);
+        if (!jobId) {
+          showFeedback("Bulk AI create could not be started because no valid uploaded image ids were available.", true);
+        }
+      } else {
+        clearBulkCreateProgress();
+        await Promise.all([loadImageLibraryImages(), loadJigsaws(), loadAuditEvents()]);
+      }
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -3673,13 +4028,12 @@
           body: JSON.stringify({ tag: selectedTag }),
         });
         showFeedback(`Image tagged as ${selectedTag}.`);
-        await Promise.all([
-          loadImageLibraryImages(),
-          loadJigsawImagesForSelected(),
-          loadJigsaws(),
-          loadDiaryEntriesForSelected(),
-          loadAuditEvents(),
-        ]);
+        const shouldRefreshDiary = toImageTagKey(selectedTag) === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED);
+        const refreshTasks = [loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()];
+        if (shouldRefreshDiary) {
+          refreshTasks.push(loadDiaryEntriesForSelected());
+        }
+        await Promise.all(refreshTasks);
       } catch (error) {
         showFeedback(error.message, true);
       }
@@ -3698,7 +4052,7 @@
           body: JSON.stringify({ jigsaw_id: null }),
         });
         showFeedback("Image unassigned from jigsaw.");
-        await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadJigsaws(), loadAuditEvents()]);
+        await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
       } catch (error) {
         showFeedback(error.message, true);
       }
@@ -3771,6 +4125,7 @@
 
   function handleDiarySelectionChange() {
     clearFeedback();
+    state.pagination.diary = 1;
     loadDiaryEntriesForSelected();
   }
 
@@ -3786,6 +4141,13 @@
 
   function handleJigsawSearchInput(event) {
     state.jigsawSearchQuery = String(event.currentTarget?.value || "").trim().toLowerCase();
+    state.pagination.jigsaws = 1;
+    renderJigsaws(state.jigsaws);
+  }
+
+  function handleJigsawDiaryFilterChange(event) {
+    state.jigsawFilterWithoutDiaryEntries = Boolean(event.currentTarget?.checked);
+    state.pagination.jigsaws = 1;
     renderJigsaws(state.jigsaws);
   }
 
@@ -3807,7 +4169,45 @@
       state.imageLibraryFilterTagSelections[tagKey] = target.checked;
     }
 
+    state.pagination.imageLibrary = 1;
     renderImageLibraryImages(state.imageLibraryImages);
+  }
+
+  async function handlePaginationClick(event) {
+    const targetButton = event.target.closest("button[data-pagination-list][data-pagination-page]");
+    if (!(targetButton instanceof HTMLButtonElement)) {
+      return;
+    }
+
+    const paginationKey = String(targetButton.dataset.paginationList || "").trim();
+    const requestedPage = Number(targetButton.dataset.paginationPage || "0");
+    if (!paginationKey || !Number.isFinite(requestedPage) || requestedPage < 1) {
+      return;
+    }
+
+    state.pagination[paginationKey] = Math.trunc(requestedPage);
+
+    if (paginationKey === "jigsaws") {
+      renderJigsaws(state.jigsaws);
+      return;
+    }
+    if (paginationKey === "imageLibrary") {
+      renderImageLibraryImages(state.imageLibraryImages);
+      return;
+    }
+    if (paginationKey === "diary") {
+      const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+      renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
+      return;
+    }
+    if (paginationKey === "aiRecent") {
+      await loadAiUsageDiagnostics();
+      return;
+    }
+    if (paginationKey === "audit") {
+      await loadAuditEvents();
+      return;
+    }
   }
 
   function setImageBrowserFilterInputsFromState() {
@@ -3916,6 +4316,14 @@
       elements.imageLibraryFilesInput.addEventListener("change", handleImageLibraryFilesInputChange);
     }
 
+    if (elements.imageLibraryJigsawId) {
+      elements.imageLibraryJigsawId.addEventListener("change", syncBulkCreateFromUploadVisibility);
+    }
+
+    if (elements.imageLibraryTag) {
+      elements.imageLibraryTag.addEventListener("change", syncBulkCreateFromUploadVisibility);
+    }
+
     if (elements.imageLibraryDropzone) {
       elements.imageLibraryDropzone.addEventListener("dragover", handleImageLibraryDropzoneDragOver);
       elements.imageLibraryDropzone.addEventListener("dragleave", handleImageLibraryDropzoneDragLeave);
@@ -3933,6 +4341,26 @@
 
     if (elements.imageLibraryTagFilters) {
       elements.imageLibraryTagFilters.addEventListener("change", handleImageLibraryFilterChange);
+    }
+
+    if (elements.jigsawsPagination) {
+      elements.jigsawsPagination.addEventListener("click", handlePaginationClick);
+    }
+
+    if (elements.imageLibraryPagination) {
+      elements.imageLibraryPagination.addEventListener("click", handlePaginationClick);
+    }
+
+    if (elements.diaryPagination) {
+      elements.diaryPagination.addEventListener("click", handlePaginationClick);
+    }
+
+    if (elements.aiUsageRecentPagination) {
+      elements.aiUsageRecentPagination.addEventListener("click", handlePaginationClick);
+    }
+
+    if (elements.auditPagination) {
+      elements.auditPagination.addEventListener("click", handlePaginationClick);
     }
 
     if (elements.imageBrowserOpen) {
@@ -4116,6 +4544,10 @@
       elements.jigsawSearchInput.addEventListener("input", handleJigsawSearchInput);
     }
 
+    if (elements.jigsawFilterNoDiary) {
+      elements.jigsawFilterNoDiary.addEventListener("change", handleJigsawDiaryFilterChange);
+    }
+
     if (elements.aiUsageRecentBody) {
       elements.aiUsageRecentBody.addEventListener("click", handleTableActions);
     }
@@ -4138,6 +4570,7 @@
     syncImageBrowserFilterStateFromInputs();
     attachEvents();
     renderBulkUploadFiles();
+    syncBulkCreateFromUploadVisibility();
     const isAuthenticated = await refreshSession();
     if (isAuthenticated) {
       await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadAiUsageDiagnostics(), loadImageLibraryImages()]);
@@ -4153,6 +4586,7 @@
       renderAiUsageDiagnostics(null);
       closeAiUsageDetailModal();
       renderBulkUploadFiles();
+      clearBulkCreateProgress();
       populateLoanFormOptions();
       populateJigsawImageOptions();
       populateDiaryJigsawOptions();

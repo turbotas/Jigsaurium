@@ -215,6 +215,11 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.select_option("#image-library-tag", "Completed")
         page.click("#image-library-upload-form button[type='submit']")
         page.wait_for_selector("text=Image library upload complete. Added 2 image(s), skipped 0.")
+
+        completed_filter = page.locator(
+            "#image-library-tag-filters .govuk-checkboxes__item", has_text="Completed"
+        ).locator("input")
+        completed_filter.check()
         page.wait_for_selector("#image-library-table-body tr")
         assert page.locator("#image-library-table-body tr", has_text="bulk-one.png").count() >= 1
         assert page.locator("#image-library-table-body tr", has_text="bulk-two.png").count() >= 1
@@ -224,6 +229,11 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         bulk_two_row.locator("select[data-image-tag-select]").select_option("Box side")
         bulk_two_row.locator("button[data-image-tag-set]").click()
         page.wait_for_selector("text=Image tagged as Box side.")
+
+        box_side_filter = page.locator(
+            "#image-library-tag-filters .govuk-checkboxes__item", has_text="Box side"
+        ).locator("input")
+        box_side_filter.check()
         page.wait_for_selector("#image-library-table-body tr:has-text('bulk-two.png'):has-text('Box side')")
 
         bulk_one_row = page.locator("#image-library-table-body tr", has_text="bulk-one.png")
@@ -244,7 +254,6 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.check("#image-library-filter-unassigned")
         page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png')")
 
-        box_side_filter = page.locator("#image-library-tag-filters .govuk-checkboxes__item", has_text="Box side").locator("input")
         box_side_filter.uncheck()
         page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png')")
         assert page.locator("#image-library-table-body tr", has_text="bulk-two.png").count() == 0

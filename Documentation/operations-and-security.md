@@ -31,6 +31,7 @@
 - `AI_MODEL`: provider model identifier for image metadata extraction.
 - `AI_TIMEOUT_SECONDS`: provider request timeout.
 - `AI_DAILY_BUDGET_USD`: optional daily spend limit; when reached, create-from-image requests are blocked.
+- `BULK_AI_CREATE_INLINE`: optional boolean for bulk AI create execution mode (`false` = background worker, `true` = inline; test defaults to inline).
 
 ## Canonical Hosts
 

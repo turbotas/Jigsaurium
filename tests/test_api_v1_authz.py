@@ -186,6 +186,31 @@ def test_api_jigsaws_includes_retired_for_administrator(client, seeded_identity_
 
 
 @pytest.mark.functional
+def test_api_jigsaws_supports_optional_pagination(app, client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    with app.app_context():
+        db_session = get_session()
+        db_session.add_all(
+            [
+                Jigsaw(title="Alpine Lake", piece_count=750, status=JigsawStatus.AVAILABLE),
+                Jigsaw(title="City Lights", piece_count=1200, status=JigsawStatus.AVAILABLE),
+            ]
+        )
+        db_session.commit()
+
+    response = client.get("/api/v1/jigsaws?page=1&page_size=2")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload["data"]) == 2
+    assert payload["meta"]["page"] == 1
+    assert payload["meta"]["page_size"] == 2
+    assert payload["meta"]["total_items"] >= 4
+    assert payload["meta"]["total_pages"] >= 2
+
+
+@pytest.mark.functional
 def test_api_roles_returns_seeded_roles_for_administrator(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["admin_user_id"])
 
@@ -1250,6 +1275,28 @@ def test_audit_events_returns_recent_activity(app, client, seeded_identity_data)
     assert len(payload["data"]) >= 1
     assert payload["data"][0]["action"]
     assert payload["data"][0]["created_at"]
+
+
+@pytest.mark.functional
+def test_audit_events_supports_page_and_page_size(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    first_page_response = client.get("/api/v1/audit-events?page=1&page_size=1")
+    second_page_response = client.get("/api/v1/audit-events?page=2&page_size=1")
+
+    assert first_page_response.status_code == 200
+    assert second_page_response.status_code == 200
+
+    first_page = first_page_response.get_json()
+    second_page = second_page_response.get_json()
+
+    assert len(first_page["data"]) == 1
+    assert len(second_page["data"]) == 1
+    assert first_page["meta"]["page"] == 1
+    assert second_page["meta"]["page"] == 2
+    assert first_page["meta"]["page_size"] == 1
+    assert first_page["meta"]["total_items"] >= 2
+    assert first_page["data"][0]["id"] > second_page["data"][0]["id"]
 
 
 @pytest.mark.functional

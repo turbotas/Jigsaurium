@@ -52,6 +52,9 @@
 - `PATCH /api/v1/image-library/images/{image_id}/tag`
 - `PUT /api/v1/image-library/images/{image_id}/content`
 - `POST /api/v1/image-library/images/{image_id}/create-jigsaw`
+- `POST /api/v1/image-library/bulk-create-jigsaws`
+- `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}`
+- `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}/items`
 - `GET /api/v1/images/{image_id}/content`
 - `GET /api/v1/jigsaws/{id}/diary-entries`
 - `GET /api/v1/diary-feed`
@@ -160,15 +163,23 @@
 
 - Audit endpoint notes:
   - `GET /api/v1/audit-events` is admin-only.
-  - Optional query param `limit` must be an integer from `1` to `200` (default `50`).
+  - Optional pagination query params:
+    - `page` (integer `>= 1`, default `1`)
+    - `page_size` (integer `1..200`, default `25`)
+  - Legacy query param `limit` is still accepted as an alias for `page_size`.
+  - Response uses standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
 
 - AI diagnostics endpoint notes:
   - `GET /api/v1/ai-usage/diagnostics` is admin-only.
-  - Optional query param `limit` must be an integer from `1` to `200` (default `50`).
+  - Optional pagination query params for the `recent_calls` list:
+    - `page` (integer `>= 1`, default `1`)
+    - `page_size` (integer `1..200`, default `25`)
+  - Legacy query param `limit` is still accepted as an alias for `page_size`.
   - Response includes:
     - spend/call/token summaries for `today`, `last_7_days`, and `last_30_days`
     - 30-day grouped breakdowns by operation and by model
     - recent call diagnostics including status, token/cost fields, request id, image metadata, provider error hints (for example parsed HTTP status from provider error text), and stored per-call payload details for troubleshooting
+    - `recent_calls_pagination` metadata (`page`, `page_size`, `total_items`, `total_pages`)
 
 - Loan endpoint notes:
   - `GET /api/v1/loans` is admin-only in the initial administrative rollout.
@@ -187,6 +198,8 @@
   - Loan return returns `409` when the loan is not active/overdue.
 
 - Jigsaw metadata notes:
+  - `GET /api/v1/jigsaws` supports optional pagination query params `page` and `page_size` (or legacy `limit` alias).
+  - When pagination params are provided, response includes standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
   - `POST /api/v1/jigsaws` allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.
   - Duplicate `title` values are allowed.
   - Jigsaw payloads now support optional fields: `series_name`, `series_number`, `manufacturer`, `artist`, `dimensions_cm`, `description`, `last_completed_at`.
@@ -211,7 +224,11 @@
 
 - Image library endpoint notes:
   - `GET /api/v1/image-library/images` is admin-only and returns recent images across the full library.
-  - `GET /api/v1/image-library/images` optional query param `limit` must be an integer from `1` to `500` (default `200`).
+  - `GET /api/v1/image-library/images` supports optional pagination query params:
+    - `page` (integer `>= 1`, default `1`)
+    - `page_size` (integer `1..500`, default `25`)
+  - Legacy query param `limit` is still accepted as an alias for `page_size`.
+  - Response uses standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
   - `POST /api/v1/image-library/uploads` is admin-only and expects multipart form data:
     - `files` (one or more uploads; each may be an image file or a `.zip` archive containing image files)
     - `jigsaw_id` (optional positive integer association)
@@ -232,6 +249,10 @@
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` is admin-only and creates a new jigsaw from AI-extracted image metadata.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` only works for unassigned images; assigned images return `409`.
   - Successful create-from-image sets the associated image tag to `Box`.
+  - `POST /api/v1/image-library/bulk-create-jigsaws` is admin-only and queues (or runs inline in test mode) one create-from-image action per provided image id.
+  - `POST /api/v1/image-library/bulk-create-jigsaws` requires JSON body with `image_ids` as a non-empty list of positive integers (max 500).
+  - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}` returns aggregate job status and counters (`queued` / `running` / `completed` / `failed`).
+  - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}/items` returns per-image outcomes with list pagination.
   - AI extraction expects these metadata keys: `title`, `series_name`, `series_number`, `manufacturer`/`publisher`, `artist`, `piece_count`, `tags`, `dimensions_cm`, `description`.
   - AI usage is cost-tracked per call (`ai_usage_events`) with token usage and final USD cost.
   - Daily AI spend guardrail: when configured budget is reached, create-from-image requests return `409` and are blocked before provider calls.

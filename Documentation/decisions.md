@@ -149,3 +149,10 @@
 - Why: admin inventory/image tables now render many thumbnails at once, and repeatedly loading full-resolution originals caused poor perceived performance.
 - Decision: serve variants through existing image-content endpoints via `variant` query parameter (`original`/`thumbnail`/`preview`) and include variant URLs in serialized image payloads.
 - Why: keeps authz and endpoint surface stable while enabling the SPA to request fit-for-purpose image sizes.
+
+## 2026-10-15 - Non-Blocking Bulk AI Create-From-Image Jobs
+
+- Decision: add persistent bulk AI create job tracking (`bulk_ai_create_jobs` + `bulk_ai_create_job_items`) with status polling endpoints.
+- Why: large image batches were causing synchronous UI stalls and long-running request bottlenecks.
+- Decision: run bulk jobs asynchronously via an in-process background worker by default, with inline execution in test mode.
+- Why: delivers immediate non-blocking UX without adding external queue infrastructure yet, while keeping functional tests deterministic.

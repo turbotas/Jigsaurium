@@ -77,6 +77,9 @@ def _make_zip_file(entries):
     [
         ("GET", "/api/v1/image-library/images", None, None),
         ("POST", "/api/v1/image-library/uploads", "multipart/form-data", None),
+        ("POST", "/api/v1/image-library/bulk-create-jigsaws", None, {"image_ids": [1]}),
+        ("GET", "/api/v1/image-library/bulk-create-jigsaws/1", None, None),
+        ("GET", "/api/v1/image-library/bulk-create-jigsaws/1/items", None, None),
         ("PATCH", "/api/v1/image-library/images/1/assign", None, {"jigsaw_id": 1}),
         ("PATCH", "/api/v1/image-library/images/1/tag", None, {"tag": "Box"}),
         ("DELETE", "/api/v1/image-library/images/1", None, None),
@@ -86,14 +89,14 @@ def _make_zip_file(entries):
 def test_image_library_endpoints_require_authentication(
     client, seeded_image_library_data, method, path, content_type, json_payload
 ):
-    if method == "POST":
+    if method == "POST" and content_type == "multipart/form-data":
         response = client.open(
             path,
             method=method,
             data={"files": (BytesIO(b"\x89PNG\r\n\x1a\n"), "one.png", "image/png")},
             content_type=content_type,
         )
-    elif method == "PATCH":
+    elif method in {"PATCH", "POST"} and json_payload is not None:
         response = client.open(path, method=method, json=json_payload)
     else:
         response = client.open(path, method=method)
@@ -116,6 +119,19 @@ def test_borrower_cannot_use_image_library_admin_endpoints(client, seeded_image_
         content_type="multipart/form-data",
     )
     assert upload_response.status_code == 403
+
+    bulk_create_response = client.post(
+        "/api/v1/image-library/bulk-create-jigsaws",
+        headers=_csrf_headers(),
+        json={"image_ids": [1]},
+    )
+    assert bulk_create_response.status_code == 403
+
+    bulk_status_response = client.get("/api/v1/image-library/bulk-create-jigsaws/1")
+    assert bulk_status_response.status_code == 403
+
+    bulk_items_response = client.get("/api/v1/image-library/bulk-create-jigsaws/1/items")
+    assert bulk_items_response.status_code == 403
 
     assign_response = client.patch(
         "/api/v1/image-library/images/1/assign",
@@ -258,6 +274,10 @@ def test_admin_can_view_ai_usage_diagnostics(client, seeded_image_library_data, 
 
     recent_calls = payload["recent_calls"]
     assert len(recent_calls) == 4
+    assert payload["recent_calls_pagination"]["page"] == 1
+    assert payload["recent_calls_pagination"]["page_size"] == 10
+    assert payload["recent_calls_pagination"]["total_items"] == 4
+    assert payload["recent_calls_pagination"]["total_pages"] == 1
     error_row = next(row for row in recent_calls if row["status"] == "error")
     assert error_row["provider_http_status"] == 413
     assert error_row["error_code"] == "provider_error"
@@ -294,6 +314,46 @@ def test_admin_can_bulk_upload_multiple_unassigned_images(client, seeded_image_l
     assert list_response.status_code == 200
     images = list_response.get_json()["data"]
     assert len(images) >= 2
+
+
+@pytest.mark.functional
+def test_ai_usage_diagnostics_supports_page_and_page_size(app, client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    with app.app_context():
+        db_session = get_session()
+        for index in range(3):
+            db_session.add(
+                AiUsageEvent(
+                    actor_user_id=seeded_image_library_data["admin_user_id"],
+                    image_id=None,
+                    operation="image_to_jigsaw",
+                    status="success",
+                    model="mock-vision-mini",
+                    endpoint_url="https://example.invalid/v1/chat/completions",
+                    total_tokens=10 + index,
+                    final_cost_usd=Decimal("0"),
+                    request_id=f"req_page_{index}",
+                )
+            )
+        db_session.commit()
+
+    first_page_response = client.get("/api/v1/ai-usage/diagnostics?page=1&page_size=1")
+    second_page_response = client.get("/api/v1/ai-usage/diagnostics?page=2&page_size=1")
+
+    assert first_page_response.status_code == 200
+    assert second_page_response.status_code == 200
+
+    first_page = first_page_response.get_json()["data"]
+    second_page = second_page_response.get_json()["data"]
+
+    assert len(first_page["recent_calls"]) == 1
+    assert len(second_page["recent_calls"]) == 1
+    assert first_page["recent_calls_pagination"]["page"] == 1
+    assert second_page["recent_calls_pagination"]["page"] == 2
+    assert first_page["recent_calls_pagination"]["page_size"] == 1
+    assert first_page["recent_calls_pagination"]["total_items"] >= 3
+    assert first_page["recent_calls"][0]["id"] > second_page["recent_calls"][0]["id"]
 
 
 @pytest.mark.functional
@@ -501,6 +561,35 @@ def test_image_library_list_validates_limit(client, seeded_image_library_data):
     assert response.status_code == 422
     payload = response.get_json()
     assert payload["error"]["details"][0]["field"] == "limit"
+
+
+@pytest.mark.functional
+def test_image_library_list_supports_page_and_page_size(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [
+                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"m" * 24), "page-one.png", "image/png"),
+                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"n" * 24), "page-two.png", "image/png"),
+                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"o" * 24), "page-three.png", "image/png"),
+            ],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+
+    response = client.get("/api/v1/image-library/images?page=2&page_size=1")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload["data"]) == 1
+    assert payload["meta"]["page"] == 2
+    assert payload["meta"]["page_size"] == 1
+    assert payload["meta"]["total_items"] >= 3
+    assert payload["meta"]["total_pages"] >= 3
 
 
 @pytest.mark.functional
@@ -1264,3 +1353,120 @@ def test_enrich_jigsaw_from_images_rejects_without_box_tagged_images(client, see
 
     assert response.status_code == 409
     assert response.get_json()["error"]["message"] == "Jigsaw has no box-tagged images to enrich from."
+
+
+@pytest.mark.functional
+def test_admin_can_start_bulk_create_jigsaws_job(client, seeded_image_library_data, app, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "tag": "Box",
+            "files": [
+                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"a" * 32), "bulk-create-one.png", "image/png"),
+                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"b" * 32), "bulk-create-two.png", "image/png"),
+            ],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    created_images = upload_response.get_json()["data"]["created"]
+    image_ids = [item["id"] for item in created_images]
+
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = "test-key"
+    app.config["AI_MODEL"] = "mock-vision"
+    app.config["AI_ENDPOINT_URL"] = "https://example.invalid/v1/chat/completions"
+    app.config["AI_DAILY_BUDGET_USD"] = 10.0
+
+    def fake_inference(image):
+        return {
+            "metadata": {
+                "title": f"Bulk Inferred {image.id}",
+                "series_name": None,
+                "series_number": None,
+                "publisher": "Ravensburger",
+                "artist": None,
+                "piece_count": 500,
+                "tags": ["bulk", "import"],
+                "dimensions_cm": None,
+                "description": "Bulk create",
+            },
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "provider_cost_usd": None,
+            "computed_cost_usd": None,
+            "final_cost_usd": 0.01,
+            "model": "mock-vision",
+            "endpoint_url": "https://example.invalid/v1/chat/completions",
+        }
+
+    monkeypatch.setattr("app.api.v1.routes._infer_jigsaw_metadata_from_image", fake_inference)
+
+    start_response = client.post(
+        "/api/v1/image-library/bulk-create-jigsaws",
+        headers=_csrf_headers(),
+        json={"image_ids": image_ids},
+    )
+    assert start_response.status_code == 202
+    start_payload = start_response.get_json()["data"]["job"]
+    assert start_payload["status"] == "completed"
+    assert start_payload["total_items"] == 2
+    assert start_payload["succeeded_items"] == 2
+    assert start_payload["failed_items"] == 0
+
+    job_id = start_payload["id"]
+    status_response = client.get(f"/api/v1/image-library/bulk-create-jigsaws/{job_id}")
+    assert status_response.status_code == 200
+    status_payload = status_response.get_json()["data"]["job"]
+    assert status_payload["status"] == "completed"
+
+    items_response = client.get(f"/api/v1/image-library/bulk-create-jigsaws/{job_id}/items?page=1&page_size=10")
+    assert items_response.status_code == 200
+    items_payload = items_response.get_json()
+    assert items_payload["meta"]["total_items"] == 2
+    assert len(items_payload["data"]) == 2
+    assert all(item["status"] == "completed" for item in items_payload["data"])
+
+    with app.app_context():
+        db_session = get_session()
+        images = db_session.query(JigsawImage).filter(JigsawImage.id.in_(image_ids)).all()
+        assert len(images) == 2
+        assert all(image.jigsaw_id is not None for image in images)
+        assert all(image.tag == "Box" for image in images)
+
+
+@pytest.mark.functional
+def test_bulk_create_jigsaws_job_tracks_failed_items(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"c" * 32), "bulk-create-fail.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    start_response = client.post(
+        "/api/v1/image-library/bulk-create-jigsaws",
+        headers=_csrf_headers(),
+        json={"image_ids": [image_id]},
+    )
+    assert start_response.status_code == 202
+    job = start_response.get_json()["data"]["job"]
+    assert job["status"] == "failed"
+    assert job["failed_items"] == 1
+
+    items_response = client.get(f"/api/v1/image-library/bulk-create-jigsaws/{job['id']}/items")
+    assert items_response.status_code == 200
+    items = items_response.get_json()["data"]
+    assert len(items) == 1
+    assert items[0]["status"] == "failed"
+    assert items[0]["error_code"] == "conflict"

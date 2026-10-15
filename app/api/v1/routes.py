@@ -2,6 +2,8 @@ import json
 import base64
 import hashlib
 import mimetypes
+import threading
+from queue import Empty, Queue
 import re
 import urllib.error
 import urllib.request
@@ -18,7 +20,19 @@ from sqlalchemy import case, func, select
 from sqlalchemy.exc import DataError
 
 from app.db import get_session
-from app.models import AiUsageEvent, AuditEvent, Jigsaw, JigsawDiaryEntry, JigsawImage, Loan, Role, User, UserRole
+from app.models import (
+    AiUsageEvent,
+    AuditEvent,
+    BulkAiCreateJob,
+    BulkAiCreateJobItem,
+    Jigsaw,
+    JigsawDiaryEntry,
+    JigsawImage,
+    Loan,
+    Role,
+    User,
+    UserRole,
+)
 from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
 
@@ -73,6 +87,19 @@ IMAGE_VARIANT_PREVIEW = "preview"
 THUMBNAIL_TARGET_WIDTH = 150
 PREVIEW_TARGET_WIDTH = 600
 
+BULK_AI_CREATE_STATUS_QUEUED = "queued"
+BULK_AI_CREATE_STATUS_RUNNING = "running"
+BULK_AI_CREATE_STATUS_COMPLETED = "completed"
+BULK_AI_CREATE_STATUS_FAILED = "failed"
+BULK_AI_CREATE_ITEM_STATUS_QUEUED = "queued"
+BULK_AI_CREATE_ITEM_STATUS_RUNNING = "running"
+BULK_AI_CREATE_ITEM_STATUS_COMPLETED = "completed"
+BULK_AI_CREATE_ITEM_STATUS_FAILED = "failed"
+
+_bulk_ai_create_queue = Queue()
+_bulk_ai_create_worker_lock = threading.Lock()
+_bulk_ai_create_worker_started = False
+
 
 class AiProviderRequestError(RuntimeError):
     def __init__(self, message, *, status_code=None, response_text=None):
@@ -83,6 +110,255 @@ class AiProviderRequestError(RuntimeError):
 
 def _success_response(data, status_code=200):
     return {"data": data, "meta": {"request_id": g.request_id}}, status_code
+
+
+def _success_list_response(data, *, page, page_size, total_items, status_code=200):
+    total_pages = max(1, (total_items + page_size - 1) // page_size)
+    return {
+        "data": data,
+        "meta": {
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_items,
+            "total_pages": total_pages,
+            "request_id": g.request_id,
+        },
+    }, status_code
+
+
+def _serialize_bulk_ai_create_job(job):
+    error_summary = []
+    if isinstance(job.error_summary_json, str) and job.error_summary_json.strip():
+        try:
+            parsed_summary = json.loads(job.error_summary_json)
+            if isinstance(parsed_summary, list):
+                error_summary = parsed_summary
+        except json.JSONDecodeError:
+            error_summary = []
+
+    return {
+        "id": job.id,
+        "actor_user_id": job.actor_user_id,
+        "status": job.status,
+        "total_items": int(job.total_items or 0),
+        "processed_items": int(job.processed_items or 0),
+        "succeeded_items": int(job.succeeded_items or 0),
+        "failed_items": int(job.failed_items or 0),
+        "request_id": job.request_id,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "error_summary": error_summary,
+    }
+
+
+def _serialize_bulk_ai_create_job_item(item):
+    return {
+        "id": item.id,
+        "job_id": item.job_id,
+        "image_id": item.image_id,
+        "status": item.status,
+        "jigsaw_id": item.jigsaw_id,
+        "attempts": int(item.attempts or 0),
+        "error_code": item.error_code,
+        "error_message": item.error_message,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
+
+
+def _queue_bulk_ai_create_job(job_id):
+    _bulk_ai_create_queue.put(int(job_id))
+
+
+def start_bulk_ai_create_worker(app):
+    global _bulk_ai_create_worker_started
+
+    if bool(app.config.get("BULK_AI_CREATE_INLINE", False)):
+        return
+
+    with _bulk_ai_create_worker_lock:
+        if _bulk_ai_create_worker_started:
+            return
+
+        def _worker_loop():
+            while True:
+                try:
+                    next_job_id = _bulk_ai_create_queue.get(timeout=0.5)
+                except Empty:
+                    continue
+
+                try:
+                    _process_bulk_ai_create_job(app, int(next_job_id))
+                finally:
+                    _bulk_ai_create_queue.task_done()
+
+        worker = threading.Thread(target=_worker_loop, name="bulk-ai-create-worker", daemon=True)
+        worker.start()
+        _bulk_ai_create_worker_started = True
+
+
+def _extract_response_status_code(response_payload):
+    if isinstance(response_payload, tuple) and len(response_payload) >= 2:
+        try:
+            return int(response_payload[1])
+        except (TypeError, ValueError):
+            return 500
+    return 500
+
+
+def _extract_error_from_response(response_payload):
+    if not isinstance(response_payload, tuple) or len(response_payload) < 1:
+        return "internal_error", "Background create-from-image failed."
+
+    body = response_payload[0]
+    if not isinstance(body, dict):
+        return "internal_error", "Background create-from-image failed."
+
+    error = body.get("error") or {}
+    code = str(error.get("code") or "internal_error")
+    message = str(error.get("message") or "Background create-from-image failed.")
+    return code, message
+
+
+def _refresh_bulk_ai_create_job_counters(db_session, job_id):
+    counts_by_status = {
+        BULK_AI_CREATE_ITEM_STATUS_COMPLETED: 0,
+        BULK_AI_CREATE_ITEM_STATUS_FAILED: 0,
+        BULK_AI_CREATE_ITEM_STATUS_RUNNING: 0,
+        BULK_AI_CREATE_ITEM_STATUS_QUEUED: 0,
+    }
+    rows = db_session.execute(
+        select(BulkAiCreateJobItem.status, func.count(BulkAiCreateJobItem.id))
+        .where(BulkAiCreateJobItem.job_id == job_id)
+        .group_by(BulkAiCreateJobItem.status)
+    ).all()
+    for status, count in rows:
+        counts_by_status[str(status)] = int(count or 0)
+
+    total_items = sum(counts_by_status.values())
+    processed_items = counts_by_status[BULK_AI_CREATE_ITEM_STATUS_COMPLETED] + counts_by_status[BULK_AI_CREATE_ITEM_STATUS_FAILED]
+    return {
+        "total_items": total_items,
+        "processed_items": processed_items,
+        "succeeded_items": counts_by_status[BULK_AI_CREATE_ITEM_STATUS_COMPLETED],
+        "failed_items": counts_by_status[BULK_AI_CREATE_ITEM_STATUS_FAILED],
+        "remaining_items": counts_by_status[BULK_AI_CREATE_ITEM_STATUS_QUEUED] + counts_by_status[BULK_AI_CREATE_ITEM_STATUS_RUNNING],
+    }
+
+
+def _process_bulk_ai_create_job(app, job_id):
+    with app.app_context():
+        db_session = get_session()
+        job = db_session.get(BulkAiCreateJob, int(job_id))
+        if job is None:
+            return
+
+        if job.status not in {BULK_AI_CREATE_STATUS_QUEUED, BULK_AI_CREATE_STATUS_RUNNING}:
+            return
+
+        actor_user = db_session.get(User, job.actor_user_id) if job.actor_user_id is not None else None
+        actor_roles = _get_role_names_for_user_id(actor_user.id) if actor_user is not None else []
+
+        if "administrator" not in actor_roles:
+            job.status = BULK_AI_CREATE_STATUS_FAILED
+            job.finished_at = datetime.now(timezone.utc)
+            job.error_summary_json = json.dumps([
+                {
+                    "code": "forbidden",
+                    "message": "Job actor does not have administrator role.",
+                }
+            ])
+            db_session.commit()
+            return
+
+        if job.started_at is None:
+            job.started_at = datetime.now(timezone.utc)
+        job.status = BULK_AI_CREATE_STATUS_RUNNING
+        db_session.commit()
+
+        items = db_session.execute(
+            select(BulkAiCreateJobItem)
+            .where(BulkAiCreateJobItem.job_id == job.id)
+            .order_by(BulkAiCreateJobItem.id.asc())
+        ).scalars().all()
+
+        for item in items:
+            if item.status in {BULK_AI_CREATE_ITEM_STATUS_COMPLETED, BULK_AI_CREATE_ITEM_STATUS_FAILED}:
+                continue
+
+            item.status = BULK_AI_CREATE_ITEM_STATUS_RUNNING
+            item.attempts = int(item.attempts or 0) + 1
+            db_session.commit()
+
+            image_id = int(item.image_id or 0)
+            response_payload = None
+            if image_id <= 0:
+                item.status = BULK_AI_CREATE_ITEM_STATUS_FAILED
+                item.error_code = "not_found"
+                item.error_message = "Image was not found."
+                db_session.commit()
+                continue
+
+            request_id = f"job_{job.id}_{token_urlsafe(8)}"
+            with app.test_request_context(
+                f"/api/v1/image-library/images/{image_id}/create-jigsaw",
+                method="POST",
+                json={},
+            ):
+                g.request_id = request_id
+                g.current_user = actor_user
+                g.current_user_roles = actor_roles
+                response_payload = create_jigsaw_from_image(image_id)
+
+            status_code = _extract_response_status_code(response_payload)
+            if 200 <= status_code < 300:
+                item.status = BULK_AI_CREATE_ITEM_STATUS_COMPLETED
+                item.error_code = None
+                item.error_message = None
+                image = db_session.get(JigsawImage, image_id)
+                item.jigsaw_id = image.jigsaw_id if image is not None else None
+            else:
+                error_code, error_message = _extract_error_from_response(response_payload)
+                item.status = BULK_AI_CREATE_ITEM_STATUS_FAILED
+                item.error_code = error_code
+                item.error_message = error_message
+            db_session.commit()
+
+        refreshed = _refresh_bulk_ai_create_job_counters(db_session, job.id)
+        job.total_items = refreshed["total_items"]
+        job.processed_items = refreshed["processed_items"]
+        job.succeeded_items = refreshed["succeeded_items"]
+        job.failed_items = refreshed["failed_items"]
+        job.finished_at = datetime.now(timezone.utc)
+
+        failed_items = db_session.execute(
+            select(BulkAiCreateJobItem)
+            .where(
+                BulkAiCreateJobItem.job_id == job.id,
+                BulkAiCreateJobItem.status == BULK_AI_CREATE_ITEM_STATUS_FAILED,
+            )
+            .order_by(BulkAiCreateJobItem.id.asc())
+            .limit(20)
+        ).scalars().all()
+        job.error_summary_json = json.dumps(
+            [
+                {
+                    "item_id": failed_item.id,
+                    "image_id": failed_item.image_id,
+                    "code": failed_item.error_code,
+                    "message": failed_item.error_message,
+                }
+                for failed_item in failed_items
+            ],
+            sort_keys=True,
+        )
+
+        if refreshed["failed_items"] > 0:
+            job.status = BULK_AI_CREATE_STATUS_FAILED
+        else:
+            job.status = BULK_AI_CREATE_STATUS_COMPLETED
+        db_session.commit()
 
 
 def _error_response(code, message, status_code, details=None):
@@ -754,6 +1030,77 @@ def _parse_required_positive_integer_or_null(value, field_name):
         )
 
     return value, None
+
+
+def _parse_list_pagination_query(*, default_page_size, max_page_size, legacy_limit_max=None):
+    raw_page = request.args.get("page")
+    raw_page_size = request.args.get("page_size")
+    raw_limit = request.args.get("limit")
+
+    if raw_page is None:
+        page = 1
+    else:
+        try:
+            page = int(raw_page)
+        except ValueError:
+            return None, _error_response(
+                "validation_error",
+                "Invalid request query.",
+                422,
+                [{"field": "page", "issue": "must be an integer"}],
+            )
+        if page < 1:
+            return None, _error_response(
+                "validation_error",
+                "Invalid request query.",
+                422,
+                [{"field": "page", "issue": "must be greater than or equal to 1"}],
+            )
+
+    if raw_page_size is not None:
+        try:
+            page_size = int(raw_page_size)
+        except ValueError:
+            return None, _error_response(
+                "validation_error",
+                "Invalid request query.",
+                422,
+                [{"field": "page_size", "issue": "must be an integer"}],
+            )
+        if page_size < 1 or page_size > max_page_size:
+            return None, _error_response(
+                "validation_error",
+                "Invalid request query.",
+                422,
+                [{"field": "page_size", "issue": f"must be between 1 and {max_page_size}"}],
+            )
+    elif raw_limit is not None:
+        try:
+            page_size = int(raw_limit)
+        except ValueError:
+            return None, _error_response(
+                "validation_error",
+                "Invalid request query.",
+                422,
+                [{"field": "limit", "issue": "must be an integer"}],
+            )
+
+        effective_legacy_limit_max = legacy_limit_max if legacy_limit_max is not None else max_page_size
+        if page_size < 1 or page_size > effective_legacy_limit_max:
+            return None, _error_response(
+                "validation_error",
+                "Invalid request query.",
+                422,
+                [{"field": "limit", "issue": f"must be between 1 and {effective_legacy_limit_max}"}],
+            )
+    else:
+        page_size = default_page_size
+
+    return {
+        "page": page,
+        "page_size": page_size,
+        "offset": (page - 1) * page_size,
+    }, None
 
 
 def _parse_optional_difficulty(value, field_name="difficulty"):
@@ -1964,52 +2311,33 @@ def list_roles():
 @api_v1_bp.get("/audit-events")
 @require_role("administrator")
 def list_audit_events():
-    raw_limit = request.args.get("limit", "50")
-    try:
-        limit = int(raw_limit)
-    except ValueError:
-        return _error_response(
-            "validation_error",
-            "Invalid request query.",
-            422,
-            [{"field": "limit", "issue": "must be an integer"}],
-        )
-
-    if limit < 1 or limit > 200:
-        return _error_response(
-            "validation_error",
-            "Invalid request query.",
-            422,
-            [{"field": "limit", "issue": "must be between 1 and 200"}],
-        )
+    pagination, error = _parse_list_pagination_query(default_page_size=25, max_page_size=200, legacy_limit_max=200)
+    if error is not None:
+        return error
 
     db_session = get_session()
-    events = db_session.execute(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(limit)).scalars().all()
+    total_items = int(db_session.execute(select(func.count(AuditEvent.id))).scalar_one() or 0)
+    events = db_session.execute(
+        select(AuditEvent)
+        .order_by(AuditEvent.id.desc())
+        .offset(pagination["offset"])
+        .limit(pagination["page_size"])
+    ).scalars().all()
     payload = [_serialize_audit_event(event) for event in events]
-    return _success_response(payload)
+    return _success_list_response(
+        payload,
+        page=pagination["page"],
+        page_size=pagination["page_size"],
+        total_items=total_items,
+    )
 
 
 @api_v1_bp.get("/ai-usage/diagnostics")
 @require_role("administrator")
 def get_ai_usage_diagnostics():
-    raw_limit = request.args.get("limit", "50")
-    try:
-        limit = int(raw_limit)
-    except ValueError:
-        return _error_response(
-            "validation_error",
-            "Invalid request query.",
-            422,
-            [{"field": "limit", "issue": "must be an integer"}],
-        )
-
-    if limit < 1 or limit > 200:
-        return _error_response(
-            "validation_error",
-            "Invalid request query.",
-            422,
-            [{"field": "limit", "issue": "must be between 1 and 200"}],
-        )
+    pagination, error = _parse_list_pagination_query(default_page_size=25, max_page_size=200, legacy_limit_max=200)
+    if error is not None:
+        return error
 
     now = datetime.now(timezone.utc)
     today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
@@ -2037,6 +2365,7 @@ def get_ai_usage_diagnostics():
         end_at=now,
     )
 
+    total_recent_calls = int(db_session.execute(select(func.count(AiUsageEvent.id))).scalar_one() or 0)
     recent_rows = db_session.execute(
         select(
             AiUsageEvent,
@@ -2046,7 +2375,8 @@ def get_ai_usage_diagnostics():
         )
         .outerjoin(JigsawImage, JigsawImage.id == AiUsageEvent.image_id)
         .order_by(AiUsageEvent.id.desc())
-        .limit(limit)
+        .offset(pagination["offset"])
+        .limit(pagination["page_size"])
     ).all()
     recent_calls = [
         _serialize_ai_usage_event(
@@ -2065,6 +2395,12 @@ def get_ai_usage_diagnostics():
         "by_operation_30d": by_operation,
         "by_model_30d": by_model,
         "recent_calls": recent_calls,
+        "recent_calls_pagination": {
+            "page": pagination["page"],
+            "page_size": pagination["page_size"],
+            "total_items": total_recent_calls,
+            "total_pages": max(1, (total_recent_calls + pagination["page_size"] - 1) // pagination["page_size"]),
+        },
         "daily_budget_usd": str(budget_usd) if budget_usd is not None else None,
         "daily_spend_usd": str(daily_spend_usd),
         "daily_budget_reached": bool(
@@ -2284,9 +2620,27 @@ def list_jigsaws():
             | Jigsaw.artist.ilike(pattern)
         )
 
-    jigsaws = db_session.execute(stmt.order_by(Jigsaw.id)).scalars().all()
+    use_pagination = any(param in request.args for param in ("page", "page_size", "limit"))
+    if not use_pagination:
+        jigsaws = db_session.execute(stmt.order_by(Jigsaw.id)).scalars().all()
+        payload = [_serialize_jigsaw(jigsaw) for jigsaw in jigsaws]
+        return _success_response(payload)
+
+    pagination, error = _parse_list_pagination_query(default_page_size=25, max_page_size=200, legacy_limit_max=500)
+    if error is not None:
+        return error
+
+    total_items = int(db_session.execute(select(func.count()).select_from(stmt.subquery())).scalar_one() or 0)
+    jigsaws = db_session.execute(
+        stmt.order_by(Jigsaw.id).offset(pagination["offset"]).limit(pagination["page_size"])
+    ).scalars().all()
     payload = [_serialize_jigsaw(jigsaw) for jigsaw in jigsaws]
-    return _success_response(payload)
+    return _success_list_response(
+        payload,
+        page=pagination["page"],
+        page_size=pagination["page_size"],
+        total_items=total_items,
+    )
 
 
 @api_v1_bp.get("/loans")
@@ -2837,29 +3191,153 @@ def create_jigsaw_image(jigsaw_id):
 @api_v1_bp.get("/image-library/images")
 @require_role("administrator")
 def list_image_library_images():
-    raw_limit = request.args.get("limit", "200")
-    try:
-        limit = int(raw_limit)
-    except ValueError:
+    pagination, error = _parse_list_pagination_query(default_page_size=25, max_page_size=500, legacy_limit_max=500)
+    if error is not None:
+        return error
+
+    db_session = get_session()
+    total_items = int(db_session.execute(select(func.count(JigsawImage.id))).scalar_one() or 0)
+    images = db_session.execute(
+        select(JigsawImage)
+        .order_by(JigsawImage.id.desc())
+        .offset(pagination["offset"])
+        .limit(pagination["page_size"])
+    ).scalars().all()
+    payload = [_serialize_jigsaw_image(image) for image in images]
+    return _success_list_response(
+        payload,
+        page=pagination["page"],
+        page_size=pagination["page_size"],
+        total_items=total_items,
+    )
+
+
+@api_v1_bp.post("/image-library/bulk-create-jigsaws")
+@require_role("administrator")
+def start_bulk_create_jigsaws_job():
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    raw_image_ids = payload.get("image_ids")
+    if not isinstance(raw_image_ids, list) or len(raw_image_ids) == 0:
         return _error_response(
             "validation_error",
             "Invalid request payload.",
             422,
-            [{"field": "limit", "issue": "must be an integer"}],
+            [{"field": "image_ids", "issue": "must be a non-empty list of positive integers"}],
         )
 
-    if limit < 1 or limit > 500:
+    image_ids = []
+    seen_ids = set()
+    for raw_id in raw_image_ids:
+        if not isinstance(raw_id, int) or isinstance(raw_id, bool) or raw_id <= 0:
+            return _error_response(
+                "validation_error",
+                "Invalid request payload.",
+                422,
+                [{"field": "image_ids", "issue": "must contain positive integers only"}],
+            )
+        if raw_id in seen_ids:
+            continue
+        seen_ids.add(raw_id)
+        image_ids.append(raw_id)
+
+    if len(image_ids) > 500:
         return _error_response(
             "validation_error",
             "Invalid request payload.",
             422,
-            [{"field": "limit", "issue": "must be between 1 and 500"}],
+            [{"field": "image_ids", "issue": "must contain no more than 500 image ids"}],
         )
 
     db_session = get_session()
-    images = db_session.execute(select(JigsawImage).order_by(JigsawImage.id.desc()).limit(limit)).scalars().all()
-    payload = [_serialize_jigsaw_image(image) for image in images]
-    return _success_response(payload)
+    job = BulkAiCreateJob(
+        actor_user_id=getattr(g.current_user, "id", None),
+        status=BULK_AI_CREATE_STATUS_QUEUED,
+        total_items=len(image_ids),
+        processed_items=0,
+        succeeded_items=0,
+        failed_items=0,
+        request_id=g.request_id,
+    )
+    db_session.add(job)
+    db_session.flush()
+
+    for image_id in image_ids:
+        db_session.add(
+            BulkAiCreateJobItem(
+                job_id=job.id,
+                image_id=image_id,
+                status=BULK_AI_CREATE_ITEM_STATUS_QUEUED,
+                attempts=0,
+            )
+        )
+
+    _record_audit_event(
+        action="jigsaw.bulk_create_queued",
+        entity_type="bulk_ai_create_job",
+        entity_id=job.id,
+        payload={
+            "item_count": len(image_ids),
+            "image_ids": image_ids,
+        },
+    )
+    db_session.commit()
+
+    if bool(current_app.config.get("BULK_AI_CREATE_INLINE", False)):
+        _process_bulk_ai_create_job(current_app._get_current_object(), job.id)
+    else:
+        _queue_bulk_ai_create_job(job.id)
+
+    refreshed_job = db_session.get(BulkAiCreateJob, job.id)
+    return _success_response({"job": _serialize_bulk_ai_create_job(refreshed_job)}, status_code=202)
+
+
+@api_v1_bp.get("/image-library/bulk-create-jigsaws/<int:job_id>")
+@require_role("administrator")
+def get_bulk_create_jigsaws_job(job_id):
+    db_session = get_session()
+    job = db_session.get(BulkAiCreateJob, job_id)
+    if job is None:
+        return _error_response("not_found", "Bulk create job was not found.", 404)
+
+    return _success_response({"job": _serialize_bulk_ai_create_job(job)})
+
+
+@api_v1_bp.get("/image-library/bulk-create-jigsaws/<int:job_id>/items")
+@require_role("administrator")
+def list_bulk_create_jigsaws_job_items(job_id):
+    db_session = get_session()
+    job = db_session.get(BulkAiCreateJob, job_id)
+    if job is None:
+        return _error_response("not_found", "Bulk create job was not found.", 404)
+
+    pagination, error = _parse_list_pagination_query(default_page_size=25, max_page_size=500, legacy_limit_max=500)
+    if error is not None:
+        return error
+
+    total_items = int(
+        db_session.execute(
+            select(func.count(BulkAiCreateJobItem.id)).where(BulkAiCreateJobItem.job_id == job.id)
+        ).scalar_one()
+        or 0
+    )
+    job_items = db_session.execute(
+        select(BulkAiCreateJobItem)
+        .where(BulkAiCreateJobItem.job_id == job.id)
+        .order_by(BulkAiCreateJobItem.id.asc())
+        .offset(pagination["offset"])
+        .limit(pagination["page_size"])
+    ).scalars().all()
+
+    payload = [_serialize_bulk_ai_create_job_item(job_item) for job_item in job_items]
+    return _success_list_response(
+        payload,
+        page=pagination["page"],
+        page_size=pagination["page_size"],
+        total_items=total_items,
+    )
 
 
 @api_v1_bp.post("/image-library/uploads")

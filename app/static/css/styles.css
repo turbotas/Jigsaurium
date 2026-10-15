@@ -98,6 +98,33 @@
   margin-bottom: 0;
 }
 
+.app-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+.app-pagination__summary {
+  margin: 0;
+}
+
+.app-pagination__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-pagination__button {
+  margin-bottom: 0;
+}
+
+.app-pagination__page {
+  margin: 0;
+}
+
 .app-thumbnail-cell {
   position: relative;
 }

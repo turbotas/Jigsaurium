@@ -260,6 +260,19 @@
         spellcheck="false"
         aria-describedby="jigsaw-search-hint"
       >
+
+      <div class="govuk-checkboxes govuk-checkboxes--small govuk-!-margin-top-2">
+        <div class="govuk-checkboxes__item">
+          <input
+            id="jigsaw-filter-no-diary"
+            class="govuk-checkboxes__input"
+            type="checkbox"
+          >
+          <label class="govuk-label govuk-checkboxes__label" for="jigsaw-filter-no-diary">
+            Show only jigsaws without completion diary entries
+          </label>
+        </div>
+      </div>
     </div>
 
     <div class="table-scroll-wrap">
@@ -277,6 +290,7 @@
         <tbody class="govuk-table__body" id="jigsaws-table-body"></tbody>
       </table>
     </div>
+    <div id="jigsaws-pagination" class="app-pagination" aria-live="polite"></div>
 
     <form id="jigsaw-edit-form" class="govuk-!-margin-top-6" hidden>
       <h3 class="govuk-heading-m">Edit selected jigsaw</h3>
@@ -445,6 +459,26 @@
           </div>
         </div>
 
+        <div id="image-library-bulk-create-wrap" class="govuk-form-group" hidden>
+          <div class="govuk-checkboxes govuk-checkboxes--small">
+            <div class="govuk-checkboxes__item">
+              <input
+                id="image-library-bulk-create"
+                class="govuk-checkboxes__input"
+                type="checkbox"
+                name="bulk_create_jigsaws"
+              >
+              <label class="govuk-label govuk-checkboxes__label" for="image-library-bulk-create">
+                Create one jigsaw per uploaded image using AI
+              </label>
+            </div>
+          </div>
+          <div class="govuk-hint">Shown only for unassigned uploads with initial tag set to Box.</div>
+        </div>
+        <div id="image-library-bulk-create-progress" class="govuk-inset-text" hidden>
+          <p id="image-library-bulk-create-progress-text" class="govuk-body govuk-!-margin-bottom-0"></p>
+        </div>
+
         <div id="image-library-dropzone" class="app-dropzone" role="button" tabindex="0" aria-describedby="image-library-dropzone-hint">
           <p class="govuk-body govuk-!-margin-bottom-2"><strong>Drag and drop files here</strong></p>
           <p id="image-library-dropzone-hint" class="govuk-hint govuk-!-margin-bottom-2">Accepted: image files and .zip archives containing images.</p>
@@ -514,6 +548,7 @@
           <tbody class="govuk-table__body" id="image-library-table-body"></tbody>
         </table>
       </div>
+      <div id="image-library-pagination" class="app-pagination" aria-live="polite"></div>
 
       <div id="image-browser-modal" class="app-image-browser" hidden>
         <div class="app-image-browser__panel" role="dialog" aria-modal="true" aria-labelledby="image-browser-title">
@@ -628,6 +663,7 @@
           <tbody class="govuk-table__body" id="diary-entries-table-body"></tbody>
         </table>
       </div>
+      <div id="diary-pagination" class="app-pagination" aria-live="polite"></div>
     </section>
   </section>
 
@@ -722,6 +758,7 @@
         <tbody class="govuk-table__body" id="ai-usage-recent-body"></tbody>
       </table>
     </div>
+    <div id="ai-usage-recent-pagination" class="app-pagination" aria-live="polite"></div>
 
     <div id="ai-usage-detail-modal" class="app-ai-usage-detail-modal" hidden>
       <div class="app-ai-usage-detail-modal__panel" role="dialog" aria-modal="true" aria-labelledby="ai-usage-detail-title">
@@ -751,6 +788,7 @@
         <tbody class="govuk-table__body" id="audit-table-body"></tbody>
       </table>
     </div>
+    <div id="audit-pagination" class="app-pagination" aria-live="polite"></div>
   </section>
 
   <section class="govuk-!-margin-top-8" aria-labelledby="loans-heading">

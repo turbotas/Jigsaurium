@@ -21,6 +21,7 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("AI_MODEL", "")
     app.config.setdefault("AI_TIMEOUT_SECONDS", 60)
     app.config.setdefault("AI_DAILY_BUDGET_USD", None)
+    app.config.setdefault("BULK_AI_CREATE_INLINE", bool(app.config.get("TESTING", False)))
 
     @app.before_request
     def set_request_id():
@@ -28,9 +29,11 @@ def create_app(config_class="config.Config"):
 
     from app.routes import main_bp
     from app.api.v1 import api_v1_bp
+    from app.api.v1.routes import start_bulk_ai_create_worker
     from app import models  # noqa: F401
 
     app.register_blueprint(main_bp)
     app.register_blueprint(api_v1_bp)
     init_db(app)
+    start_bulk_ai_create_worker(app)
     return app
