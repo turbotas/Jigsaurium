@@ -40,6 +40,17 @@ class Config:
     AI_TIMEOUT_SECONDS = _parse_optional_int(os.getenv("AI_TIMEOUT_SECONDS")) or 60
     AI_DAILY_BUDGET_USD = _parse_optional_float(os.getenv("AI_DAILY_BUDGET_USD"))
     BULK_AI_CREATE_INLINE = _parse_bool(os.getenv("BULK_AI_CREATE_INLINE"), default=False)
+    IMAGE_EMBEDDINGS_ENABLED = _parse_bool(os.getenv("IMAGE_EMBEDDINGS_ENABLED"), default=False)
+    IMAGE_EMBEDDING_MODEL_NAME = os.getenv("IMAGE_EMBEDDING_MODEL_NAME", "openai/clip-vit-base-patch32")
+    IMAGE_EMBEDDING_MODEL_REVISION = os.getenv("IMAGE_EMBEDDING_MODEL_REVISION", "main")
+    IMAGE_EMBEDDINGS_INLINE = _parse_bool(os.getenv("IMAGE_EMBEDDINGS_INLINE"), default=False)
+    IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK = _parse_bool(
+        os.getenv("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK"),
+        default=False,
+    )
+    IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES = _parse_csv(
+        os.getenv("IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES", "box,reference")
+    )
     SESSION_COOKIE_SECURE = APP_ENV != "dev"
     REMEMBER_COOKIE_SECURE = APP_ENV != "dev"
     PREFERRED_URL_SCHEME = "https" if APP_ENV != "dev" else "http"

@@ -3,7 +3,6 @@ import base64
 import hashlib
 import mimetypes
 import threading
-from queue import Empty, Queue
 import re
 import urllib.error
 import urllib.request
@@ -16,15 +15,24 @@ from functools import wraps
 
 from flask import Blueprint, current_app, g, request, session
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.exc import DataError
 
 from app.db import get_session
+from app.image_embeddings import (
+    build_model_key,
+    compute_content_sha256,
+    compute_image_embedding,
+    cosine_similarity,
+)
 from app.models import (
     AiUsageEvent,
     AuditEvent,
     BulkAiCreateJob,
     BulkAiCreateJobItem,
+    ImageEmbedding,
+    ImageEmbeddingJob,
     Jigsaw,
     JigsawDiaryEntry,
     JigsawImage,
@@ -70,6 +78,7 @@ IMAGE_BROWSER_TAG_COMPLETED = "Completed"
 IMAGE_BROWSER_TAG_BOX_SIDE = "Box side"
 IMAGE_BROWSER_TAG_BOX_BACK = "Box back"
 IMAGE_BROWSER_TAG_BOX_FRONT = "Box front"
+IMAGE_BROWSER_TAG_REFERENCE = "Reference"
 IMAGE_BROWSER_TAG_IN_PROGRESS = "In progress"
 ZIP_UPLOAD_MIME_TYPES = {"application/zip", "application/x-zip-compressed", "multipart/x-zip"}
 AI_IMAGE_CREATE_OPERATION = "image_to_jigsaw"
@@ -96,9 +105,10 @@ BULK_AI_CREATE_ITEM_STATUS_RUNNING = "running"
 BULK_AI_CREATE_ITEM_STATUS_COMPLETED = "completed"
 BULK_AI_CREATE_ITEM_STATUS_FAILED = "failed"
 
-_bulk_ai_create_queue = Queue()
-_bulk_ai_create_worker_lock = threading.Lock()
-_bulk_ai_create_worker_started = False
+IMAGE_EMBEDDING_JOB_STATUS_QUEUED = "queued"
+IMAGE_EMBEDDING_JOB_STATUS_RUNNING = "running"
+IMAGE_EMBEDDING_JOB_STATUS_COMPLETED = "completed"
+IMAGE_EMBEDDING_JOB_STATUS_FAILED = "failed"
 
 
 class AiProviderRequestError(RuntimeError):
@@ -167,35 +177,346 @@ def _serialize_bulk_ai_create_job_item(item):
     }
 
 
+def _get_embedding_model_config():
+    model_name = str(current_app.config.get("IMAGE_EMBEDDING_MODEL_NAME") or "").strip()
+    model_revision = str(current_app.config.get("IMAGE_EMBEDDING_MODEL_REVISION") or "").strip()
+    if not model_name:
+        model_name = "openai/clip-vit-base-patch32"
+    if not model_revision:
+        model_revision = "main"
+    return model_name, model_revision, build_model_key(model_name, model_revision)
+
+
+def _serialize_image_embedding_job(job):
+    error_summary = []
+    if isinstance(job.error_summary_json, str) and job.error_summary_json.strip():
+        try:
+            parsed_summary = json.loads(job.error_summary_json)
+            if isinstance(parsed_summary, list):
+                error_summary = parsed_summary
+        except json.JSONDecodeError:
+            error_summary = []
+
+    return {
+        "id": job.id,
+        "actor_user_id": job.actor_user_id,
+        "status": job.status,
+        "model_key": job.model_key,
+        "total_items": int(job.total_items or 0),
+        "processed_items": int(job.processed_items or 0),
+        "succeeded_items": int(job.succeeded_items or 0),
+        "failed_items": int(job.failed_items or 0),
+        "request_id": job.request_id,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "error_summary": error_summary,
+    }
+
+
+def _refresh_image_embedding_job_counts(db_session, job_id):
+    job = db_session.get(ImageEmbeddingJob, int(job_id))
+    if job is None:
+        return None
+    return {
+        "total_items": int(job.total_items or 0),
+        "processed_items": int(job.processed_items or 0),
+        "succeeded_items": int(job.succeeded_items or 0),
+        "failed_items": int(job.failed_items or 0),
+    }
+
+
+def _mark_image_embedding_job_failed(app, job_id, code, message):
+    with app.app_context():
+        db_session = get_session()
+        job = db_session.get(ImageEmbeddingJob, int(job_id))
+        if job is None:
+            return
+        if job.status in {IMAGE_EMBEDDING_JOB_STATUS_COMPLETED, IMAGE_EMBEDDING_JOB_STATUS_FAILED}:
+            return
+
+        counters = _refresh_image_embedding_job_counts(db_session, job.id)
+        if counters is not None:
+            job.total_items = counters["total_items"]
+            job.processed_items = counters["processed_items"]
+            job.succeeded_items = counters["succeeded_items"]
+            job.failed_items = counters["failed_items"]
+        job.status = IMAGE_EMBEDDING_JOB_STATUS_FAILED
+        job.finished_at = datetime.now(timezone.utc)
+        job.error_summary_json = json.dumps(
+            [{"code": str(code or "internal_error"), "message": str(message or "Embedding job failed.")}],
+            sort_keys=True,
+        )
+        db_session.commit()
+
+
+def _run_image_embedding_job(app, job_id):
+    try:
+        _process_image_embedding_job(app, int(job_id))
+    except Exception:
+        app.logger.exception("image_embedding_job_unhandled_exception", extra={"job_id": int(job_id)})
+        _mark_image_embedding_job_failed(
+            app,
+            int(job_id),
+            "internal_error",
+            "Image embedding backfill job crashed before completion.",
+        )
+
+
+def _start_image_embedding_job_thread(app, job_id):
+    worker = threading.Thread(
+        target=_run_image_embedding_job,
+        args=(app, int(job_id)),
+        name=f"image-embedding-job-{int(job_id)}",
+        daemon=True,
+    )
+    worker.start()
+
+
+def _queue_image_embedding_job(job_id):
+    _start_image_embedding_job_thread(current_app._get_current_object(), int(job_id))
+
+
+def _upsert_image_embedding_for_image(db_session, image, *, model_name, model_revision, model_key, allow_test_fallback):
+    if image is None:
+        return None
+
+    vector = compute_image_embedding(
+        image.image_data,
+        model_name=model_name,
+        model_revision=model_revision,
+        allow_test_fallback=allow_test_fallback,
+    )
+    source_content_sha256 = compute_content_sha256(image.image_data)
+
+    embedding = db_session.execute(
+        select(ImageEmbedding)
+        .where(ImageEmbedding.image_id == image.id, ImageEmbedding.model_key == model_key)
+        .limit(1)
+    ).scalar_one_or_none()
+    if embedding is None:
+        embedding = ImageEmbedding(
+            image_id=image.id,
+            model_key=model_key,
+            vector_json=json.dumps(vector),
+            vector_dim=len(vector),
+            source_content_sha256=source_content_sha256,
+        )
+        db_session.add(embedding)
+    else:
+        embedding.vector_json = json.dumps(vector)
+        embedding.vector_dim = len(vector)
+        embedding.source_content_sha256 = source_content_sha256
+
+    db_session.flush()
+    return embedding
+
+
+def _process_image_embedding_job(app, job_id):
+    with app.app_context():
+        db_session = get_session()
+        model_name, model_revision, model_key = _get_embedding_model_config()
+        allow_test_fallback = bool(current_app.config.get("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", False))
+
+        rows_updated = db_session.execute(
+            sa_update(ImageEmbeddingJob)
+            .where(
+                ImageEmbeddingJob.id == int(job_id),
+                ImageEmbeddingJob.status == IMAGE_EMBEDDING_JOB_STATUS_QUEUED,
+            )
+            .values(
+                status=IMAGE_EMBEDDING_JOB_STATUS_RUNNING,
+                started_at=datetime.now(timezone.utc),
+            )
+        )
+        db_session.commit()
+        if rows_updated.rowcount == 0:
+            return
+
+        job = db_session.get(ImageEmbeddingJob, int(job_id))
+        if job is None:
+            return
+
+        image_ids = db_session.execute(select(JigsawImage.id).order_by(JigsawImage.id.asc())).scalars().all()
+        job.total_items = len(image_ids)
+        job.processed_items = 0
+        job.succeeded_items = 0
+        job.failed_items = 0
+        job.error_summary_json = None
+        db_session.commit()
+
+        errors = []
+        for image_id in image_ids:
+            image = db_session.get(JigsawImage, int(image_id))
+            if image is None:
+                job.processed_items += 1
+                job.failed_items += 1
+                db_session.commit()
+                continue
+
+            try:
+                _upsert_image_embedding_for_image(
+                    db_session,
+                    image,
+                    model_name=model_name,
+                    model_revision=model_revision,
+                    model_key=model_key,
+                    allow_test_fallback=allow_test_fallback,
+                )
+                job.succeeded_items += 1
+            except Exception as error:
+                job.failed_items += 1
+                if len(errors) < 20:
+                    errors.append({"image_id": image.id, "error": str(error)})
+
+            job.processed_items += 1
+            db_session.commit()
+
+        if job.failed_items > 0:
+            job.status = IMAGE_EMBEDDING_JOB_STATUS_FAILED
+            if errors:
+                job.error_summary_json = json.dumps(errors, sort_keys=True)
+        else:
+            job.status = IMAGE_EMBEDDING_JOB_STATUS_COMPLETED
+            job.error_summary_json = None
+        job.finished_at = datetime.now(timezone.utc)
+        db_session.commit()
+
+
+def _create_image_embedding_backfill_job(db_session):
+    _model_name, _model_revision, model_key = _get_embedding_model_config()
+
+    job = ImageEmbeddingJob(
+        actor_user_id=getattr(g.current_user, "id", None),
+        status=IMAGE_EMBEDDING_JOB_STATUS_QUEUED,
+        model_key=model_key,
+        total_items=0,
+        processed_items=0,
+        succeeded_items=0,
+        failed_items=0,
+        request_id=g.request_id,
+    )
+    db_session.add(job)
+    db_session.flush()
+
+    _record_audit_event(
+        action="jigsaw.image_embeddings_backfill_queued",
+        entity_type="image_embedding_job",
+        entity_id=job.id,
+        payload={"model_key": model_key},
+    )
+    db_session.commit()
+
+    if bool(current_app.config.get("IMAGE_EMBEDDINGS_INLINE", False)):
+        _process_image_embedding_job(current_app._get_current_object(), job.id)
+    else:
+        _queue_image_embedding_job(job.id)
+
+    return db_session.get(ImageEmbeddingJob, job.id)
+
+
 def _queue_bulk_ai_create_job(job_id):
-    _bulk_ai_create_queue.put(int(job_id))
+    _start_bulk_ai_create_job_thread(current_app._get_current_object(), int(job_id))
+
+
+def _start_bulk_ai_create_job_thread(app, job_id):
+    worker = threading.Thread(
+        target=_run_bulk_ai_create_job,
+        args=(app, int(job_id)),
+        name=f"bulk-ai-create-job-{int(job_id)}",
+        daemon=True,
+    )
+    worker.start()
+
+
+def _mark_bulk_ai_create_job_failed(app, job_id, code, message):
+    with app.app_context():
+        db_session = get_session()
+        job = db_session.get(BulkAiCreateJob, int(job_id))
+        if job is None:
+            return
+
+        if job.status in {BULK_AI_CREATE_STATUS_COMPLETED, BULK_AI_CREATE_STATUS_FAILED}:
+            return
+
+        refreshed = _refresh_bulk_ai_create_job_counters(db_session, job.id)
+        job.total_items = refreshed["total_items"]
+        job.processed_items = refreshed["processed_items"]
+        job.succeeded_items = refreshed["succeeded_items"]
+        job.failed_items = refreshed["failed_items"]
+        job.status = BULK_AI_CREATE_STATUS_FAILED
+        job.finished_at = datetime.now(timezone.utc)
+        job.error_summary_json = json.dumps(
+            [
+                {
+                    "code": str(code or "internal_error"),
+                    "message": str(message or "Bulk create job failed."),
+                }
+            ],
+            sort_keys=True,
+        )
+        db_session.commit()
+
+
+def _run_bulk_ai_create_job(app, job_id):
+    try:
+        _process_bulk_ai_create_job(app, int(job_id))
+    except Exception:
+        app.logger.exception("bulk_ai_create_job_unhandled_exception", extra={"job_id": int(job_id)})
+        _mark_bulk_ai_create_job_failed(
+            app,
+            int(job_id),
+            "internal_error",
+            "Bulk create job crashed before completion.",
+        )
+
+
+def _create_bulk_ai_create_job(db_session, image_ids):
+    job = BulkAiCreateJob(
+        actor_user_id=getattr(g.current_user, "id", None),
+        status=BULK_AI_CREATE_STATUS_QUEUED,
+        total_items=len(image_ids),
+        processed_items=0,
+        succeeded_items=0,
+        failed_items=0,
+        request_id=g.request_id,
+    )
+    db_session.add(job)
+    db_session.flush()
+
+    for image_id in image_ids:
+        db_session.add(
+            BulkAiCreateJobItem(
+                job_id=job.id,
+                image_id=image_id,
+                status=BULK_AI_CREATE_ITEM_STATUS_QUEUED,
+                attempts=0,
+            )
+        )
+
+    _record_audit_event(
+        action="jigsaw.bulk_create_queued",
+        entity_type="bulk_ai_create_job",
+        entity_id=job.id,
+        payload={
+            "item_count": len(image_ids),
+            "image_ids": image_ids,
+        },
+    )
+    db_session.commit()
+
+    if bool(current_app.config.get("BULK_AI_CREATE_INLINE", False)):
+        _process_bulk_ai_create_job(current_app._get_current_object(), job.id)
+    else:
+        _queue_bulk_ai_create_job(job.id)
+
+    return db_session.get(BulkAiCreateJob, job.id)
 
 
 def start_bulk_ai_create_worker(app):
-    global _bulk_ai_create_worker_started
-
-    if bool(app.config.get("BULK_AI_CREATE_INLINE", False)):
-        return
-
-    with _bulk_ai_create_worker_lock:
-        if _bulk_ai_create_worker_started:
-            return
-
-        def _worker_loop():
-            while True:
-                try:
-                    next_job_id = _bulk_ai_create_queue.get(timeout=0.5)
-                except Empty:
-                    continue
-
-                try:
-                    _process_bulk_ai_create_job(app, int(next_job_id))
-                finally:
-                    _bulk_ai_create_queue.task_done()
-
-        worker = threading.Thread(target=_worker_loop, name="bulk-ai-create-worker", daemon=True)
-        worker.start()
-        _bulk_ai_create_worker_started = True
+    # Jobs are launched as dedicated daemon threads when queued.
+    # This hook remains for app bootstrap compatibility.
+    return
 
 
 def _extract_response_status_code(response_payload):
@@ -250,11 +571,26 @@ def _refresh_bulk_ai_create_job_counters(db_session, job_id):
 def _process_bulk_ai_create_job(app, job_id):
     with app.app_context():
         db_session = get_session()
-        job = db_session.get(BulkAiCreateJob, int(job_id))
-        if job is None:
+        claimed = db_session.execute(
+            sa_update(BulkAiCreateJob)
+            .where(
+                BulkAiCreateJob.id == int(job_id),
+                BulkAiCreateJob.status == BULK_AI_CREATE_STATUS_QUEUED,
+            )
+            .values(
+                status=BULK_AI_CREATE_STATUS_RUNNING,
+                started_at=case(
+                    (BulkAiCreateJob.started_at.is_(None), datetime.now(timezone.utc)),
+                    else_=BulkAiCreateJob.started_at,
+                ),
+            )
+        )
+        db_session.commit()
+        if int(claimed.rowcount or 0) == 0:
             return
 
-        if job.status not in {BULK_AI_CREATE_STATUS_QUEUED, BULK_AI_CREATE_STATUS_RUNNING}:
+        job = db_session.get(BulkAiCreateJob, int(job_id))
+        if job is None:
             return
 
         actor_user = db_session.get(User, job.actor_user_id) if job.actor_user_id is not None else None
@@ -271,11 +607,6 @@ def _process_bulk_ai_create_job(app, job_id):
             ])
             db_session.commit()
             return
-
-        if job.started_at is None:
-            job.started_at = datetime.now(timezone.utc)
-        job.status = BULK_AI_CREATE_STATUS_RUNNING
-        db_session.commit()
 
         items = db_session.execute(
             select(BulkAiCreateJobItem)
@@ -301,11 +632,15 @@ def _process_bulk_ai_create_job(app, job_id):
                 continue
 
             request_id = f"job_{job.id}_{token_urlsafe(8)}"
+            csrf_token = f"bulk_job_{token_urlsafe(8)}"
             with app.test_request_context(
                 f"/api/v1/image-library/images/{image_id}/create-jigsaw",
                 method="POST",
                 json={},
+                headers={"X-CSRF-Token": csrf_token},
             ):
+                session["user_id"] = actor_user.id
+                session["csrf_token"] = csrf_token
                 g.request_id = request_id
                 g.current_user = actor_user
                 g.current_user_roles = actor_roles
@@ -426,6 +761,41 @@ def _serialize_jigsaw_image(image):
     }
 
 
+def _serialize_jigsaw_image_fields(
+    *,
+    image_id,
+    jigsaw_id,
+    tag,
+    filename,
+    mime_type,
+    captured_at,
+    captured_at_source,
+    created_at,
+):
+    return {
+        "id": int(image_id),
+        "jigsaw_id": jigsaw_id,
+        "tag": tag,
+        "filename": filename,
+        "mime_type": mime_type,
+        "content_url": f"/api/v1/images/{int(image_id)}/content",
+        "thumbnail_url": f"/api/v1/images/{int(image_id)}/content?variant={IMAGE_VARIANT_THUMBNAIL}",
+        "preview_url": f"/api/v1/images/{int(image_id)}/content?variant={IMAGE_VARIANT_PREVIEW}",
+        "captured_at": captured_at.isoformat() if captured_at else None,
+        "captured_at_source": captured_at_source,
+        "created_at": created_at.isoformat() if created_at else None,
+    }
+
+
+def _jigsaw_thumbnail_tag_priority(tag):
+    normalized = (tag or "").strip().lower()
+    if normalized == IMAGE_BROWSER_TAG_BOX.lower():
+        return 0
+    if normalized == IMAGE_BROWSER_TAG_COMPLETED.lower():
+        return 1
+    return 2
+
+
 def _serialize_diary_entry(entry):
     return {
         "id": entry.id,
@@ -443,24 +813,48 @@ def _serialize_diary_feed_entry(*, entry, jigsaw_title=None, source_image=None):
     payload = _serialize_diary_entry(entry)
     payload["entry_type"] = "diary_entry"
     payload["jigsaw_title"] = jigsaw_title
-    payload["source_image"] = _serialize_jigsaw_image(source_image) if source_image is not None else None
+    if isinstance(source_image, dict):
+        payload["source_image"] = source_image
+    elif source_image is not None:
+        payload["source_image"] = _serialize_jigsaw_image(source_image)
+    else:
+        payload["source_image"] = None
     return payload
 
 
 def _serialize_diary_feed_orphan_completed_image(image):
-    completed_at = image.captured_at or image.created_at
+    if isinstance(image, dict):
+        image_id = int(image.get("id") or 0)
+        captured_at = image.get("captured_at")
+        created_at = image.get("created_at")
+        source_image_payload = image
+    else:
+        image_id = int(image.id)
+        captured_at = image.captured_at
+        created_at = image.created_at
+        source_image_payload = _serialize_jigsaw_image(image)
+
+    completed_at = captured_at or created_at
+
+    def _to_iso(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return value.isoformat()
+
     return {
         "entry_type": "orphan_completed_image",
-        "id": image.id,
+        "id": image_id,
         "jigsaw_id": None,
         "jigsaw_title": None,
-        "source_image_id": image.id,
-        "completed_at": completed_at.isoformat() if completed_at else None,
+        "source_image_id": image_id,
+        "completed_at": _to_iso(completed_at),
         "difficulty": None,
         "notes": None,
-        "created_at": image.created_at.isoformat() if image.created_at else None,
+        "created_at": _to_iso(created_at),
         "updated_at": None,
-        "source_image": _serialize_jigsaw_image(image),
+        "source_image": source_image_payload,
     }
 
 
@@ -1155,6 +1549,10 @@ def _is_zip_upload(upload):
     return mime_type in ZIP_UPLOAD_MIME_TYPES or filename.endswith(".zip")
 
 
+def _is_truthy_form_value(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _resolve_optional_jigsaw_reference(db_session, raw_value):
     jigsaw_id, error = _parse_optional_positive_integer(raw_value, "jigsaw_id")
     if error is not None:
@@ -1278,6 +1676,92 @@ def _backfill_image_capture_metadata(image, captured_at, captured_at_source, cap
     return True
 
 
+def _refresh_image_embedding_for_image_id(app, image_id):
+    with app.app_context():
+        if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
+            return
+
+        db_session = get_session()
+        image = db_session.get(JigsawImage, int(image_id))
+        if image is None:
+            return
+
+        model_name, model_revision, model_key = _get_embedding_model_config()
+        allow_test_fallback = bool(current_app.config.get("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", False))
+        _upsert_image_embedding_for_image(
+            db_session,
+            image,
+            model_name=model_name,
+            model_revision=model_revision,
+            model_key=model_key,
+            allow_test_fallback=allow_test_fallback,
+        )
+        db_session.commit()
+
+
+def _queue_image_embedding_refresh(image_id):
+    if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
+        return
+
+    app = current_app._get_current_object()
+    if bool(current_app.config.get("TESTING", False)) and bool(current_app.config.get("IMAGE_EMBEDDINGS_INLINE", False)):
+        _refresh_image_embedding_for_image_id(app, int(image_id))
+        return
+
+    worker = threading.Thread(
+        target=_run_image_embedding_refresh,
+        args=(app, int(image_id)),
+        name=f"image-embedding-refresh-{int(image_id)}",
+        daemon=True,
+    )
+    worker.start()
+
+
+def _run_image_embedding_refresh(app, image_id):
+    try:
+        _refresh_image_embedding_for_image_id(app, int(image_id))
+    except Exception:
+        app.logger.exception("image_embedding_refresh_failed", extra={"image_id": int(image_id)})
+
+
+def _refresh_image_derivatives_for_image_id(app, image_id):
+    with app.app_context():
+        db_session = get_session()
+        image = db_session.get(JigsawImage, int(image_id))
+        if image is None:
+            return
+
+        variants = _build_image_variants(image.image_data, image.mime_type)
+        image.thumbnail_mime_type = variants["thumbnail_mime_type"]
+        image.thumbnail_data = variants["thumbnail_data"]
+        image.preview_mime_type = variants["preview_mime_type"]
+        image.preview_data = variants["preview_data"]
+
+        if image.captured_at is None:
+            captured_at, captured_at_source, captured_at_raw = _extract_image_captured_at(image.image_data)
+            if captured_at is not None:
+                image.captured_at = captured_at
+                image.captured_at_source = captured_at_source
+                image.captured_at_raw = captured_at_raw
+
+        db_session.commit()
+
+
+def _queue_image_derivatives_refresh(image_id):
+    app = current_app._get_current_object()
+    if bool(current_app.config.get("TESTING", False)):
+        _refresh_image_derivatives_for_image_id(app, int(image_id))
+        return
+
+    worker = threading.Thread(
+        target=_refresh_image_derivatives_for_image_id,
+        args=(app, int(image_id)),
+        name=f"image-derivatives-refresh-{int(image_id)}",
+        daemon=True,
+    )
+    worker.start()
+
+
 def _is_completed_image_tag(tag_value):
     normalized = str(tag_value or "").strip().lower()
     if not normalized:
@@ -1285,7 +1769,49 @@ def _is_completed_image_tag(tag_value):
     if normalized == IMAGE_BROWSER_TAG_COMPLETED.lower():
         return True
     normalized = normalized.replace("_", " ").replace("-", " ")
-    return normalized.startswith("completed")
+    return normalized.startswith("completed") or normalized.startswith("complete")
+
+
+def _is_reference_image_tag(tag_value):
+    normalized = str(tag_value or "").strip().lower().replace("_", " ").replace("-", " ")
+    if not normalized:
+        return False
+    prefixes = _reference_tag_prefixes()
+    return any(normalized.startswith(prefix) for prefix in prefixes)
+
+
+def _reference_tag_prefixes():
+    configured_prefixes = current_app.config.get("IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES") or []
+    prefixes = [str(value).strip().lower() for value in configured_prefixes if str(value or "").strip()]
+    if not prefixes:
+        prefixes = ["box", "reference"]
+    return prefixes
+
+
+def _build_reference_tag_sql_filter(column):
+    prefixes = _reference_tag_prefixes()
+    clauses = [func.lower(func.coalesce(column, "")).like(f"{prefix}%") for prefix in prefixes]
+    if not clauses:
+        return None
+    return or_(*clauses)
+
+
+def _parse_embedding_vector(raw_vector_json):
+    if not isinstance(raw_vector_json, str) or not raw_vector_json.strip():
+        return None
+    try:
+        parsed = json.loads(raw_vector_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, list):
+        return None
+    values = []
+    for item in parsed:
+        try:
+            values.append(float(item))
+        except (TypeError, ValueError):
+            return None
+    return values
 
 
 def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger):
@@ -1359,8 +1885,10 @@ def _create_jigsaw_image_record(
     captured_at=None,
     captured_at_source=None,
     captured_at_raw=None,
+    variants=None,
 ):
-    variants = _build_image_variants(image_data, mime_type)
+    if variants is None:
+        variants = _build_image_variants(image_data, mime_type)
     image = JigsawImage(
         jigsaw_id=jigsaw_id,
         tag=tag,
@@ -1634,12 +2162,15 @@ def _normalize_known_image_tag(value):
         return normalized
 
     collapsed = re.sub(r"[^a-z0-9]+", "", normalized.lower())
+    if collapsed.startswith("reference"):
+        return IMAGE_BROWSER_TAG_REFERENCE
     canonical_tags = {
         "box": IMAGE_BROWSER_TAG_BOX,
         "boxfront": IMAGE_BROWSER_TAG_BOX_FRONT,
         "boxside": IMAGE_BROWSER_TAG_BOX_SIDE,
         "boxback": IMAGE_BROWSER_TAG_BOX_BACK,
         "completed": IMAGE_BROWSER_TAG_COMPLETED,
+        "complete": IMAGE_BROWSER_TAG_COMPLETED,
         "inprogress": IMAGE_BROWSER_TAG_IN_PROGRESS,
     }
     return canonical_tags.get(collapsed, normalized)
@@ -2643,6 +3174,37 @@ def list_jigsaws():
     )
 
 
+@api_v1_bp.get("/jigsaws/thumbnail-images")
+@require_auth
+def list_jigsaw_thumbnail_images():
+    db_session = get_session()
+
+    stmt = select(JigsawImage).where(JigsawImage.jigsaw_id.is_not(None))
+    if "administrator" not in g.current_user_roles:
+        stmt = stmt.join(Jigsaw, Jigsaw.id == JigsawImage.jigsaw_id).where(Jigsaw.status != JigsawStatus.RETIRED)
+
+    images = db_session.execute(stmt.order_by(JigsawImage.id.desc())).scalars().all()
+
+    preferred_by_jigsaw_id = {}
+    for image in images:
+        jigsaw_id = int(image.jigsaw_id or 0)
+        if jigsaw_id <= 0:
+            continue
+
+        existing = preferred_by_jigsaw_id.get(jigsaw_id)
+        if existing is None:
+            preferred_by_jigsaw_id[jigsaw_id] = image
+            continue
+
+        candidate_priority = _jigsaw_thumbnail_tag_priority(image.tag)
+        existing_priority = _jigsaw_thumbnail_tag_priority(existing.tag)
+        if candidate_priority < existing_priority:
+            preferred_by_jigsaw_id[jigsaw_id] = image
+
+    payload = [_serialize_jigsaw_image(image) for image in preferred_by_jigsaw_id.values()]
+    return _success_response(payload)
+
+
 @api_v1_bp.get("/loans")
 @require_role("administrator")
 def list_loans():
@@ -3075,6 +3637,8 @@ def create_jigsaw_image(jigsaw_id):
     else:
         tag = _normalize_known_image_tag(tag)
 
+    defer_processing = _is_truthy_form_value(request.form.get("defer_processing"))
+
     upload = request.files.get("image")
     if upload is None:
         return _error_response(
@@ -3116,7 +3680,11 @@ def create_jigsaw_image(jigsaw_id):
     if error is not None:
         return error
 
-    captured_at, captured_at_source, captured_at_raw = _extract_image_captured_at(image_data)
+    captured_at = None
+    captured_at_source = None
+    captured_at_raw = None
+    if not defer_processing:
+        captured_at, captured_at_source, captured_at_raw = _extract_image_captured_at(image_data)
 
     image_sha256 = _compute_image_sha256(image_data)
     duplicate_image = db_session.execute(
@@ -3144,6 +3712,15 @@ def create_jigsaw_image(jigsaw_id):
         return _success_response(_serialize_jigsaw_image(duplicate_image))
 
     try:
+        variants = None
+        if defer_processing:
+            variants = {
+                "thumbnail_mime_type": None,
+                "thumbnail_data": None,
+                "preview_mime_type": None,
+                "preview_data": None,
+            }
+
         image = _create_jigsaw_image_record(
             db_session,
             jigsaw_id=jigsaw.id,
@@ -3155,6 +3732,7 @@ def create_jigsaw_image(jigsaw_id):
             captured_at=captured_at,
             captured_at_source=captured_at_source,
             captured_at_raw=captured_at_raw,
+            variants=variants,
         )
 
         _maybe_create_diary_entry_from_image(
@@ -3176,6 +3754,9 @@ def create_jigsaw_image(jigsaw_id):
             },
         )
         db_session.commit()
+        if defer_processing:
+            _queue_image_derivatives_refresh(image.id)
+        _queue_image_embedding_refresh(image.id)
     except DataError:
         db_session.rollback()
         return _error_response(
@@ -3209,6 +3790,177 @@ def list_image_library_images():
         page=pagination["page"],
         page_size=pagination["page_size"],
         total_items=total_items,
+    )
+
+
+@api_v1_bp.post("/image-embeddings/backfill")
+@require_role("administrator")
+def create_image_embedding_backfill_job():
+    if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
+        return _error_response("conflict", "Image embeddings are disabled in server configuration.", 409)
+
+    db_session = get_session()
+    job = _create_image_embedding_backfill_job(db_session)
+    return _success_response({"job": _serialize_image_embedding_job(job)}, status_code=202)
+
+
+@api_v1_bp.get("/image-embeddings/backfill/<int:job_id>")
+@require_role("administrator")
+def get_image_embedding_backfill_job(job_id):
+    db_session = get_session()
+    job = db_session.get(ImageEmbeddingJob, job_id)
+    if job is None:
+        return _error_response("not_found", "Image embedding backfill job was not found.", 404)
+
+    if (
+        job.status == IMAGE_EMBEDDING_JOB_STATUS_QUEUED
+        and not bool(current_app.config.get("IMAGE_EMBEDDINGS_INLINE", False))
+    ):
+        _queue_image_embedding_job(job.id)
+        db_session.expire_all()
+        job = db_session.get(ImageEmbeddingJob, job_id)
+
+    return _success_response({"job": _serialize_image_embedding_job(job)})
+
+
+@api_v1_bp.get("/image-library/images/<int:image_id>/match-suggestions")
+@require_role("administrator")
+def get_image_match_suggestions(image_id):
+    if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
+        return _error_response("conflict", "Image embeddings are disabled in server configuration.", 409)
+
+    raw_limit = request.args.get("limit", "3")
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        return _error_response(
+            "validation_error",
+            "Invalid request query.",
+            422,
+            [{"field": "limit", "issue": "must be an integer"}],
+        )
+    if limit < 1 or limit > 10:
+        return _error_response(
+            "validation_error",
+            "Invalid request query.",
+            422,
+            [{"field": "limit", "issue": "must be between 1 and 10"}],
+        )
+
+    db_session = get_session()
+    image_row = db_session.execute(
+        select(JigsawImage.id, JigsawImage.tag, JigsawImage.jigsaw_id).where(JigsawImage.id == int(image_id)).limit(1)
+    ).first()
+    if image_row is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+    resolved_image_id, image_tag, image_jigsaw_id = image_row
+
+    if not _is_completed_image_tag(image_tag):
+        return _error_response("conflict", "Image must be tagged as Completed before matching.", 409)
+    if image_jigsaw_id is not None:
+        return _error_response("conflict", "Image is already assigned to a jigsaw.", 409)
+
+    model_name, model_revision, model_key = _get_embedding_model_config()
+    allow_test_fallback = bool(current_app.config.get("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", False))
+
+    query_embedding = db_session.execute(
+        select(ImageEmbedding)
+        .where(ImageEmbedding.image_id == int(resolved_image_id), ImageEmbedding.model_key == model_key)
+        .limit(1)
+    ).scalar_one_or_none()
+    if query_embedding is None:
+        try:
+            image = db_session.get(JigsawImage, int(resolved_image_id))
+            if image is None:
+                return _error_response("not_found", "Jigsaw image was not found.", 404)
+            query_embedding = _upsert_image_embedding_for_image(
+                db_session,
+                image,
+                model_name=model_name,
+                model_revision=model_revision,
+                model_key=model_key,
+                allow_test_fallback=allow_test_fallback,
+            )
+            db_session.commit()
+        except Exception as error:
+            db_session.rollback()
+            return _error_response("conflict", f"Could not compute query image embedding: {error}", 409)
+
+    query_vector = _parse_embedding_vector(query_embedding.vector_json if query_embedding else None)
+    if not query_vector:
+        return _error_response("conflict", "Query image embedding is unavailable.", 409)
+
+    reference_tag_filter = _build_reference_tag_sql_filter(JigsawImage.tag)
+    candidate_stmt = (
+        select(
+            ImageEmbedding.vector_json,
+            JigsawImage.id,
+            JigsawImage.jigsaw_id,
+            JigsawImage.tag,
+            Jigsaw.title,
+        )
+        .join(JigsawImage, JigsawImage.id == ImageEmbedding.image_id)
+        .join(Jigsaw, Jigsaw.id == JigsawImage.jigsaw_id)
+        .where(
+            ImageEmbedding.model_key == model_key,
+            JigsawImage.jigsaw_id.is_not(None),
+        )
+        .order_by(JigsawImage.id.asc())
+    )
+    if reference_tag_filter is not None:
+        candidate_stmt = candidate_stmt.where(reference_tag_filter)
+
+    candidates = db_session.execute(candidate_stmt).all()
+
+    best_by_jigsaw_id = {}
+    for candidate_vector_json, candidate_image_id, candidate_jigsaw_id, candidate_tag, candidate_jigsaw_title in candidates:
+        if candidate_jigsaw_id is None:
+            continue
+        if not _is_reference_image_tag(candidate_tag):
+            continue
+        candidate_vector = _parse_embedding_vector(candidate_vector_json)
+        if not candidate_vector:
+            continue
+
+        score = cosine_similarity(query_vector, candidate_vector)
+        jigsaw_id = int(candidate_jigsaw_id)
+        previous = best_by_jigsaw_id.get(jigsaw_id)
+        if previous is None or score > previous["score"]:
+            best_by_jigsaw_id[jigsaw_id] = {
+                "jigsaw_id": jigsaw_id,
+                "jigsaw_title": candidate_jigsaw_title,
+                "score": float(score),
+                "reference_image_id": int(candidate_image_id),
+                "reference_tag": candidate_tag,
+            }
+
+    ranked = sorted(best_by_jigsaw_id.values(), key=lambda row: row["score"], reverse=True)[:limit]
+    for item in ranked:
+        score = item["score"]
+        if score >= 0.82:
+            confidence = "high"
+        elif score >= 0.72:
+            confidence = "medium"
+        else:
+            confidence = "low"
+        item["confidence"] = confidence
+        reference_image_id = int(item.get("reference_image_id") or 0)
+        if reference_image_id > 0:
+            item["reference_image"] = {
+                "id": reference_image_id,
+                "tag": item.get("reference_tag"),
+                "content_url": f"/api/v1/images/{reference_image_id}/content",
+                "thumbnail_url": f"/api/v1/images/{reference_image_id}/content?variant={IMAGE_VARIANT_THUMBNAIL}",
+                "preview_url": f"/api/v1/images/{reference_image_id}/content?variant={IMAGE_VARIANT_PREVIEW}",
+            }
+
+    return _success_response(
+        {
+            "image_id": int(resolved_image_id),
+            "model_key": model_key,
+            "candidate_count": len(ranked),
+            "candidates": ranked,
+        }
     )
 
 
@@ -3252,45 +4004,31 @@ def start_bulk_create_jigsaws_job():
         )
 
     db_session = get_session()
-    job = BulkAiCreateJob(
-        actor_user_id=getattr(g.current_user, "id", None),
-        status=BULK_AI_CREATE_STATUS_QUEUED,
-        total_items=len(image_ids),
-        processed_items=0,
-        succeeded_items=0,
-        failed_items=0,
-        request_id=g.request_id,
-    )
-    db_session.add(job)
-    db_session.flush()
+    refreshed_job = _create_bulk_ai_create_job(db_session, image_ids)
+    return _success_response({"job": _serialize_bulk_ai_create_job(refreshed_job)}, status_code=202)
 
-    for image_id in image_ids:
-        db_session.add(
-            BulkAiCreateJobItem(
-                job_id=job.id,
-                image_id=image_id,
-                status=BULK_AI_CREATE_ITEM_STATUS_QUEUED,
-                attempts=0,
-            )
+
+@api_v1_bp.post("/image-library/bulk-create-jigsaws/unassigned-box")
+@require_role("administrator")
+def start_bulk_create_jigsaws_for_unassigned_box_images():
+    db_session = get_session()
+    image_ids = db_session.execute(
+        select(JigsawImage.id)
+        .where(
+            JigsawImage.jigsaw_id.is_(None),
+            func.lower(func.coalesce(JigsawImage.tag, "")) == "box",
+        )
+        .order_by(JigsawImage.id.asc())
+    ).scalars().all()
+
+    if not image_ids:
+        return _error_response(
+            "conflict",
+            "No unassigned box images were found to process.",
+            409,
         )
 
-    _record_audit_event(
-        action="jigsaw.bulk_create_queued",
-        entity_type="bulk_ai_create_job",
-        entity_id=job.id,
-        payload={
-            "item_count": len(image_ids),
-            "image_ids": image_ids,
-        },
-    )
-    db_session.commit()
-
-    if bool(current_app.config.get("BULK_AI_CREATE_INLINE", False)):
-        _process_bulk_ai_create_job(current_app._get_current_object(), job.id)
-    else:
-        _queue_bulk_ai_create_job(job.id)
-
-    refreshed_job = db_session.get(BulkAiCreateJob, job.id)
+    refreshed_job = _create_bulk_ai_create_job(db_session, [int(image_id) for image_id in image_ids])
     return _success_response({"job": _serialize_bulk_ai_create_job(refreshed_job)}, status_code=202)
 
 
@@ -3301,6 +4039,14 @@ def get_bulk_create_jigsaws_job(job_id):
     job = db_session.get(BulkAiCreateJob, job_id)
     if job is None:
         return _error_response("not_found", "Bulk create job was not found.", 404)
+
+    if (
+        job.status == BULK_AI_CREATE_STATUS_QUEUED
+        and not bool(current_app.config.get("BULK_AI_CREATE_INLINE", False))
+    ):
+        _queue_bulk_ai_create_job(job.id)
+        db_session.expire_all()
+        job = db_session.get(BulkAiCreateJob, job_id)
 
     return _success_response({"job": _serialize_bulk_ai_create_job(job)})
 
@@ -3458,6 +4204,8 @@ def upload_image_library_items():
             },
         )
         db_session.commit()
+        for created_image, _source in created_images:
+            _queue_image_embedding_refresh(created_image.id)
     except DataError:
         db_session.rollback()
         return _error_response(
@@ -3706,6 +4454,7 @@ def replace_image_library_item_content(image_id):
         },
     )
     db_session.commit()
+    _queue_image_embedding_refresh(image.id)
 
     return _success_response(_serialize_jigsaw_image(image))
 
@@ -4183,17 +4932,43 @@ def list_diary_feed_entries():
         diary_stmt = diary_stmt.where(JigsawDiaryEntry.jigsaw_id == selected_jigsaw_id)
 
     diary_rows = db_session.execute(diary_stmt).all()
-    source_image_ids = {
-        row[0].source_image_id
-        for row in diary_rows
-        if row[0].source_image_id is not None
-    }
+    source_image_ids = {row[0].source_image_id for row in diary_rows if row[0].source_image_id is not None}
     source_images_by_id = {}
     if source_image_ids:
-        source_images = db_session.execute(
-            select(JigsawImage).where(JigsawImage.id.in_(source_image_ids))
-        ).scalars().all()
-        source_images_by_id = {image.id: image for image in source_images}
+        source_image_rows = db_session.execute(
+            select(
+                JigsawImage.id,
+                JigsawImage.jigsaw_id,
+                JigsawImage.tag,
+                JigsawImage.filename,
+                JigsawImage.mime_type,
+                JigsawImage.captured_at,
+                JigsawImage.captured_at_source,
+                JigsawImage.created_at,
+            ).where(JigsawImage.id.in_(source_image_ids))
+        ).all()
+        source_images_by_id = {
+            int(image_id): _serialize_jigsaw_image_fields(
+                image_id=image_id,
+                jigsaw_id=jigsaw_id,
+                tag=tag,
+                filename=filename,
+                mime_type=mime_type,
+                captured_at=captured_at,
+                captured_at_source=captured_at_source,
+                created_at=created_at,
+            )
+            for (
+                image_id,
+                jigsaw_id,
+                tag,
+                filename,
+                mime_type,
+                captured_at,
+                captured_at_source,
+                created_at,
+            ) in source_image_rows
+        }
 
     diary_feed_items = [
         _serialize_diary_feed_entry(
@@ -4206,30 +4981,82 @@ def list_diary_feed_entries():
 
     orphan_feed_items = []
     if selected_jigsaw_id is None:
+        normalized_orphan_tag = func.lower(
+            func.trim(
+                func.replace(
+                    func.replace(func.coalesce(JigsawImage.tag, ""), "_", " "),
+                    "-",
+                    " ",
+                )
+            )
+        )
         orphan_candidates = db_session.execute(
-            select(JigsawImage)
+            select(
+                JigsawImage.id,
+                JigsawImage.jigsaw_id,
+                JigsawImage.tag,
+                JigsawImage.filename,
+                JigsawImage.mime_type,
+                JigsawImage.captured_at,
+                JigsawImage.captured_at_source,
+                JigsawImage.created_at,
+            )
             .where(
                 JigsawImage.jigsaw_id.is_(None),
-                func.lower(func.coalesce(JigsawImage.tag, "")).like("completed%"),
+                or_(
+                    normalized_orphan_tag.like("completed%"),
+                    normalized_orphan_tag.like("complete%"),
+                ),
             )
             .order_by(func.coalesce(JigsawImage.captured_at, JigsawImage.created_at).desc(), JigsawImage.id.desc())
             .limit(limit)
-        ).scalars().all()
-        orphan_feed_items = [
-            _serialize_diary_feed_orphan_completed_image(image)
-            for image in orphan_candidates
-            if _is_completed_image_tag(image.tag)
-        ]
+        ).all()
+        orphan_feed_items = []
+        for (
+            image_id,
+            jigsaw_id,
+            tag,
+            filename,
+            mime_type,
+            captured_at,
+            captured_at_source,
+            created_at,
+        ) in orphan_candidates:
+            if not _is_completed_image_tag(tag):
+                continue
+            image_payload = _serialize_jigsaw_image_fields(
+                image_id=image_id,
+                jigsaw_id=jigsaw_id,
+                tag=tag,
+                filename=filename,
+                mime_type=mime_type,
+                captured_at=captured_at,
+                captured_at_source=captured_at_source,
+                created_at=created_at,
+            )
+            orphan_feed_items.append(_serialize_diary_feed_orphan_completed_image(image_payload))
 
     merged_items = diary_feed_items + orphan_feed_items
 
     def _sort_key(item):
         completed_at_raw = item.get("completed_at")
-        if not completed_at_raw:
-            return datetime.min.replace(tzinfo=timezone.utc), 0
-        completed_at = datetime.fromisoformat(str(completed_at_raw))
+        completed_at = datetime.min.replace(tzinfo=timezone.utc)
+        if isinstance(completed_at_raw, datetime):
+            completed_at = completed_at_raw
+        elif isinstance(completed_at_raw, str) and completed_at_raw.strip():
+            raw_value = completed_at_raw.strip()
+            if raw_value.endswith("Z"):
+                raw_value = raw_value[:-1] + "+00:00"
+            try:
+                completed_at = datetime.fromisoformat(raw_value)
+            except ValueError:
+                completed_at = datetime.min.replace(tzinfo=timezone.utc)
+
         if completed_at.tzinfo is None:
             completed_at = completed_at.replace(tzinfo=timezone.utc)
+        else:
+            completed_at = completed_at.astimezone(timezone.utc)
+
         return completed_at, int(item.get("id") or 0)
 
     merged_items.sort(key=_sort_key, reverse=True)

@@ -156,3 +156,12 @@
 - Why: large image batches were causing synchronous UI stalls and long-running request bottlenecks.
 - Decision: run bulk jobs asynchronously via an in-process background worker by default, with inline execution in test mode.
 - Why: delivers immediate non-blocking UX without adding external queue infrastructure yet, while keeping functional tests deterministic.
+
+## 2026-10-16 - CLIP Embedding Backfill and Visual Match Suggestions
+
+- Decision: introduce per-image embedding storage keyed by `model_name@revision` and generate vectors for all image-library rows.
+- Why: visual matching between historical completed photos and jigsaw references must remain model-consistent and resilient to tag/workflow changes.
+- Decision: add admin-triggered asynchronous embedding backfill jobs with status polling.
+- Why: initial rollout requires historical backfill without blocking request threads, and model upgrades require controlled recomputation.
+- Decision: use visual-match suggestions for unassigned `Completed` images by scoring cosine similarity against reference-tagged jigsaw images.
+- Why: historical data lacks reliable filename/time proximity signals, so visual similarity is the primary reconciliation mechanism.

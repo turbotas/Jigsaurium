@@ -125,6 +125,32 @@
   margin: 0;
 }
 
+.app-sortable-header {
+  cursor: pointer;
+  user-select: none;
+}
+
+.app-sortable-header:focus-visible {
+  outline: 3px solid #ffdd00;
+  outline-offset: 1px;
+}
+
+.app-sortable-header::after {
+  content: " <->";
+  font-size: 0.9em;
+  color: #505a5f;
+}
+
+.app-sortable-header[data-sort-direction="asc"]::after {
+  content: " ^";
+  color: #0b0c0c;
+}
+
+.app-sortable-header[data-sort-direction="desc"]::after {
+  content: " v";
+  color: #0b0c0c;
+}
+
 .app-thumbnail-cell {
   position: relative;
 }
@@ -217,6 +243,45 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   width: 100%;
+}
+
+.app-diary-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  width: 100%;
+}
+
+.app-diary-suggestion-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.app-diary-suggestion-thumb .app-thumbnail-trigger {
+  min-height: 64px;
+}
+
+.app-diary-suggestion-details {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.app-diary-suggestion-title {
+  font-size: 0.95rem;
+  text-align: right;
+}
+
+.app-diary-suggestion-meta {
+  font-size: 0.85rem;
+  color: #505a5f;
+  text-align: right;
 }
 
 .app-dropzone {

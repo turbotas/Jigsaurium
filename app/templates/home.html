@@ -141,11 +141,11 @@
         <caption class="govuk-table__caption govuk-table__caption--m">Current users</caption>
         <thead class="govuk-table__head">
           <tr class="govuk-table__row">
-            <th class="govuk-table__header">ID</th>
-            <th class="govuk-table__header">Email</th>
-            <th class="govuk-table__header">Name</th>
-            <th class="govuk-table__header">Roles</th>
-            <th class="govuk-table__header">Status</th>
+            <th class="govuk-table__header" data-sort-list="users" data-sort-field="id">ID</th>
+            <th class="govuk-table__header" data-sort-list="users" data-sort-field="email">Email</th>
+            <th class="govuk-table__header" data-sort-list="users" data-sort-field="display_name">Name</th>
+            <th class="govuk-table__header" data-sort-list="users" data-sort-field="roles">Roles</th>
+            <th class="govuk-table__header" data-sort-list="users" data-sort-field="status">Status</th>
             <th class="govuk-table__header">Action</th>
           </tr>
         </thead>
@@ -281,9 +281,9 @@
         <thead class="govuk-table__head">
           <tr class="govuk-table__row">
             <th class="govuk-table__header">Thumbnail</th>
-            <th class="govuk-table__header">Title</th>
-            <th class="govuk-table__header">Pieces</th>
-            <th class="govuk-table__header">Last completed</th>
+            <th class="govuk-table__header" data-sort-list="jigsaws" data-sort-field="title">Title</th>
+            <th class="govuk-table__header" data-sort-list="jigsaws" data-sort-field="piece_count">Pieces</th>
+            <th class="govuk-table__header" data-sort-list="jigsaws" data-sort-field="last_completed_at">Last completed</th>
             <th class="govuk-table__header">Action</th>
           </tr>
         </thead>
@@ -385,7 +385,7 @@
 
     <section class="govuk-!-margin-top-6" aria-labelledby="jigsaw-images-heading">
       <h3 id="jigsaw-images-heading" class="govuk-heading-m">Jigsaw images</h3>
-      <p class="govuk-body">Store tagged images in the database (for example Completed, Box front, Box side).</p>
+      <p class="govuk-body">Store tagged images in the database (for example Completed, Reference, Box front, Box side).</p>
       <form id="jigsaw-image-form" class="govuk-!-margin-bottom-4">
         <div class="govuk-grid-row">
           <div class="govuk-grid-column-one-third">
@@ -418,9 +418,9 @@
           <thead class="govuk-table__head">
             <tr class="govuk-table__row">
               <th class="govuk-table__header">Thumbnail</th>
-              <th class="govuk-table__header">Tag</th>
-              <th class="govuk-table__header">Filename</th>
-              <th class="govuk-table__header">Uploaded</th>
+              <th class="govuk-table__header" data-sort-list="jigsawImages" data-sort-field="tag">Tag</th>
+              <th class="govuk-table__header" data-sort-list="jigsawImages" data-sort-field="filename">Filename</th>
+              <th class="govuk-table__header" data-sort-list="jigsawImages" data-sort-field="created_at">Uploaded</th>
               <th class="govuk-table__header">Action</th>
             </tr>
           </thead>
@@ -433,6 +433,15 @@
       <h3 id="image-library-heading" class="govuk-heading-m">Image library bulk upload</h3>
       <p class="govuk-body">Upload one or more image files, or a zip containing image files. Choose an initial tag and optionally link uploads to a jigsaw now.</p>
       <button id="image-browser-open" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Open image browser</button>
+      <button id="image-library-bulk-create-unassigned-box" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">AI create all unassigned Box images</button>
+      <div class="govuk-inset-text govuk-!-margin-top-2 govuk-!-margin-bottom-4">
+        <h4 class="govuk-heading-s govuk-!-margin-bottom-2">Visual matching setup</h4>
+        <p class="govuk-body govuk-!-margin-bottom-2">
+          Run this once after enabling embeddings, and again whenever the embedding model changes.
+        </p>
+        <button id="image-embedding-backfill-start" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-1" data-module="govuk-button">Backfill image embeddings</button>
+        <div id="image-embedding-backfill-status" class="govuk-hint govuk-!-margin-bottom-0"></div>
+      </div>
       <form id="image-library-upload-form" class="govuk-!-margin-bottom-4">
         <div class="govuk-grid-row">
           <div class="govuk-grid-column-one-third">
@@ -452,6 +461,7 @@
                 <option value="Box front">Box front</option>
                 <option value="Box side">Box side</option>
                 <option value="Box back">Box back</option>
+                <option value="Reference">Reference</option>
                 <option value="Completed">Completed</option>
                 <option value="In progress">In progress</option>
               </select>
@@ -538,10 +548,10 @@
           <thead class="govuk-table__head">
             <tr class="govuk-table__row">
               <th class="govuk-table__header">Thumbnail</th>
-              <th class="govuk-table__header">Filename</th>
-              <th class="govuk-table__header">Associated jigsaw</th>
-              <th class="govuk-table__header">Tag</th>
-              <th class="govuk-table__header">Captured</th>
+              <th class="govuk-table__header" data-sort-list="imageLibrary" data-sort-field="filename">Filename</th>
+              <th class="govuk-table__header" data-sort-list="imageLibrary" data-sort-field="associated_jigsaw">Associated jigsaw</th>
+              <th class="govuk-table__header" data-sort-list="imageLibrary" data-sort-field="tag">Tag</th>
+              <th class="govuk-table__header" data-sort-list="imageLibrary" data-sort-field="captured_at">Captured</th>
               <th class="govuk-table__header">Action</th>
             </tr>
           </thead>
@@ -568,11 +578,19 @@
                 </div>
                 <div class="govuk-checkboxes__item">
                   <input id="image-browser-filter-box" class="govuk-checkboxes__input" type="checkbox">
-                  <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-box">Box</label>
+                  <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-box">Box family</label>
+                </div>
+                <div class="govuk-checkboxes__item">
+                  <input id="image-browser-filter-reference" class="govuk-checkboxes__input" type="checkbox">
+                  <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-reference">Reference</label>
                 </div>
                 <div class="govuk-checkboxes__item">
                   <input id="image-browser-filter-completed" class="govuk-checkboxes__input" type="checkbox">
                   <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-completed">Completed</label>
+                </div>
+                <div class="govuk-checkboxes__item">
+                  <input id="image-browser-filter-in-progress" class="govuk-checkboxes__input" type="checkbox">
+                  <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-in-progress">In progress</label>
                 </div>
               </div>
             </fieldset>
@@ -586,16 +604,18 @@
             <button id="image-browser-assign-next" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Assign to next</button>
             <button id="image-browser-mark-box-side" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box side</button>
             <button id="image-browser-mark-box-back" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box back</button>
+            <button id="image-browser-mark-reference" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Reference</button>
             <button id="image-browser-mark-in-progress" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark In progress</button>
             <button id="image-browser-create-jigsaw" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Create jigsaw</button>
             <button id="image-browser-delete" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Delete image</button>
             <button id="image-browser-crop-toggle" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Crop</button>
             <button id="image-browser-crop-apply" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Apply crop</button>
+            <button id="image-browser-save-create" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Save create</button>
             <button id="image-browser-save" type="button" class="govuk-button" data-module="govuk-button">Save overwrite</button>
             <button id="image-browser-close" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Close</button>
           </div>
 
-          <p class="govuk-hint">Keyboard: Left/Right = previous/next, [ / ] (or Q / E) = rotate, B = Box, C = Completed, , = assign previous, . = assign next, S = Box side, K = Box back, I = In progress, J = create jigsaw, Delete/Backspace = delete image.</p>
+          <p class="govuk-hint">Keyboard: Left/Right = previous/next, [ / ] (or Q / E) = rotate, B = Box, C = Completed, R = Reference, , = assign previous, . = assign next, S = Box side, K = Box back, I = In progress, J = create jigsaw, V = Save create, Delete/Backspace = delete image.</p>
 
           <div class="app-image-browser__viewport">
             <canvas id="image-browser-canvas" class="app-image-browser__canvas"></canvas>
@@ -651,12 +671,12 @@
           <caption id="diary-entries-caption" class="govuk-table__caption govuk-table__caption--m">Recent diary entries and unlinked completed images (most recent first)</caption>
           <thead class="govuk-table__head">
             <tr class="govuk-table__row">
-              <th class="govuk-table__header">ID</th>
-              <th class="govuk-table__header">Jigsaw</th>
+              <th class="govuk-table__header" data-sort-list="diary" data-sort-field="id">ID</th>
+              <th class="govuk-table__header" data-sort-list="diary" data-sort-field="jigsaw_title">Jigsaw</th>
               <th class="govuk-table__header">Completed image</th>
-              <th class="govuk-table__header">Completed</th>
-              <th class="govuk-table__header">Difficulty</th>
-              <th class="govuk-table__header">Notes</th>
+              <th class="govuk-table__header" data-sort-list="diary" data-sort-field="completed_at">Completed</th>
+              <th class="govuk-table__header" data-sort-list="diary" data-sort-field="difficulty">Difficulty</th>
+              <th class="govuk-table__header" data-sort-list="diary" data-sort-field="notes">Notes</th>
               <th class="govuk-table__header">Action</th>
             </tr>
           </thead>
@@ -744,15 +764,15 @@
       <table class="govuk-table" id="ai-usage-recent-table">
         <thead class="govuk-table__head">
           <tr class="govuk-table__row">
-            <th class="govuk-table__header">When</th>
-            <th class="govuk-table__header">Operation</th>
-            <th class="govuk-table__header">Model</th>
-            <th class="govuk-table__header">Status</th>
-            <th class="govuk-table__header">Image</th>
-            <th class="govuk-table__header">Tokens</th>
-            <th class="govuk-table__header">Cost</th>
-            <th class="govuk-table__header">Request</th>
-            <th class="govuk-table__header">Error</th>
+            <th class="govuk-table__header" data-sort-list="aiRecent" data-sort-field="created_at">When</th>
+            <th class="govuk-table__header" data-sort-list="aiRecent" data-sort-field="operation">Operation</th>
+            <th class="govuk-table__header" data-sort-list="aiRecent" data-sort-field="model">Model</th>
+            <th class="govuk-table__header" data-sort-list="aiRecent" data-sort-field="status">Status</th>
+            <th class="govuk-table__header" data-sort-list="aiRecent" data-sort-field="image_id">Image</th>
+            <th class="govuk-table__header" data-sort-list="aiRecent" data-sort-field="total_tokens">Tokens</th>
+            <th class="govuk-table__header" data-sort-list="aiRecent" data-sort-field="final_cost_usd">Cost</th>
+            <th class="govuk-table__header" data-sort-list="aiRecent" data-sort-field="request_id">Request</th>
+            <th class="govuk-table__header" data-sort-list="aiRecent" data-sort-field="error_message">Error</th>
           </tr>
         </thead>
         <tbody class="govuk-table__body" id="ai-usage-recent-body"></tbody>
@@ -778,11 +798,11 @@
         <caption class="govuk-table__caption govuk-table__caption--m">Latest activity</caption>
         <thead class="govuk-table__head">
           <tr class="govuk-table__row">
-            <th class="govuk-table__header">ID</th>
-            <th class="govuk-table__header">Action</th>
-            <th class="govuk-table__header">Entity</th>
-            <th class="govuk-table__header">Actor</th>
-            <th class="govuk-table__header">Timestamp</th>
+            <th class="govuk-table__header" data-sort-list="audit" data-sort-field="id">ID</th>
+            <th class="govuk-table__header" data-sort-list="audit" data-sort-field="action">Action</th>
+            <th class="govuk-table__header" data-sort-list="audit" data-sort-field="entity">Entity</th>
+            <th class="govuk-table__header" data-sort-list="audit" data-sort-field="actor_user_id">Actor</th>
+            <th class="govuk-table__header" data-sort-list="audit" data-sort-field="created_at">Timestamp</th>
           </tr>
         </thead>
         <tbody class="govuk-table__body" id="audit-table-body"></tbody>
@@ -821,12 +841,12 @@
         <caption class="govuk-table__caption govuk-table__caption--m">Current loans</caption>
         <thead class="govuk-table__head">
           <tr class="govuk-table__row">
-            <th class="govuk-table__header">ID</th>
-            <th class="govuk-table__header">Borrower</th>
-            <th class="govuk-table__header">Jigsaw</th>
-            <th class="govuk-table__header">Checked out</th>
-            <th class="govuk-table__header">Due</th>
-            <th class="govuk-table__header">Status</th>
+            <th class="govuk-table__header" data-sort-list="loans" data-sort-field="id">ID</th>
+            <th class="govuk-table__header" data-sort-list="loans" data-sort-field="borrower">Borrower</th>
+            <th class="govuk-table__header" data-sort-list="loans" data-sort-field="jigsaw">Jigsaw</th>
+            <th class="govuk-table__header" data-sort-list="loans" data-sort-field="checked_out_at">Checked out</th>
+            <th class="govuk-table__header" data-sort-list="loans" data-sort-field="due_at">Due</th>
+            <th class="govuk-table__header" data-sort-list="loans" data-sort-field="status">Status</th>
             <th class="govuk-table__header">Actions</th>
           </tr>
         </thead>

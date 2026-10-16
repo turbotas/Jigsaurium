@@ -4,6 +4,7 @@
   const IMAGE_BROWSER_TAG_BOX_FRONT = "Box front";
   const IMAGE_BROWSER_TAG_BOX_SIDE = "Box side";
   const IMAGE_BROWSER_TAG_BOX_BACK = "Box back";
+  const IMAGE_BROWSER_TAG_REFERENCE = "Reference";
   const IMAGE_BROWSER_TAG_IN_PROGRESS = "In progress";
   const IMAGE_LIBRARY_STANDARD_TAGS = [
     "untagged",
@@ -11,11 +12,25 @@
     IMAGE_BROWSER_TAG_BOX_FRONT,
     IMAGE_BROWSER_TAG_BOX_SIDE,
     IMAGE_BROWSER_TAG_BOX_BACK,
+    IMAGE_BROWSER_TAG_REFERENCE,
     IMAGE_BROWSER_TAG_COMPLETED,
     IMAGE_BROWSER_TAG_IN_PROGRESS,
   ];
   const THUMBNAIL_DISPLAY_WIDTH_PX = 150;
   const ADMIN_LIST_PAGE_SIZE = 25;
+
+  function createDefaultTableSortState() {
+    return {
+      users: { field: "id", direction: "asc" },
+      jigsaws: { field: "title", direction: "asc" },
+      jigsawImages: { field: "created_at", direction: "desc" },
+      imageLibrary: { field: "captured_at", direction: "desc" },
+      diary: { field: "completed_at", direction: "desc" },
+      loans: { field: "checked_out_at", direction: "desc" },
+      aiRecent: { field: "created_at", direction: "desc" },
+      audit: { field: "created_at", direction: "desc" },
+    };
+  }
 
   const state = {
     csrfToken: null,
@@ -27,6 +42,7 @@
     loans: [],
     auditEvents: [],
     auditEventsMeta: null,
+    jigsawThumbnailImages: [],
     jigsawImages: [],
     imageLibraryImages: [],
     imageLibraryFilterAssigned: true,
@@ -35,11 +51,16 @@
     aiUsageDiagnostics: null,
     aiUsageRecentById: {},
     imageBrowserContentCacheByImageId: {},
+    imageBrowserSavingImageIds: {},
     diaryEntries: [],
     diaryEditingEntryId: null,
+    diarySelectionTouchedByUser: false,
     bulkUploadFiles: [],
     bulkCreateJobId: null,
     bulkCreateJobPollTimer: null,
+    imageEmbeddingBackfillJobId: null,
+    imageEmbeddingBackfillPollTimer: null,
+    tableSorts: createDefaultTableSortState(),
     pagination: {
       jigsaws: 1,
       imageLibrary: 1,
@@ -52,7 +73,9 @@
       index: 0,
       filterUnassigned: true,
       filterBox: false,
+      filterReference: false,
       filterCompleted: false,
+      filterInProgress: false,
       sourceDataUrl: null,
       workingDataUrl: null,
       workingImage: null,
@@ -139,12 +162,17 @@
     imageLibraryTagFilters: document.getElementById("image-library-tag-filters"),
     imageLibraryTableBody: document.getElementById("image-library-table-body"),
     imageLibraryPagination: document.getElementById("image-library-pagination"),
+    imageLibraryBulkCreateUnassignedBoxButton: document.getElementById("image-library-bulk-create-unassigned-box"),
+    imageEmbeddingBackfillStart: document.getElementById("image-embedding-backfill-start"),
+    imageEmbeddingBackfillStatus: document.getElementById("image-embedding-backfill-status"),
     imageBrowserOpen: document.getElementById("image-browser-open"),
     imageBrowserModal: document.getElementById("image-browser-modal"),
     imageBrowserStatus: document.getElementById("image-browser-status"),
     imageBrowserFilterUnassigned: document.getElementById("image-browser-filter-unassigned"),
     imageBrowserFilterBox: document.getElementById("image-browser-filter-box"),
+    imageBrowserFilterReference: document.getElementById("image-browser-filter-reference"),
     imageBrowserFilterCompleted: document.getElementById("image-browser-filter-completed"),
+    imageBrowserFilterInProgress: document.getElementById("image-browser-filter-in-progress"),
     imageBrowserCanvas: document.getElementById("image-browser-canvas"),
     imageBrowserPrev: document.getElementById("image-browser-prev"),
     imageBrowserNext: document.getElementById("image-browser-next"),
@@ -156,11 +184,13 @@
     imageBrowserAssignNext: document.getElementById("image-browser-assign-next"),
     imageBrowserMarkBoxSide: document.getElementById("image-browser-mark-box-side"),
     imageBrowserMarkBoxBack: document.getElementById("image-browser-mark-box-back"),
+    imageBrowserMarkReference: document.getElementById("image-browser-mark-reference"),
     imageBrowserMarkInProgress: document.getElementById("image-browser-mark-in-progress"),
     imageBrowserCreateJigsaw: document.getElementById("image-browser-create-jigsaw"),
     imageBrowserDelete: document.getElementById("image-browser-delete"),
     imageBrowserCropToggle: document.getElementById("image-browser-crop-toggle"),
     imageBrowserCropApply: document.getElementById("image-browser-crop-apply"),
+    imageBrowserSaveCreate: document.getElementById("image-browser-save-create"),
     imageBrowserSave: document.getElementById("image-browser-save"),
     imageBrowserClose: document.getElementById("image-browser-close"),
     diaryEntryForm: document.getElementById("diary-entry-form"),
@@ -368,6 +398,307 @@
     container.appendChild(controls);
   }
 
+  const TABLE_SORT_CONFIG = {
+    users: {
+      defaultField: "id",
+      defaultDirection: "asc",
+      fields: {
+        id: { type: "number", getValue: (row) => row?.id },
+        email: { type: "string", getValue: (row) => row?.email },
+        display_name: { type: "string", getValue: (row) => row?.display_name },
+        roles: { type: "string", getValue: (row) => (Array.isArray(row?.roles) ? row.roles.join(", ") : "") },
+        status: { type: "string", getValue: (row) => (row?.is_active ? "active" : "inactive") },
+      },
+    },
+    jigsaws: {
+      defaultField: "title",
+      defaultDirection: "asc",
+      fields: {
+        title: { type: "string", getValue: (row) => row?.title },
+        piece_count: { type: "number", getValue: (row) => row?.piece_count },
+        last_completed_at: { type: "date", getValue: (row) => row?.last_completed_at },
+      },
+    },
+    jigsawImages: {
+      defaultField: "created_at",
+      defaultDirection: "desc",
+      fields: {
+        tag: { type: "string", getValue: (row) => row?.tag },
+        filename: { type: "string", getValue: (row) => row?.filename },
+        created_at: { type: "date", getValue: (row) => row?.created_at },
+      },
+    },
+    imageLibrary: {
+      defaultField: "captured_at",
+      defaultDirection: "desc",
+      fields: {
+        filename: { type: "string", getValue: (row) => row?.filename },
+        associated_jigsaw: {
+          type: "string",
+          getValue: (row) => {
+            const jigsawId = Number(row?.jigsaw_id || 0);
+            if (!jigsawId) {
+              return "unassigned";
+            }
+            const jigsaw = state.jigsaws.find((entry) => Number(entry?.id || 0) === jigsawId);
+            if (!jigsaw) {
+              return `id ${jigsawId}`;
+            }
+            return `${jigsaw.title || "(untitled)"} (id ${jigsaw.id})`;
+          },
+        },
+        tag: { type: "string", getValue: (row) => row?.tag },
+        captured_at: { type: "date", getValue: (row) => row?.captured_at },
+      },
+    },
+    diary: {
+      defaultField: "completed_at",
+      defaultDirection: "desc",
+      fields: {
+        id: {
+          type: "number",
+          getValue: (row) => {
+            const isOrphan = row?.entry_type === "orphan_completed_image";
+            return isOrphan ? Number(row?.source_image_id || row?.id || 0) : Number(row?.id || 0);
+          },
+        },
+        jigsaw_title: {
+          type: "string",
+          getValue: (row) => {
+            if (row?.entry_type === "orphan_completed_image") {
+              return "Unlinked completion";
+            }
+            return getJigsawTitleById(row?.jigsaw_id);
+          },
+        },
+        completed_at: { type: "date", getValue: (row) => row?.completed_at },
+        difficulty: { type: "number", getValue: (row) => row?.difficulty },
+        notes: { type: "string", getValue: (row) => row?.notes },
+      },
+    },
+    loans: {
+      defaultField: "checked_out_at",
+      defaultDirection: "desc",
+      fields: {
+        id: { type: "number", getValue: (row) => row?.id },
+        borrower: {
+          type: "string",
+          getValue: (row) => {
+            const user = state.users.find((entry) => Number(entry?.id || 0) === Number(row?.borrower_user_id || 0));
+            return user ? `${user.email} (id ${user.id})` : `id ${row?.borrower_user_id || "-"}`;
+          },
+        },
+        jigsaw: {
+          type: "string",
+          getValue: (row) => {
+            const jigsaw = state.jigsaws.find((entry) => Number(entry?.id || 0) === Number(row?.jigsaw_id || 0));
+            return jigsaw ? `${jigsaw.title} (id ${jigsaw.id})` : `id ${row?.jigsaw_id || "-"}`;
+          },
+        },
+        checked_out_at: { type: "date", getValue: (row) => row?.checked_out_at },
+        due_at: { type: "date", getValue: (row) => row?.due_at },
+        status: { type: "string", getValue: (row) => row?.status },
+      },
+    },
+    aiRecent: {
+      defaultField: "created_at",
+      defaultDirection: "desc",
+      fields: {
+        created_at: { type: "date", getValue: (row) => row?.created_at },
+        operation: { type: "string", getValue: (row) => row?.operation },
+        model: { type: "string", getValue: (row) => row?.model },
+        status: { type: "string", getValue: (row) => row?.status },
+        image_id: { type: "number", getValue: (row) => row?.image_id },
+        total_tokens: { type: "number", getValue: (row) => row?.total_tokens },
+        final_cost_usd: { type: "number", getValue: (row) => row?.final_cost_usd },
+        request_id: { type: "string", getValue: (row) => row?.request_id },
+        error_message: { type: "string", getValue: (row) => row?.error_message },
+      },
+    },
+    audit: {
+      defaultField: "created_at",
+      defaultDirection: "desc",
+      fields: {
+        id: { type: "number", getValue: (row) => row?.id },
+        action: { type: "string", getValue: (row) => row?.action },
+        entity: { type: "string", getValue: (row) => `${row?.entity_type || "-"}:${row?.entity_id || "-"}` },
+        actor_user_id: { type: "number", getValue: (row) => row?.actor_user_id },
+        created_at: { type: "date", getValue: (row) => row?.created_at },
+      },
+    },
+  };
+
+  function normalizeSortDirection(direction) {
+    return String(direction || "").toLowerCase() === "desc" ? "desc" : "asc";
+  }
+
+  function getTableSortState(listKey) {
+    const config = TABLE_SORT_CONFIG[listKey];
+    if (!config) {
+      return null;
+    }
+
+    const existing = state.tableSorts[listKey] || {};
+    const field = Object.prototype.hasOwnProperty.call(config.fields, existing.field)
+      ? existing.field
+      : config.defaultField;
+    const direction = normalizeSortDirection(existing.direction || config.defaultDirection);
+    return { field, direction };
+  }
+
+  function normalizeSortableValue(rawValue, valueType) {
+    if (valueType === "number") {
+      const parsed = Number(rawValue);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    if (valueType === "date") {
+      if (!rawValue) {
+        return null;
+      }
+      const timestamp = Date.parse(String(rawValue));
+      return Number.isFinite(timestamp) ? timestamp : null;
+    }
+    return String(rawValue || "").toLocaleLowerCase();
+  }
+
+  function compareSortableValues(leftValue, rightValue, valueType) {
+    const normalizedLeft = normalizeSortableValue(leftValue, valueType);
+    const normalizedRight = normalizeSortableValue(rightValue, valueType);
+
+    const leftMissing = normalizedLeft === null || normalizedLeft === undefined || normalizedLeft === "";
+    const rightMissing = normalizedRight === null || normalizedRight === undefined || normalizedRight === "";
+    if (leftMissing && rightMissing) {
+      return 0;
+    }
+    if (leftMissing) {
+      return 1;
+    }
+    if (rightMissing) {
+      return -1;
+    }
+
+    if (valueType === "number" || valueType === "date") {
+      return Number(normalizedLeft) - Number(normalizedRight);
+    }
+    return String(normalizedLeft).localeCompare(String(normalizedRight));
+  }
+
+  function sortRowsForTable(rows, listKey) {
+    const sourceRows = Array.isArray(rows) ? rows : [];
+    const config = TABLE_SORT_CONFIG[listKey];
+    if (!config || sourceRows.length <= 1) {
+      return [...sourceRows];
+    }
+
+    const sortState = getTableSortState(listKey);
+    if (!sortState) {
+      return [...sourceRows];
+    }
+
+    const fieldConfig = config.fields[sortState.field] || config.fields[config.defaultField];
+    if (!fieldConfig || typeof fieldConfig.getValue !== "function") {
+      return [...sourceRows];
+    }
+
+    const directionFactor = sortState.direction === "desc" ? -1 : 1;
+    return sourceRows
+      .map((row, index) => ({ row, index }))
+      .sort((left, right) => {
+        const comparison = compareSortableValues(
+          fieldConfig.getValue(left.row),
+          fieldConfig.getValue(right.row),
+          fieldConfig.type,
+        );
+        if (comparison === 0) {
+          return left.index - right.index;
+        }
+        return comparison * directionFactor;
+      })
+      .map((entry) => entry.row);
+  }
+
+  function updateSortableTableHeaders() {
+    const sortableHeaders = document.querySelectorAll("th[data-sort-list][data-sort-field]");
+    sortableHeaders.forEach((header) => {
+      const listKey = String(header.getAttribute("data-sort-list") || "").trim();
+      const field = String(header.getAttribute("data-sort-field") || "").trim();
+      const sortState = getTableSortState(listKey);
+      const isActive = Boolean(sortState && sortState.field === field);
+      const direction = isActive ? sortState.direction : "none";
+
+      header.setAttribute("tabindex", "0");
+      header.setAttribute("role", "button");
+      header.classList.add("app-sortable-header");
+      header.dataset.sortDirection = direction;
+      header.setAttribute(
+        "aria-sort",
+        direction === "asc" ? "ascending" : direction === "desc" ? "descending" : "none",
+      );
+      header.setAttribute(
+        "title",
+        isActive
+          ? `Sorted ${direction === "asc" ? "ascending" : "descending"}. Click to sort ${direction === "asc" ? "descending" : "ascending"}.`
+          : "Click to sort ascending.",
+      );
+    });
+  }
+
+  function rerenderSortedTable(listKey) {
+    if (listKey === "users") {
+      renderUsers(state.users);
+      return;
+    }
+    if (listKey === "jigsaws") {
+      renderJigsaws(state.jigsaws);
+      return;
+    }
+    if (listKey === "jigsawImages") {
+      renderJigsawImages(state.jigsawImages);
+      return;
+    }
+    if (listKey === "imageLibrary") {
+      renderImageLibraryImages(state.imageLibraryImages);
+      return;
+    }
+    if (listKey === "diary") {
+      const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+      renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
+      return;
+    }
+    if (listKey === "loans") {
+      renderLoans(state.loans);
+      return;
+    }
+    if (listKey === "aiRecent") {
+      renderAiUsageDiagnostics(state.aiUsageDiagnostics);
+      return;
+    }
+    if (listKey === "audit") {
+      renderAuditEvents(state.auditEvents);
+    }
+  }
+
+  function applySortFromHeader(header) {
+    const listKey = String(header.getAttribute("data-sort-list") || "").trim();
+    const field = String(header.getAttribute("data-sort-field") || "").trim();
+    const config = TABLE_SORT_CONFIG[listKey];
+    if (!listKey || !field || !config || !Object.prototype.hasOwnProperty.call(config.fields, field)) {
+      return;
+    }
+
+    const currentSort = getTableSortState(listKey) || { field: config.defaultField, direction: config.defaultDirection };
+    const currentDirection = normalizeSortDirection(currentSort.direction);
+    const nextDirection = currentSort.field === field && currentDirection === "asc" ? "desc" : "asc";
+
+    state.tableSorts[listKey] = { field, direction: nextDirection };
+    if (["jigsaws", "imageLibrary", "diary"].includes(listKey)) {
+      state.pagination[listKey] = 1;
+    }
+
+    rerenderSortedTable(listKey);
+    updateSortableTableHeaders();
+  }
+
   function appendEmptyRow(tableBody, columnCount, text) {
     if (!tableBody) {
       return;
@@ -392,32 +723,33 @@
     return cell;
   }
 
-  function buildThumbnailCell(contentUrl, options = {}) {
-    const cell = document.createElement("td");
-    cell.className = "govuk-table__cell app-thumbnail-cell";
+  function buildThumbnailWidget(contentUrl, options = {}) {
+    const container = document.createElement("div");
+    container.className = "app-thumbnail-cell";
 
     const altText = String(options.altText || "Thumbnail image");
     const fallbackText = String(options.fallbackText || "No image");
     const previewUrl = String(options.previewUrl || contentUrl || "");
     const openUrl = String(options.openUrl || contentUrl || "");
+    const displayWidth = Number(options.widthPx || THUMBNAIL_DISPLAY_WIDTH_PX);
 
     if (!contentUrl) {
       const fallback = document.createElement("div");
       fallback.className = "app-thumbnail-trigger";
-      fallback.style.width = `${THUMBNAIL_DISPLAY_WIDTH_PX}px`;
+      fallback.style.width = `${displayWidth}px`;
 
       const fallbackLabel = document.createElement("span");
       fallbackLabel.className = "app-thumbnail-fallback";
       fallbackLabel.textContent = fallbackText;
       fallback.appendChild(fallbackLabel);
 
-      cell.appendChild(fallback);
-      return cell;
+      container.appendChild(fallback);
+      return container;
     }
 
     const trigger = document.createElement("a");
     trigger.className = "app-thumbnail-trigger";
-    trigger.style.width = `${THUMBNAIL_DISPLAY_WIDTH_PX}px`;
+    trigger.style.width = `${displayWidth}px`;
     trigger.href = openUrl;
     trigger.target = "_blank";
     trigger.rel = "noopener noreferrer";
@@ -454,8 +786,16 @@
 
     preview.appendChild(previewImage);
 
-    cell.appendChild(trigger);
-    cell.appendChild(preview);
+    container.appendChild(trigger);
+    container.appendChild(preview);
+    return container;
+  }
+
+  function buildThumbnailCell(contentUrl, options = {}) {
+    const cell = document.createElement("td");
+    cell.className = "govuk-table__cell app-thumbnail-cell";
+    const widget = buildThumbnailWidget(contentUrl, options);
+    cell.appendChild(widget);
     return cell;
   }
 
@@ -702,7 +1042,13 @@
     if (collapsed === "boxback") {
       return IMAGE_BROWSER_TAG_BOX_BACK;
     }
+    if (collapsed.startsWith("reference")) {
+      return IMAGE_BROWSER_TAG_REFERENCE;
+    }
     if (collapsed === "completed") {
+      return IMAGE_BROWSER_TAG_COMPLETED;
+    }
+    if (collapsed === "complete") {
       return IMAGE_BROWSER_TAG_COMPLETED;
     }
     if (collapsed === "inprogress") {
@@ -922,6 +1268,10 @@
     if (currentJigsawId && sortedJigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
       elements.diaryJigsawId.value = currentJigsawId;
     }
+
+    if (!state.diarySelectionTouchedByUser) {
+      elements.diaryJigsawId.value = "";
+    }
   }
 
   function getJigsawTitleById(jigsawId) {
@@ -958,7 +1308,7 @@
 
   function getDiaryEntriesEmptyMessage(selectedJigsawId) {
     return Number(selectedJigsawId || "0") > 0
-      ? "No diary entries found."
+      ? "No diary entries found for this jigsaw. Select 'All completed jigsaws' to include unlinked completed images."
       : "No diary entries or unlinked completed images found.";
   }
 
@@ -1247,7 +1597,8 @@
       return;
     }
 
-    users.forEach((user) => {
+    const sortedUsers = sortRowsForTable(users, "users");
+    sortedUsers.forEach((user) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row app-image-library-data-row";
 
@@ -1319,8 +1670,9 @@
       return;
     }
 
-    const pageResult = paginateItems(filteredJigsaws, "jigsaws");
-    const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.imageLibraryImages);
+    const sortedJigsawsRows = sortRowsForTable(filteredJigsaws, "jigsaws");
+    const pageResult = paginateItems(sortedJigsawsRows, "jigsaws");
+    const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.jigsawThumbnailImages);
 
     pageResult.rows.forEach((jigsaw) => {
       const row = document.createElement("tr");
@@ -1404,16 +1756,17 @@
       Number.isFinite(Number(apiMeta.total_items)) &&
       Number.isFinite(Number(apiMeta.total_pages));
 
+    const sortedEvents = sortRowsForTable(events, "audit");
     const pageResult = hasApiPagination
       ? {
           page: Number(apiMeta.page),
           totalItems: Number(apiMeta.total_items),
           totalPages: Number(apiMeta.total_pages),
           startIndex: Math.max(0, (Number(apiMeta.page) - 1) * Number(apiMeta.page_size)),
-          endIndex: Math.min(Number(apiMeta.total_items), ((Number(apiMeta.page) - 1) * Number(apiMeta.page_size)) + events.length),
-          rows: events,
+          endIndex: Math.min(Number(apiMeta.total_items), ((Number(apiMeta.page) - 1) * Number(apiMeta.page_size)) + sortedEvents.length),
+          rows: sortedEvents,
         }
-      : paginateItems(events, "audit");
+      : paginateItems(sortedEvents, "audit");
 
     pageResult.rows.forEach((event) => {
       const row = document.createElement("tr");
@@ -1545,6 +1898,7 @@
       Number.isFinite(Number(recentCallsPagination.total_items)) &&
       Number.isFinite(Number(recentCallsPagination.total_pages));
 
+    const sortedRecentCalls = sortRowsForTable(recentCalls, "aiRecent");
     const pageResult = hasApiPagination
       ? {
           page: Number(recentCallsPagination.page),
@@ -1553,11 +1907,11 @@
           startIndex: Math.max(0, (Number(recentCallsPagination.page) - 1) * Number(recentCallsPagination.page_size)),
           endIndex: Math.min(
             Number(recentCallsPagination.total_items),
-            ((Number(recentCallsPagination.page) - 1) * Number(recentCallsPagination.page_size)) + recentCalls.length,
+            ((Number(recentCallsPagination.page) - 1) * Number(recentCallsPagination.page_size)) + sortedRecentCalls.length,
           ),
-          rows: recentCalls,
+          rows: sortedRecentCalls,
         }
-      : paginateItems(recentCalls, "aiRecent");
+      : paginateItems(sortedRecentCalls, "aiRecent");
 
     pageResult.rows.forEach((entry) => {
       const row = document.createElement("tr");
@@ -1634,7 +1988,8 @@
     const usersById = new Map(state.users.map((user) => [Number(user.id), user]));
     const jigsawsById = new Map(state.jigsaws.map((jigsaw) => [Number(jigsaw.id), jigsaw]));
 
-    loans.forEach((loan) => {
+    const sortedLoans = sortRowsForTable(loans, "loans");
+    sortedLoans.forEach((loan) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
@@ -1681,7 +2036,8 @@
       return;
     }
 
-    images.forEach((image) => {
+    const sortedImages = sortRowsForTable(images, "jigsawImages");
+    sortedImages.forEach((image) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
@@ -1736,7 +2092,8 @@
       return;
     }
 
-    const pageResult = paginateItems(filteredImages, "imageLibrary");
+    const sortedFilteredImages = sortRowsForTable(filteredImages, "imageLibrary");
+    const pageResult = paginateItems(sortedFilteredImages, "imageLibrary");
     const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
     const jigsawsById = new Map(state.jigsaws.map((jigsaw) => [Number(jigsaw.id), jigsaw]));
     pageResult.rows.forEach((image) => {
@@ -1801,6 +2158,8 @@
       controlsWrap.className = "app-inline-controls app-image-actions";
       const assignControls = document.createElement("div");
       assignControls.className = "app-inline-controls app-image-actions__row";
+      const suggestControls = document.createElement("div");
+      suggestControls.className = "app-inline-controls app-image-actions__row govuk-!-margin-top-1";
       const actionButtons = document.createElement("div");
       actionButtons.className = "app-inline-controls app-image-actions__row";
 
@@ -1856,6 +2215,21 @@
         createButton.dataset.imageCreate = String(image.id);
         createButton.textContent = "Create";
         actionButtons.appendChild(createButton);
+
+        if (toImageTagKey(image.tag) === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED)) {
+          const suggestButton = document.createElement("button");
+          suggestButton.type = "button";
+          suggestButton.className = "govuk-button govuk-button--secondary app-inline-button";
+          suggestButton.setAttribute("data-module", "govuk-button");
+          suggestButton.dataset.imageSuggest = String(image.id);
+          suggestButton.textContent = "Find similar";
+          suggestControls.appendChild(suggestButton);
+
+          const suggestWrap = document.createElement("div");
+          suggestWrap.className = "app-inline-controls app-image-actions__row";
+          suggestWrap.dataset.imageSuggestWrap = String(image.id);
+          suggestControls.appendChild(suggestWrap);
+        }
       }
 
       const link = document.createElement("a");
@@ -1877,6 +2251,7 @@
       actionButtons.appendChild(deleteButton);
 
       controlsWrap.appendChild(assignControls);
+      controlsWrap.appendChild(suggestControls);
       controlsWrap.appendChild(actionButtons);
 
       actionCell.appendChild(controlsWrap);
@@ -1929,8 +2304,14 @@
     if (state.imageBrowser.filterBox) {
       selected.push("box");
     }
+    if (state.imageBrowser.filterReference) {
+      selected.push("reference");
+    }
     if (state.imageBrowser.filterCompleted) {
       selected.push("completed");
+    }
+    if (state.imageBrowser.filterInProgress) {
+      selected.push("in-progress");
     }
     if (selected.length === 0) {
       return false;
@@ -1942,20 +2323,90 @@
     }
 
     const tagKey = toImageTagKey(image?.tag);
-    if (state.imageBrowser.filterBox && tagKey === toImageTagKey(IMAGE_BROWSER_TAG_BOX)) {
+    const isBoxFamilyTag = [
+      IMAGE_BROWSER_TAG_BOX,
+      IMAGE_BROWSER_TAG_BOX_FRONT,
+      IMAGE_BROWSER_TAG_BOX_SIDE,
+      IMAGE_BROWSER_TAG_BOX_BACK,
+    ].some((value) => tagKey === toImageTagKey(value));
+    if (state.imageBrowser.filterBox && isBoxFamilyTag) {
+      return true;
+    }
+    if (state.imageBrowser.filterReference && tagKey === toImageTagKey(IMAGE_BROWSER_TAG_REFERENCE)) {
       return true;
     }
     if (state.imageBrowser.filterCompleted && tagKey === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED)) {
       return true;
     }
+    if (state.imageBrowser.filterInProgress && tagKey === toImageTagKey(IMAGE_BROWSER_TAG_IN_PROGRESS)) {
+      return true;
+    }
     return false;
+  }
+
+  function getImageBrowserTagSortRank(tag) {
+    const tagKey = toImageTagKey(tag);
+    const isBoxFamilyTag = [
+      IMAGE_BROWSER_TAG_BOX,
+      IMAGE_BROWSER_TAG_BOX_FRONT,
+      IMAGE_BROWSER_TAG_BOX_SIDE,
+      IMAGE_BROWSER_TAG_BOX_BACK,
+    ].some((value) => tagKey === toImageTagKey(value));
+    if (isBoxFamilyTag) {
+      return 0;
+    }
+    if (tagKey === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED)) {
+      return 1;
+    }
+    if (tagKey === toImageTagKey(IMAGE_BROWSER_TAG_REFERENCE)) {
+      return 2;
+    }
+    return 3;
+  }
+
+  function compareImageBrowserRows(left, right) {
+    const leftAssigned = Number(left?.jigsaw_id || 0) > 0;
+    const rightAssigned = Number(right?.jigsaw_id || 0) > 0;
+    if (leftAssigned !== rightAssigned) {
+      return leftAssigned ? -1 : 1;
+    }
+
+    if (leftAssigned && rightAssigned) {
+      const leftJigsawId = Number(left?.jigsaw_id || 0);
+      const rightJigsawId = Number(right?.jigsaw_id || 0);
+      if (leftJigsawId !== rightJigsawId) {
+        return leftJigsawId - rightJigsawId;
+      }
+
+      const leftTagRank = getImageBrowserTagSortRank(left?.tag);
+      const rightTagRank = getImageBrowserTagSortRank(right?.tag);
+      if (leftTagRank !== rightTagRank) {
+        return leftTagRank - rightTagRank;
+      }
+
+      const leftId = Number(left?.id || 0);
+      const rightId = Number(right?.id || 0);
+      if (leftId !== rightId) {
+        return leftId - rightId;
+      }
+
+      return String(left?.filename || "").localeCompare(String(right?.filename || ""), undefined, { sensitivity: "base" });
+    }
+
+    const filenameCompare = String(left?.filename || "").localeCompare(String(right?.filename || ""), undefined, { sensitivity: "base" });
+    if (filenameCompare !== 0) {
+      return filenameCompare;
+    }
+    return Number(left?.id || 0) - Number(right?.id || 0);
   }
 
   function getImageBrowserFilteredImages() {
     if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
       return [];
     }
-    return state.imageLibraryImages.filter((image) => imageMatchesBrowserFilters(image));
+    return state.imageLibraryImages
+      .filter((image) => imageMatchesBrowserFilters(image))
+      .sort(compareImageBrowserRows);
   }
 
   function getCurrentImageBrowserItem() {
@@ -2088,6 +2539,34 @@
     updateImageBrowserStatus();
   }
 
+  function isImageBrowserSaveInFlight(imageId) {
+    if (!imageId) {
+      return false;
+    }
+    return Boolean(state.imageBrowserSavingImageIds[String(imageId)]);
+  }
+
+  function getImageBrowserInFlightSaveCount() {
+    return Object.keys(state.imageBrowserSavingImageIds).length;
+  }
+
+  function syncImageBrowserSaveButton() {
+    if (!elements.imageBrowserSave) {
+      return;
+    }
+
+    const currentImageId = Number(getCurrentImageBrowserItem()?.id || 0);
+    const isCurrentSaveInFlight = isImageBrowserSaveInFlight(currentImageId);
+    elements.imageBrowserSave.disabled = !currentImageId || isCurrentSaveInFlight;
+    elements.imageBrowserSave.textContent = isCurrentSaveInFlight ? "Saving..." : "Save overwrite";
+
+    if (elements.imageBrowserSaveCreate) {
+      const currentJigsawId = Number(getCurrentImageBrowserItem()?.jigsaw_id || 0);
+      elements.imageBrowserSaveCreate.disabled = !currentImageId || !currentJigsawId || isCurrentSaveInFlight;
+      elements.imageBrowserSaveCreate.textContent = isCurrentSaveInFlight ? "Saving..." : "Save create";
+    }
+  }
+
   function updateImageBrowserStatus() {
     if (!elements.imageBrowserStatus) {
       return;
@@ -2096,6 +2575,7 @@
     const item = getCurrentImageBrowserItem();
     if (!item) {
       elements.imageBrowserStatus.textContent = "No images match the active browser filters.";
+      syncImageBrowserSaveButton();
       return;
     }
 
@@ -2107,7 +2587,14 @@
     const capturedAtLabel = item.captured_at ? toLocalTimestamp(item.captured_at) : "-";
     const captureSourceLabel = item.captured_at_source || "unknown";
     const dirty = browserHasPendingEdits() ? " | unsaved edits" : "";
-    elements.imageBrowserStatus.textContent = `Image ${index}/${total} (filtered from ${totalUnfiltered}): ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association} | captured: ${capturedAtLabel} (${captureSourceLabel})${dirty}`;
+    const currentSave = isImageBrowserSaveInFlight(item.id) ? " | saving image..." : "";
+    const inFlightTotal = getImageBrowserInFlightSaveCount();
+    const backgroundSaves = Math.max(0, inFlightTotal - (isImageBrowserSaveInFlight(item.id) ? 1 : 0));
+    const backgroundSaveLabel = backgroundSaves > 0
+      ? ` | ${backgroundSaves} save${backgroundSaves === 1 ? "" : "s"} running in background`
+      : "";
+    elements.imageBrowserStatus.textContent = `Image ${index}/${total} (filtered from ${totalUnfiltered}) | id: ${item.id || "-"} | ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association} | captured: ${capturedAtLabel} (${captureSourceLabel})${dirty}${currentSave}${backgroundSaveLabel}`;
+    syncImageBrowserSaveButton();
   }
 
   function clearImageBrowserWorkingState() {
@@ -2543,7 +3030,7 @@
     await redrawImageBrowserCanvas();
   }
 
-  function canvasToBlob(canvas, mimeType) {
+  function canvasToBlob(canvas, mimeType, quality = undefined) {
     return new Promise((resolve, reject) => {
       canvas.toBlob((blob) => {
         if (!blob) {
@@ -2551,13 +3038,22 @@
           return;
         }
         resolve(blob);
-      }, mimeType);
+      }, mimeType, quality);
     });
   }
 
   async function saveImageBrowserOverwrite() {
     const item = getCurrentImageBrowserItem();
     if (!item) {
+      return;
+    }
+
+    const savedImageId = Number(item.id || 0);
+    if (!savedImageId) {
+      return;
+    }
+    if (isImageBrowserSaveInFlight(savedImageId)) {
+      showFeedback("Save overwrite is already in progress for this image.", true);
       return;
     }
 
@@ -2580,19 +3076,139 @@
     const formData = new FormData();
     formData.append("image", blob, state.imageBrowser.filename || `image-${item.id}.png`);
 
+    state.imageBrowserSavingImageIds[String(savedImageId)] = true;
+    updateImageBrowserStatus();
+
     try {
-      await apiRequest(`/api/v1/image-library/images/${item.id}/content`, {
+      const payload = await apiRequest(`/api/v1/image-library/images/${item.id}/content`, {
         method: "PUT",
         body: formData,
       });
-      clearCachedImageBrowserContent(item.id);
+
+      const updatedImage = payload?.data || null;
+      if (updatedImage && Number(updatedImage.id) > 0) {
+        const updatedImageId = Number(updatedImage.id);
+
+        state.imageLibraryImages = Array.isArray(state.imageLibraryImages)
+          ? state.imageLibraryImages.map((entry) => (Number(entry.id) === updatedImageId ? { ...entry, ...updatedImage } : entry))
+          : [];
+
+        if (Array.isArray(state.jigsawThumbnailImages)) {
+          let didReplaceThumbnail = false;
+          state.jigsawThumbnailImages = state.jigsawThumbnailImages.map((entry) => {
+            if (Number(entry.id) === updatedImageId) {
+              didReplaceThumbnail = true;
+              return { ...entry, ...updatedImage };
+            }
+            return entry;
+          });
+
+          if (!didReplaceThumbnail && Number(updatedImage.jigsaw_id || 0) > 0) {
+            state.jigsawThumbnailImages.push(updatedImage);
+          }
+        }
+
+        renderImageLibraryImages(state.imageLibraryImages);
+        renderJigsaws(state.jigsaws);
+      }
+
+      clearCachedImageBrowserContent(savedImageId);
       showFeedback("Image overwritten successfully.");
-      await loadImageLibraryImages();
-      setImageBrowserIndexByImageId(item.id);
-      await loadCurrentImageIntoBrowser();
+      const activeImageId = Number(getCurrentImageBrowserItem()?.id || 0);
+      if (activeImageId === savedImageId) {
+        setImageBrowserIndexByImageId(savedImageId);
+        await loadCurrentImageIntoBrowser();
+      }
+
+      Promise.all([loadImageLibraryImages({ skipBrowserReload: true }), loadJigsawImagesForSelected(), loadAuditEvents()]).catch(() => {
+        // Background refresh errors are surfaced by individual loaders.
+      });
     } catch (error) {
       showFeedback(error.message, true);
+    } finally {
+      delete state.imageBrowserSavingImageIds[String(savedImageId)];
+      updateImageBrowserStatus();
     }
+  }
+
+  async function saveImageBrowserCreateReference() {
+    const item = getCurrentImageBrowserItem();
+    if (!item) {
+      return;
+    }
+
+    const sourceImageId = Number(item.id || 0);
+    if (!sourceImageId) {
+      return;
+    }
+    if (isImageBrowserSaveInFlight(sourceImageId)) {
+      showFeedback("Save action is already in progress for this image.", true);
+      return;
+    }
+
+    const jigsawId = Number(item.jigsaw_id || 0);
+    if (!jigsawId) {
+      showFeedback("Assign this image to a jigsaw before creating a Reference image.", true);
+      return;
+    }
+
+    const renderedCanvas = document.createElement("canvas");
+    const rendered = await renderImageBrowserToCanvas(renderedCanvas, false);
+    if (!rendered) {
+      showFeedback("No image to save.", true);
+      return;
+    }
+
+    const writableMimeType = resolveWritableMimeType(state.imageBrowser.mimeType);
+    let blob;
+    try {
+      blob = await canvasToBlob(renderedCanvas, writableMimeType);
+    } catch (error) {
+      showFeedback(error.message, true);
+      return;
+    }
+
+    const baseFilename = String(state.imageBrowser.filename || item.filename || `image-${sourceImageId}.png`);
+    const referenceFilename = baseFilename.includes(".")
+      ? baseFilename.replace(/(\.[a-z0-9]+)$/i, "-reference$1")
+      : `${baseFilename}-reference.png`;
+
+    const formData = new FormData();
+    formData.append("tag", IMAGE_BROWSER_TAG_REFERENCE);
+    formData.append("defer_processing", "1");
+    formData.append("image", blob, referenceFilename);
+
+    state.imageBrowserSavingImageIds[String(sourceImageId)] = true;
+    state.imageBrowser.sourceDataUrl = state.imageBrowser.workingDataUrl;
+    state.imageBrowser.rotationDegrees = 0;
+    state.imageBrowser.cropMode = false;
+    state.imageBrowser.cropRect = null;
+    updateImageBrowserStatus();
+
+    showFeedback("Reference image save started in background.");
+    apiRequest(`/api/v1/jigsaws/${jigsawId}/images`, {
+      method: "POST",
+      body: formData,
+    })
+      .then((payload) => {
+        const createdReference = payload?.data || null;
+        if (!createdReference || !Number(createdReference.id || 0)) {
+          showFeedback("Reference image create did not return a created image.", true);
+          return;
+        }
+
+        showFeedback(`Reference image created as image #${createdReference.id}.`);
+        Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]).catch(() => {
+          // Background refresh errors are surfaced by individual loaders.
+        });
+      })
+      .catch((error) => {
+        showFeedback(error.message, true);
+      })
+      .finally(() => {
+        delete state.imageBrowserSavingImageIds[String(sourceImageId)];
+        updateImageBrowserStatus();
+      });
   }
 
   function handleImageBrowserKeyDown(event) {
@@ -2635,6 +3251,11 @@
       setImageBrowserTag(IMAGE_BROWSER_TAG_COMPLETED);
       return;
     }
+    if (event.key === "r" || event.key === "R") {
+      event.preventDefault();
+      setImageBrowserTag(IMAGE_BROWSER_TAG_REFERENCE);
+      return;
+    }
     if (event.code === "Comma" || event.key === ",") {
       event.preventDefault();
       assignCurrentImageUsingNeighbor(-1);
@@ -2670,6 +3291,11 @@
       createJigsawFromCurrentBrowserImage();
       return;
     }
+    if (event.key === "v" || event.key === "V") {
+      event.preventDefault();
+      saveImageBrowserCreateReference();
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       closeImageBrowser();
@@ -2686,7 +3312,8 @@
       return;
     }
 
-    const pageResult = paginateItems(entries, "diary");
+    const sortedEntries = sortRowsForTable(entries, "diary");
+    const pageResult = paginateItems(sortedEntries, "diary");
 
     pageResult.rows.forEach((entry) => {
       const row = document.createElement("tr");
@@ -2741,6 +3368,20 @@
         deleteButton.textContent = "Delete";
         actionCell.appendChild(editButton);
         actionCell.appendChild(deleteButton);
+      } else if (!isFormalDiaryEntry && isAdministrator) {
+        const suggestButton = document.createElement("button");
+        suggestButton.type = "button";
+        suggestButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        suggestButton.setAttribute("data-module", "govuk-button");
+        suggestButton.dataset.diarySuggestImage = String(Number(entry?.source_image_id || entry?.id || 0));
+        suggestButton.textContent = "Find similar";
+
+        const assignWrap = document.createElement("div");
+        assignWrap.className = "app-inline-controls app-image-actions__row govuk-!-margin-top-2";
+        assignWrap.dataset.diarySuggestWrap = String(Number(entry?.source_image_id || entry?.id || 0));
+
+        actionCell.appendChild(suggestButton);
+        actionCell.appendChild(assignWrap);
       } else {
         actionCell.textContent = "-";
       }
@@ -2806,7 +3447,6 @@
       const payload = await apiRequest("/api/v1/jigsaws");
       state.jigsaws = Array.isArray(payload.data) ? payload.data : [];
       renderJigsaws(state.jigsaws);
-      renderImageLibraryImages(state.imageLibraryImages);
       populateLoanFormOptions();
       populateJigsawImageOptions();
       populateDiaryJigsawOptions();
@@ -2814,13 +3454,29 @@
     } catch (error) {
       state.jigsaws = [];
       renderJigsaws([]);
-      renderImageLibraryImages(state.imageLibraryImages);
       closeJigsawEditor();
       populateLoanFormOptions();
       populateJigsawImageOptions();
       populateDiaryJigsawOptions();
       populateImageLibraryJigsawOptions();
       showFeedback(error.message, true);
+    }
+  }
+
+  async function loadJigsawThumbnailImages() {
+    if (!state.user) {
+      state.jigsawThumbnailImages = [];
+      renderJigsaws(state.jigsaws);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest("/api/v1/jigsaws/thumbnail-images");
+      state.jigsawThumbnailImages = Array.isArray(payload.data) ? payload.data : [];
+      renderJigsaws(state.jigsaws);
+    } catch (_error) {
+      state.jigsawThumbnailImages = [];
+      renderJigsaws(state.jigsaws);
     }
   }
 
@@ -2843,10 +3499,14 @@
     }
   }
 
-  async function loadImageLibraryImages() {
+  async function loadImageLibraryImages(options = {}) {
+    const shouldSkipBrowserReload = Boolean(options && options.skipBrowserReload);
+
     if (!state.user) {
       state.imageLibraryImages = [];
+      state.jigsawThumbnailImages = [];
       state.imageBrowserContentCacheByImageId = {};
+      state.imageBrowserSavingImageIds = {};
       renderImageLibraryImages([]);
       renderJigsaws(state.jigsaws);
       return;
@@ -2857,26 +3517,30 @@
       state.imageLibraryImages = Array.isArray(payload.data) ? payload.data : [];
       pruneImageBrowserContentCache(state.imageLibraryImages);
       renderImageLibraryImages(state.imageLibraryImages);
-      renderJigsaws(state.jigsaws);
-      if (state.imageBrowser.isOpen) {
+      await loadJigsawThumbnailImages();
+      if (state.imageBrowser.isOpen && !shouldSkipBrowserReload) {
         await loadCurrentImageIntoBrowser();
       }
     } catch (error) {
       if (error.status === 403) {
         state.imageLibraryImages = [];
+        state.jigsawThumbnailImages = [];
         state.imageBrowserContentCacheByImageId = {};
+        state.imageBrowserSavingImageIds = {};
         renderImageLibraryImages([]);
         renderJigsaws(state.jigsaws);
-        if (state.imageBrowser.isOpen) {
+        if (state.imageBrowser.isOpen && !shouldSkipBrowserReload) {
           await loadCurrentImageIntoBrowser();
         }
         return;
       }
       state.imageLibraryImages = [];
+      state.jigsawThumbnailImages = [];
       state.imageBrowserContentCacheByImageId = {};
+      state.imageBrowserSavingImageIds = {};
       renderImageLibraryImages([]);
       renderJigsaws(state.jigsaws);
-      if (state.imageBrowser.isOpen) {
+      if (state.imageBrowser.isOpen && !shouldSkipBrowserReload) {
         await loadCurrentImageIntoBrowser();
       }
       showFeedback(error.message, true);
@@ -2885,6 +3549,7 @@
 
   async function loadDiaryEntriesForSelected() {
     const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    const effectiveSelectedJigsawId = state.diarySelectionTouchedByUser ? selectedJigsawId : 0;
     if (!state.user) {
       state.diaryEntries = [];
       state.pagination.diary = 1;
@@ -2893,20 +3558,253 @@
       return;
     }
 
-    setDiaryEntriesCaption(selectedJigsawId);
+    if (!state.diarySelectionTouchedByUser && elements.diaryJigsawId) {
+      elements.diaryJigsawId.value = "";
+    }
+    setDiaryEntriesCaption(effectiveSelectedJigsawId);
 
     try {
-      const query = selectedJigsawId > 0
-        ? `?jigsaw_id=${selectedJigsawId}&limit=500`
+      const query = effectiveSelectedJigsawId > 0
+        ? `?jigsaw_id=${effectiveSelectedJigsawId}&limit=500`
         : "?limit=500";
       const payload = await apiRequest(`/api/v1/diary-feed${query}`);
       state.diaryEntries = Array.isArray(payload.data) ? payload.data : [];
+
       state.pagination.diary = 1;
-      renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
+      renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(effectiveSelectedJigsawId));
     } catch (error) {
       state.diaryEntries = [];
       state.pagination.diary = 1;
-      renderDiaryEntries([], getDiaryEntriesEmptyMessage(selectedJigsawId));
+      renderDiaryEntries([], getDiaryEntriesEmptyMessage(effectiveSelectedJigsawId));
+      showFeedback(error.message, true);
+    }
+  }
+
+  function renderDiarySuggestionOptions(imageId, candidates) {
+    if (!elements.diaryEntriesTableBody) {
+      return;
+    }
+    const wrap = elements.diaryEntriesTableBody.querySelector(`[data-diary-suggest-wrap="${Number(imageId)}"]`);
+    if (!wrap) {
+      return;
+    }
+
+    while (wrap.firstChild) {
+      wrap.removeChild(wrap.firstChild);
+    }
+    wrap.classList.add("app-diary-suggestions");
+
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      const note = document.createElement("span");
+      note.textContent = "No candidates";
+      wrap.appendChild(note);
+      return;
+    }
+
+    wrap.classList.add("app-diary-suggestions");
+
+    candidates.forEach((candidate) => {
+      const jigsawId = Number(candidate?.jigsaw_id || 0);
+      if (!jigsawId) {
+        return;
+      }
+
+      const scorePct = Math.max(0, Math.min(100, Math.round((Number(candidate?.score) || 0) * 1000) / 10));
+      const confidence = String(candidate?.confidence || "low");
+
+      const candidateRow = document.createElement("div");
+      candidateRow.className = "app-diary-suggestion-row";
+
+      const referenceImage = candidate?.reference_image || {};
+      const thumb = buildThumbnailWidget(referenceImage.thumbnail_url || "", {
+        altText: `Reference image for ${candidate?.jigsaw_title || `jigsaw ${jigsawId}`}`,
+        previewUrl: referenceImage.preview_url || referenceImage.content_url || "",
+        openUrl: referenceImage.content_url || "",
+        fallbackText: "No ref",
+        widthPx: 92,
+      });
+      thumb.classList.add("app-diary-suggestion-thumb");
+      candidateRow.appendChild(thumb);
+
+      const details = document.createElement("div");
+      details.className = "app-diary-suggestion-details";
+
+      const title = document.createElement("div");
+      title.className = "app-diary-suggestion-title";
+      title.textContent = candidate?.jigsaw_title || `(id ${jigsawId})`;
+      details.appendChild(title);
+
+      const meta = document.createElement("div");
+      meta.className = "app-diary-suggestion-meta";
+      meta.textContent = `${scorePct}% ${confidence} (${candidate?.reference_tag || "reference"})`;
+      details.appendChild(meta);
+
+      const assignButton = document.createElement("button");
+      assignButton.type = "button";
+      assignButton.className = "govuk-button govuk-button--secondary app-inline-button";
+      assignButton.setAttribute("data-module", "govuk-button");
+      assignButton.dataset.diarySuggestAssign = String(Number(imageId));
+      assignButton.dataset.diarySuggestJigsawId = String(jigsawId);
+      assignButton.textContent = "Assign";
+      details.appendChild(assignButton);
+
+      candidateRow.appendChild(details);
+      wrap.appendChild(candidateRow);
+    });
+  }
+
+  async function handleDiarySuggestMatch(imageId) {
+    const resolvedImageId = Number(imageId || 0);
+    if (!resolvedImageId) {
+      return;
+    }
+
+    try {
+      const payload = await apiRequest(`/api/v1/image-library/images/${resolvedImageId}/match-suggestions?limit=3`);
+      const candidates = Array.isArray(payload?.data?.candidates) ? payload.data.candidates : [];
+      renderDiarySuggestionOptions(resolvedImageId, candidates);
+      if (candidates.length > 0) {
+        showFeedback(`Loaded ${candidates.length} similar match candidate(s) for image #${resolvedImageId}.`);
+      } else {
+        showFeedback(`No suggested matches found for image #${resolvedImageId}.`);
+      }
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function handleDiaryAssignSuggested(imageId, explicitJigsawId = null) {
+    const resolvedImageId = Number(imageId || 0);
+    if (!resolvedImageId) {
+      return;
+    }
+
+    const selectedJigsawId = Number(explicitJigsawId || 0);
+    if (!selectedJigsawId) {
+      showFeedback("Choose a suggested jigsaw before assigning.", true);
+      return;
+    }
+
+    try {
+      await assignImageToJigsaw(resolvedImageId, selectedJigsawId);
+      showFeedback(`Completed image #${resolvedImageId} assigned to jigsaw #${selectedJigsawId}.`);
+      await Promise.all([loadDiaryEntriesForSelected(), loadImageLibraryImages(), loadJigsaws(), loadAuditEvents()]);
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function assignImageToJigsaw(imageId, jigsawId) {
+    await apiRequest(`/api/v1/image-library/images/${Number(imageId)}/assign`, {
+      method: "PATCH",
+      body: JSON.stringify({ jigsaw_id: Number(jigsawId) }),
+    });
+  }
+
+  function renderImageLibrarySuggestionOptions(imageId, candidates) {
+    if (!elements.imageLibraryTableBody) {
+      return;
+    }
+
+    const wrap = elements.imageLibraryTableBody.querySelector(`[data-image-suggest-wrap="${Number(imageId)}"]`);
+    if (!wrap) {
+      return;
+    }
+
+    while (wrap.firstChild) {
+      wrap.removeChild(wrap.firstChild);
+    }
+
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      const note = document.createElement("span");
+      note.textContent = "No candidates";
+      wrap.appendChild(note);
+      return;
+    }
+
+    candidates.forEach((candidate) => {
+      const jigsawId = Number(candidate?.jigsaw_id || 0);
+      if (!jigsawId) {
+        return;
+      }
+
+      const scorePct = Math.max(0, Math.min(100, Math.round((Number(candidate?.score) || 0) * 1000) / 10));
+      const confidence = String(candidate?.confidence || "low");
+
+      const row = document.createElement("div");
+      row.className = "app-diary-suggestion-row";
+
+      const referenceImage = candidate?.reference_image || {};
+      const thumb = buildThumbnailWidget(referenceImage.thumbnail_url || "", {
+        altText: `Reference image for ${candidate?.jigsaw_title || `jigsaw ${jigsawId}`}`,
+        previewUrl: referenceImage.preview_url || referenceImage.content_url || "",
+        openUrl: referenceImage.content_url || "",
+        fallbackText: "No ref",
+        widthPx: 92,
+      });
+      thumb.classList.add("app-diary-suggestion-thumb");
+      row.appendChild(thumb);
+
+      const details = document.createElement("div");
+      details.className = "app-diary-suggestion-details";
+
+      const title = document.createElement("div");
+      title.className = "app-diary-suggestion-title";
+      title.textContent = candidate?.jigsaw_title || `(id ${jigsawId})`;
+      details.appendChild(title);
+
+      const meta = document.createElement("div");
+      meta.className = "app-diary-suggestion-meta";
+      meta.textContent = `${scorePct}% ${confidence} (${candidate?.reference_tag || "reference"})`;
+      details.appendChild(meta);
+
+      const assignButton = document.createElement("button");
+      assignButton.type = "button";
+      assignButton.className = "govuk-button govuk-button--secondary app-inline-button";
+      assignButton.setAttribute("data-module", "govuk-button");
+      assignButton.dataset.imageSuggestAssign = String(Number(imageId));
+      assignButton.dataset.imageSuggestJigsawId = String(jigsawId);
+      assignButton.textContent = "Assign";
+      details.appendChild(assignButton);
+
+      row.appendChild(details);
+      wrap.appendChild(row);
+    });
+  }
+
+  async function handleImageLibrarySuggestMatch(imageId) {
+    const resolvedImageId = Number(imageId || 0);
+    if (!resolvedImageId) {
+      return;
+    }
+
+    try {
+      const payload = await apiRequest(`/api/v1/image-library/images/${resolvedImageId}/match-suggestions?limit=3`);
+      const candidates = Array.isArray(payload?.data?.candidates) ? payload.data.candidates : [];
+      renderImageLibrarySuggestionOptions(resolvedImageId, candidates);
+      showFeedback(`Loaded ${candidates.length} similar match candidate(s) for image #${resolvedImageId}.`);
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function handleImageLibraryAssignSuggested(imageId, explicitJigsawId = null) {
+    const resolvedImageId = Number(imageId || 0);
+    if (!resolvedImageId) {
+      return;
+    }
+
+    const selectedJigsawId = Number(explicitJigsawId || 0);
+    if (!selectedJigsawId) {
+      showFeedback("Choose a suggested jigsaw before assigning.", true);
+      return;
+    }
+
+    try {
+      await assignImageToJigsaw(resolvedImageId, selectedJigsawId);
+      showFeedback(`Completed image #${resolvedImageId} assigned to jigsaw #${selectedJigsawId}.`);
+      await Promise.all([loadDiaryEntriesForSelected(), loadImageLibraryImages(), loadJigsawImagesForSelected(), loadJigsaws(), loadAuditEvents()]);
+    } catch (error) {
       showFeedback(error.message, true);
     }
   }
@@ -3033,6 +3931,7 @@
       state.loans = [];
       state.auditEvents = [];
       state.auditEventsMeta = null;
+      state.jigsawThumbnailImages = [];
       state.jigsawImages = [];
       state.imageLibraryImages = [];
       state.imageLibraryFilterAssigned = true;
@@ -3040,6 +3939,8 @@
       state.imageLibraryFilterTagSelections = {};
       state.aiUsageDiagnostics = null;
       state.imageBrowserContentCacheByImageId = {};
+      state.imageBrowserSavingImageIds = {};
+      state.tableSorts = createDefaultTableSortState();
       state.diaryEntries = [];
       state.jigsawSearchQuery = "";
       state.jigsawFilterWithoutDiaryEntries = false;
@@ -3080,6 +3981,7 @@
       populateDiaryJigsawOptions();
       populateImageLibraryJigsawOptions();
       renderAuditEvents([]);
+      updateSortableTableHeaders();
       showFeedback("Signed out.");
     } catch (error) {
       showFeedback(error.message, true);
@@ -3551,13 +4453,23 @@
     const unassignedImageIds = createdItems
       .map((item) => Number(item?.id || 0))
       .filter((imageId, index, values) => imageId > 0 && values.indexOf(imageId) === index);
-    if (unassignedImageIds.length === 0) {
+    return startBulkCreateJobForImageIds(unassignedImageIds);
+  }
+
+  async function startBulkCreateJobForImageIds(imageIds) {
+    const uniqueImageIds = Array.isArray(imageIds)
+      ? imageIds.filter((imageId, index, values) => Number(imageId) > 0 && values.indexOf(imageId) === index)
+      : [];
+
+    if (uniqueImageIds.length === 0) {
       return null;
     }
 
+    clearBulkCreateProgress();
+
     const response = await apiRequest("/api/v1/image-library/bulk-create-jigsaws", {
       method: "POST",
-      body: JSON.stringify({ image_ids: unassignedImageIds }),
+      body: JSON.stringify({ image_ids: uniqueImageIds }),
     });
 
     const job = response?.data?.job || null;
@@ -3566,9 +4478,89 @@
     }
 
     state.bulkCreateJobId = Number(job.id);
-    setBulkCreateProgressText(`Bulk AI create job #${job.id} queued for ${unassignedImageIds.length} image(s).`);
+    setBulkCreateProgressText(`Bulk AI create job #${job.id} queued for ${uniqueImageIds.length} image(s).`);
     pollBulkCreateJobStatus(state.bulkCreateJobId);
     return state.bulkCreateJobId;
+  }
+
+  function setImageEmbeddingBackfillStatus(message) {
+    if (!elements.imageEmbeddingBackfillStatus) {
+      return;
+    }
+    elements.imageEmbeddingBackfillStatus.textContent = String(message || "");
+  }
+
+  function clearImageEmbeddingBackfillProgress() {
+    if (state.imageEmbeddingBackfillPollTimer) {
+      window.clearTimeout(state.imageEmbeddingBackfillPollTimer);
+      state.imageEmbeddingBackfillPollTimer = null;
+    }
+    state.imageEmbeddingBackfillJobId = null;
+  }
+
+  async function pollImageEmbeddingBackfillJobStatus(jobId) {
+    if (!jobId) {
+      return;
+    }
+
+    try {
+      const payload = await apiRequest(`/api/v1/image-embeddings/backfill/${Number(jobId)}`);
+      const job = payload?.data?.job || null;
+      if (!job) {
+        clearImageEmbeddingBackfillProgress();
+        setImageEmbeddingBackfillStatus("Embedding backfill status unavailable.");
+        return;
+      }
+
+      const summary = `Embedding job #${job.id}: ${job.processed_items}/${job.total_items} processed, ${job.succeeded_items} succeeded, ${job.failed_items} failed.`;
+      if (job.status === "queued" || job.status === "running") {
+        setImageEmbeddingBackfillStatus(`${summary} (${job.status})`);
+        state.imageEmbeddingBackfillPollTimer = window.setTimeout(() => {
+          pollImageEmbeddingBackfillJobStatus(job.id);
+        }, 1500);
+        return;
+      }
+
+      setImageEmbeddingBackfillStatus(`${summary} (${job.status})`);
+      if (job.status === "completed") {
+        showFeedback(`Image embedding backfill completed. ${summary}`);
+      } else if (job.status === "failed") {
+        showFeedback(`Image embedding backfill finished with failures. ${summary}`, true);
+      }
+
+      await Promise.all([loadImageLibraryImages(), loadDiaryEntriesForSelected(), loadAuditEvents()]);
+      state.imageEmbeddingBackfillPollTimer = window.setTimeout(() => {
+        clearImageEmbeddingBackfillProgress();
+      }, 4000);
+    } catch (error) {
+      setImageEmbeddingBackfillStatus(`Embedding backfill status check failed: ${error.message}`);
+      state.imageEmbeddingBackfillPollTimer = window.setTimeout(() => {
+        pollImageEmbeddingBackfillJobStatus(jobId);
+      }, 2500);
+    }
+  }
+
+  async function handleImageEmbeddingBackfillStart() {
+    clearFeedback();
+    clearImageEmbeddingBackfillProgress();
+
+    try {
+      const payload = await apiRequest("/api/v1/image-embeddings/backfill", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      const job = payload?.data?.job || null;
+      if (!job?.id) {
+        showFeedback("Could not queue image embedding backfill job.", true);
+        return;
+      }
+
+      state.imageEmbeddingBackfillJobId = Number(job.id);
+      setImageEmbeddingBackfillStatus(`Embedding backfill job #${job.id} queued.`);
+      pollImageEmbeddingBackfillJobStatus(state.imageEmbeddingBackfillJobId);
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
   }
 
   async function handleImageLibraryUpload(event) {
@@ -3638,6 +4630,38 @@
         clearBulkCreateProgress();
         await Promise.all([loadImageLibraryImages(), loadJigsaws(), loadAuditEvents()]);
       }
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function handleBulkCreateAllUnassignedBoxImages() {
+    clearFeedback();
+    clearBulkCreateProgress();
+
+    const shouldStart = window.confirm(
+      "Queue AI create for all unassigned images tagged exactly as Box?",
+    );
+    if (!shouldStart) {
+      return;
+    }
+
+    try {
+      const response = await apiRequest("/api/v1/image-library/bulk-create-jigsaws/unassigned-box", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+
+      const job = response?.data?.job || null;
+      if (!job || !job.id) {
+        showFeedback("Could not queue bulk AI create for unassigned Box images.", true);
+        return;
+      }
+
+      state.bulkCreateJobId = Number(job.id);
+      setBulkCreateProgressText(`Bulk AI create job #${job.id} queued for ${job.total_items} image(s).`);
+      pollBulkCreateJobStatus(state.bulkCreateJobId);
+      showFeedback(`Queued bulk AI create job #${job.id} for ${job.total_items} unassigned Box image(s).`);
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -3977,6 +5001,48 @@
       return;
     }
 
+    const diarySuggestButton = event.target.closest("[data-diary-suggest-image]");
+    if (diarySuggestButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const imageId = Number(diarySuggestButton.getAttribute("data-diary-suggest-image"));
+      await handleDiarySuggestMatch(imageId);
+      return;
+    }
+
+    const diarySuggestAssignButton = event.target.closest("[data-diary-suggest-assign]");
+    if (diarySuggestAssignButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const imageId = Number(diarySuggestAssignButton.getAttribute("data-diary-suggest-assign"));
+      const jigsawId = Number(diarySuggestAssignButton.getAttribute("data-diary-suggest-jigsaw-id") || "0");
+      await handleDiaryAssignSuggested(imageId, jigsawId);
+      return;
+    }
+
+    const imageSuggestButton = event.target.closest("[data-image-suggest]");
+    if (imageSuggestButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const imageId = Number(imageSuggestButton.getAttribute("data-image-suggest"));
+      await handleImageLibrarySuggestMatch(imageId);
+      return;
+    }
+
+    const imageSuggestAssignButton = event.target.closest("[data-image-suggest-assign]");
+    if (imageSuggestAssignButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const imageId = Number(imageSuggestAssignButton.getAttribute("data-image-suggest-assign"));
+      const jigsawId = Number(imageSuggestAssignButton.getAttribute("data-image-suggest-jigsaw-id") || "0");
+      await handleImageLibraryAssignSuggested(imageId, jigsawId);
+      return;
+    }
+
     const imageAssignButton = event.target.closest("[data-image-assign]");
     if (imageAssignButton) {
       event.preventDefault();
@@ -4066,31 +5132,16 @@
 
       const imageId = Number(imageCreateButton.getAttribute("data-image-create"));
       try {
-        const payload = await apiRequest(`/api/v1/image-library/images/${imageId}/create-jigsaw`, {
-          method: "POST",
-          body: JSON.stringify({}),
-        });
-        const createdTitle = payload?.data?.jigsaw?.title || "(untitled)";
-        showFeedback(`Jigsaw created from image: ${createdTitle}.`);
-        await Promise.all([
-          loadJigsaws(),
-          loadImageLibraryImages(),
-          loadJigsawImagesForSelected(),
-          loadAuditEvents(),
-          loadAiUsageDiagnostics(),
-        ]);
-      } catch (error) {
-        if (error.status === 502) {
-          await loadAiUsageDiagnostics();
-          const requestId = error?.payload?.meta?.request_id;
-          const hint = buildAiFailureHintForImage(imageId, requestId);
-          if (hint) {
-            showFeedback(`${error.message} Diagnostic: ${hint}`, true);
-            return;
-          }
+        const jobId = await startBulkCreateJobForImageIds([imageId]);
+        if (!jobId) {
+          showFeedback("Could not queue AI create for this image.", true);
+          return;
         }
+        showFeedback(`AI create queued for image #${imageId} (job #${jobId}).`);
+      } catch (error) {
         showFeedback(error.message, true);
       }
+      return;
     }
 
     const imageDeleteButton = event.target.closest("[data-image-delete]");
@@ -4125,6 +5176,7 @@
 
   function handleDiarySelectionChange() {
     clearFeedback();
+    state.diarySelectionTouchedByUser = true;
     state.pagination.diary = 1;
     loadDiaryEntriesForSelected();
   }
@@ -4173,6 +5225,27 @@
     renderImageLibraryImages(state.imageLibraryImages);
   }
 
+  function handleSortableHeaderClick(event) {
+    const header = event.target.closest("th[data-sort-list][data-sort-field]");
+    if (!(header instanceof HTMLTableCellElement)) {
+      return;
+    }
+    event.preventDefault();
+    applySortFromHeader(header);
+  }
+
+  function handleSortableHeaderKeyDown(event) {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    const header = event.target.closest("th[data-sort-list][data-sort-field]");
+    if (!(header instanceof HTMLTableCellElement)) {
+      return;
+    }
+    event.preventDefault();
+    applySortFromHeader(header);
+  }
+
   async function handlePaginationClick(event) {
     const targetButton = event.target.closest("button[data-pagination-list][data-pagination-page]");
     if (!(targetButton instanceof HTMLButtonElement)) {
@@ -4217,15 +5290,23 @@
     if (elements.imageBrowserFilterBox) {
       elements.imageBrowserFilterBox.checked = Boolean(state.imageBrowser.filterBox);
     }
+    if (elements.imageBrowserFilterReference) {
+      elements.imageBrowserFilterReference.checked = Boolean(state.imageBrowser.filterReference);
+    }
     if (elements.imageBrowserFilterCompleted) {
       elements.imageBrowserFilterCompleted.checked = Boolean(state.imageBrowser.filterCompleted);
+    }
+    if (elements.imageBrowserFilterInProgress) {
+      elements.imageBrowserFilterInProgress.checked = Boolean(state.imageBrowser.filterInProgress);
     }
   }
 
   function syncImageBrowserFilterStateFromInputs() {
     state.imageBrowser.filterUnassigned = Boolean(elements.imageBrowserFilterUnassigned?.checked);
     state.imageBrowser.filterBox = Boolean(elements.imageBrowserFilterBox?.checked);
+    state.imageBrowser.filterReference = Boolean(elements.imageBrowserFilterReference?.checked);
     state.imageBrowser.filterCompleted = Boolean(elements.imageBrowserFilterCompleted?.checked);
+    state.imageBrowser.filterInProgress = Boolean(elements.imageBrowserFilterInProgress?.checked);
   }
 
   async function handleImageBrowserFilterChange() {
@@ -4235,7 +5316,9 @@
     const previousFilters = {
       unassigned: state.imageBrowser.filterUnassigned,
       box: state.imageBrowser.filterBox,
+      reference: state.imageBrowser.filterReference,
       completed: state.imageBrowser.filterCompleted,
+      inProgress: state.imageBrowser.filterInProgress,
     };
     syncImageBrowserFilterStateFromInputs();
 
@@ -4246,7 +5329,9 @@
         if (!shouldDiscard) {
           state.imageBrowser.filterUnassigned = previousFilters.unassigned;
           state.imageBrowser.filterBox = previousFilters.box;
+          state.imageBrowser.filterReference = previousFilters.reference;
           state.imageBrowser.filterCompleted = previousFilters.completed;
+          state.imageBrowser.filterInProgress = previousFilters.inProgress;
           state.imageBrowser.index = previousIndex;
           setImageBrowserFilterInputsFromState();
           return;
@@ -4363,10 +5448,23 @@
       elements.auditPagination.addEventListener("click", handlePaginationClick);
     }
 
+    if (elements.adminSections) {
+      elements.adminSections.addEventListener("click", handleSortableHeaderClick);
+      elements.adminSections.addEventListener("keydown", handleSortableHeaderKeyDown);
+    }
+
     if (elements.imageBrowserOpen) {
       elements.imageBrowserOpen.addEventListener("click", () => {
         openImageBrowser();
       });
+    }
+
+    if (elements.imageLibraryBulkCreateUnassignedBoxButton) {
+      elements.imageLibraryBulkCreateUnassignedBoxButton.addEventListener("click", handleBulkCreateAllUnassignedBoxImages);
+    }
+
+    if (elements.imageEmbeddingBackfillStart) {
+      elements.imageEmbeddingBackfillStart.addEventListener("click", handleImageEmbeddingBackfillStart);
     }
 
     if (elements.imageBrowserFilterUnassigned) {
@@ -4377,8 +5475,16 @@
       elements.imageBrowserFilterBox.addEventListener("change", handleImageBrowserFilterChange);
     }
 
+    if (elements.imageBrowserFilterReference) {
+      elements.imageBrowserFilterReference.addEventListener("change", handleImageBrowserFilterChange);
+    }
+
     if (elements.imageBrowserFilterCompleted) {
       elements.imageBrowserFilterCompleted.addEventListener("change", handleImageBrowserFilterChange);
+    }
+
+    if (elements.imageBrowserFilterInProgress) {
+      elements.imageBrowserFilterInProgress.addEventListener("change", handleImageBrowserFilterChange);
     }
 
     if (elements.imageBrowserClose) {
@@ -4445,6 +5551,12 @@
       });
     }
 
+    if (elements.imageBrowserMarkReference) {
+      elements.imageBrowserMarkReference.addEventListener("click", () => {
+        setImageBrowserTag(IMAGE_BROWSER_TAG_REFERENCE);
+      });
+    }
+
     if (elements.imageBrowserMarkInProgress) {
       elements.imageBrowserMarkInProgress.addEventListener("click", () => {
         setImageBrowserTag(IMAGE_BROWSER_TAG_IN_PROGRESS);
@@ -4470,6 +5582,12 @@
     if (elements.imageBrowserCropApply) {
       elements.imageBrowserCropApply.addEventListener("click", () => {
         applyImageBrowserCrop();
+      });
+    }
+
+    if (elements.imageBrowserSaveCreate) {
+      elements.imageBrowserSaveCreate.addEventListener("click", () => {
+        saveImageBrowserCreateReference();
       });
     }
 
@@ -4566,16 +5684,22 @@
   }
 
   async function init() {
+    state.diarySelectionTouchedByUser = false;
     setImageBrowserFilterInputsFromState();
     syncImageBrowserFilterStateFromInputs();
     attachEvents();
+    updateSortableTableHeaders();
     renderBulkUploadFiles();
     syncBulkCreateFromUploadVisibility();
     const isAuthenticated = await refreshSession();
     if (isAuthenticated) {
+      clearImageEmbeddingBackfillProgress();
+      setImageEmbeddingBackfillStatus("");
       await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadAiUsageDiagnostics(), loadImageLibraryImages()]);
       await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
     } else {
+      clearImageEmbeddingBackfillProgress();
+      setImageEmbeddingBackfillStatus("");
       renderUsers([]);
       renderJigsaws([]);
       renderLoans([]);

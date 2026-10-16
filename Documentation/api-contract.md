@@ -29,6 +29,7 @@
 - `POST /api/v1/auth/logout`
 - `POST /api/v1/jigsaws`
 - `GET /api/v1/jigsaws/{id}`
+- `GET /api/v1/jigsaws/thumbnail-images`
 - `PATCH /api/v1/jigsaws/{id}`
 - `DELETE /api/v1/jigsaws/{id}` (retire/archive semantics)
 - `DELETE /api/v1/jigsaws/{id}/permanent` (hard-delete semantics)
@@ -53,8 +54,12 @@
 - `PUT /api/v1/image-library/images/{image_id}/content`
 - `POST /api/v1/image-library/images/{image_id}/create-jigsaw`
 - `POST /api/v1/image-library/bulk-create-jigsaws`
+- `POST /api/v1/image-library/bulk-create-jigsaws/unassigned-box`
 - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}`
 - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}/items`
+- `POST /api/v1/image-embeddings/backfill`
+- `GET /api/v1/image-embeddings/backfill/{job_id}`
+- `GET /api/v1/image-library/images/{image_id}/match-suggestions`
 - `GET /api/v1/images/{image_id}/content`
 - `GET /api/v1/jigsaws/{id}/diary-entries`
 - `GET /api/v1/diary-feed`
@@ -200,6 +205,7 @@
 - Jigsaw metadata notes:
   - `GET /api/v1/jigsaws` supports optional pagination query params `page` and `page_size` (or legacy `limit` alias).
   - When pagination params are provided, response includes standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
+  - `GET /api/v1/jigsaws/thumbnail-images` returns one preferred image per jigsaw for fast stock-list thumbnail rendering.
   - `POST /api/v1/jigsaws` allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.
   - Duplicate `title` values are allowed.
   - Jigsaw payloads now support optional fields: `series_name`, `series_number`, `manufacturer`, `artist`, `dimensions_cm`, `description`, `last_completed_at`.
@@ -243,7 +249,7 @@
   - `PATCH /api/v1/image-library/images/{image_id}/assign` assigns an image to one jigsaw; reassignment to a different jigsaw returns `409`.
   - `DELETE /api/v1/image-library/images/{image_id}` is admin-only and permanently deletes the image record.
   - `PATCH /api/v1/image-library/images/{image_id}/tag` is admin-only and updates image tag/classification (for example `Box`, `Completed`) even when image is unassigned.
-  - Known built-in tag variants are normalized to canonical title-case values: `Box`, `Box front`, `Box side`, `Box back`, `Completed`, `In progress`.
+  - Known built-in tag variants are normalized to canonical title-case values: `Box`, `Box front`, `Box side`, `Box back`, `Reference`, `Completed`, `In progress`.
   - `PUT /api/v1/image-library/images/{image_id}/content` is admin-only and overwrites the stored image bytes in-place (used by rotate/crop workflows).
   - Overwrite operations preserve the original dedupe hash so future uploads of the original source bytes still clash as duplicates.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` is admin-only and creates a new jigsaw from AI-extracted image metadata.
@@ -251,8 +257,15 @@
   - Successful create-from-image sets the associated image tag to `Box`.
   - `POST /api/v1/image-library/bulk-create-jigsaws` is admin-only and queues (or runs inline in test mode) one create-from-image action per provided image id.
   - `POST /api/v1/image-library/bulk-create-jigsaws` requires JSON body with `image_ids` as a non-empty list of positive integers (max 500).
+  - `POST /api/v1/image-library/bulk-create-jigsaws/unassigned-box` is admin-only and queues create-from-image jobs for all currently unassigned images tagged exactly as `Box`.
   - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}` returns aggregate job status and counters (`queued` / `running` / `completed` / `failed`).
   - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}/items` returns per-image outcomes with list pagination.
+  - `POST /api/v1/image-embeddings/backfill` is admin-only and queues an image-embedding backfill job across all stored images.
+  - `GET /api/v1/image-embeddings/backfill/{job_id}` is admin-only and returns backfill job status/counters.
+  - `GET /api/v1/image-library/images/{image_id}/match-suggestions` is admin-only and returns top visual-match jigsaw candidates for one unassigned `Completed` image.
+  - Each match candidate includes `reference_image` URLs (`content_url`, `thumbnail_url`, `preview_url`) so the admin UI can show side-by-side visual confirmation.
+  - Visual-match suggestions require image embeddings to be enabled in server configuration and use cosine similarity against reference-tagged jigsaw images.
+  - Embeddings are model-keyed (`model_name@revision`); when model key changes, backfill should be run before relying on suggestions.
   - AI extraction expects these metadata keys: `title`, `series_name`, `series_number`, `manufacturer`/`publisher`, `artist`, `piece_count`, `tags`, `dimensions_cm`, `description`.
   - AI usage is cost-tracked per call (`ai_usage_events`) with token usage and final USD cost.
   - Daily AI spend guardrail: when configured budget is reached, create-from-image requests return `409` and are blocked before provider calls.

@@ -50,6 +50,11 @@
   - jigsaw_id, tag, filename, mime_type, image_data
   - stored derivative variants for UI performance (thumbnail + preview blobs with mime types)
   - capture metadata, timestamp
+- `image_embeddings`
+  - image_id, model_key, normalized embedding vector, source-content hash
+  - used for visual similarity suggestions (completed-photo reconciliation)
+- `image_embedding_jobs`
+  - backfill job status/counters for asynchronous embedding generation
 - `loans`
   - borrower, jigsaw, checkout date, due date, return date, status
 - `audit_events`

@@ -22,6 +22,12 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("AI_TIMEOUT_SECONDS", 60)
     app.config.setdefault("AI_DAILY_BUDGET_USD", None)
     app.config.setdefault("BULK_AI_CREATE_INLINE", bool(app.config.get("TESTING", False)))
+    app.config.setdefault("IMAGE_EMBEDDINGS_ENABLED", False)
+    app.config.setdefault("IMAGE_EMBEDDING_MODEL_NAME", "openai/clip-vit-base-patch32")
+    app.config.setdefault("IMAGE_EMBEDDING_MODEL_REVISION", "main")
+    app.config.setdefault("IMAGE_EMBEDDINGS_INLINE", bool(app.config.get("TESTING", False)))
+    app.config.setdefault("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", bool(app.config.get("TESTING", False)))
+    app.config.setdefault("IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES", ["box", "reference"])
 
     @app.before_request
     def set_request_id():

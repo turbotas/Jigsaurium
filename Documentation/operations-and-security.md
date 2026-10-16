@@ -32,6 +32,12 @@
 - `AI_TIMEOUT_SECONDS`: provider request timeout.
 - `AI_DAILY_BUDGET_USD`: optional daily spend limit; when reached, create-from-image requests are blocked.
 - `BULK_AI_CREATE_INLINE`: optional boolean for bulk AI create execution mode (`false` = background worker, `true` = inline; test defaults to inline).
+- `IMAGE_EMBEDDINGS_ENABLED`: enable/disable CLIP embedding generation and visual match suggestion APIs.
+- `IMAGE_EMBEDDING_MODEL_NAME`: CLIP model identifier used for embedding generation (default `openai/clip-vit-base-patch32`).
+- `IMAGE_EMBEDDING_MODEL_REVISION`: model revision/tag used with `IMAGE_EMBEDDING_MODEL_NAME`.
+- `IMAGE_EMBEDDINGS_INLINE`: optional boolean for embedding generation mode (`false` = background threads, `true` = inline).
+- `IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK`: optional boolean to allow deterministic non-CLIP fallback embeddings in test-only environments.
+- `IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES`: comma-separated tag prefixes that count as visual-match references (default `box,reference`).
 
 ## Canonical Hosts
 
