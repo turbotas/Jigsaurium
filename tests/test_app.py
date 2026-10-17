@@ -50,6 +50,18 @@ def test_home_route_renders_expected_content(client):
     assert b"id=\"login-form\"" in response.data
     assert b"id=\"admin-sections\" hidden" in response.data
     assert b"/static/js/app.js" in response.data
+    assert b"/mobile-capture" in response.data
+
+
+@pytest.mark.functional
+def test_mobile_capture_route_renders_expected_content(client):
+    response = client.get("/mobile-capture")
+
+    assert response.status_code == 200
+    assert b"Mobile jigsaw capture" in response.data
+    assert b"id=\"mobile-capture-login-form\"" in response.data
+    assert b"id=\"mobile-intake-form\"" in response.data
+    assert b"/static/js/mobile-intake.js" in response.data
 
 
 @pytest.mark.functional

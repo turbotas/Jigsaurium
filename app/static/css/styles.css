@@ -335,6 +335,69 @@
   overflow-y: auto;
 }
 
+.app-mobile-capture-shell {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.app-mobile-capture-card {
+  border: 1px solid #b1b4b6;
+  border-radius: 8px;
+  background: #fff;
+  padding: 16px;
+  min-width: 0;
+}
+
+.app-mobile-intake-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.app-mobile-intake-slot {
+  border: 1px solid #b1b4b6;
+  border-radius: 6px;
+  padding: 12px;
+  background: #f8f8f8;
+  min-width: 0;
+}
+
+.app-mobile-intake-slot .govuk-file-upload {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.app-mobile-intake-preview {
+  margin-top: 10px;
+  min-height: 80px;
+  color: #505a5f;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+.app-mobile-intake-preview__image {
+  display: block;
+  width: 100%;
+  max-height: 170px;
+  object-fit: cover;
+  border: 1px solid #b1b4b6;
+  border-radius: 4px;
+  margin-bottom: 6px;
+  background: #fff;
+}
+
+.app-mobile-intake-status--error {
+  border-left: 5px solid #d4351c;
+}
+
+@media (max-width: 640px) {
+  .app-mobile-intake-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .app-image-browser {
   position: fixed;
   inset: 0;

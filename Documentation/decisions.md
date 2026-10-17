@@ -165,3 +165,14 @@
 - Why: initial rollout requires historical backfill without blocking request threads, and model upgrades require controlled recomputation.
 - Decision: use visual-match suggestions for unassigned `Completed` images by scoring cosine similarity against reference-tagged jigsaw images.
 - Why: historical data lacks reliable filename/time proximity signals, so visual similarity is the primary reconciliation mechanism.
+
+## 2026-10-17 - Mobile Guided Capture Workflow
+
+- Decision: add a mobile-first guided capture interface with four photo slots (`Box front`, `Box side`, `Box back`, `Completed`) and optional title/piece-count seed fields.
+- Why: smartphone capture is now the fastest intake path for new jigsaws and should avoid desktop-first multi-step upload friction.
+- Decision: require at least one slot image, and branch workflow by slot mix.
+- Why: supports both cataloging new boxes and diary-only completed-photo uploads in one entry point.
+- Decision: when only `Completed` is provided, store as unassigned `Completed` image and do not create a jigsaw.
+- Why: a standalone completed photo often lacks enough metadata to safely identify a jigsaw at capture time.
+- Decision: when any box slot is present, create a jigsaw, upload/tag all captured slot images, then run one non-destructive enrich-from-images call.
+- Why: this reuses proven APIs while giving users a single, responsive workflow that extracts metadata from all box photos together.

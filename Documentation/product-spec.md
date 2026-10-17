@@ -59,6 +59,11 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
   - Bulk upload one or more images (including zip archives containing image files).
   - Store uploaded images as library assets with an initial tag (default `untagged`).
   - Optionally associate uploads to a jigsaw during import.
+  - Provide a mobile-friendly guided capture flow with slots for `Box front`, `Box side`, `Box back`, and `Completed` images.
+  - Require at least one captured image per guided-capture submission.
+  - If only `Completed` is captured, store it as an unassigned `Completed` image (no new jigsaw created).
+  - If one or more box images are captured, create a jigsaw, upload all captured images with slot tags, and run enrich-from-images once for that jigsaw.
+  - Guided capture accepts optional title and piece count seed values but does not require them.
   - Create a new jigsaw from an image via AI metadata extraction (title, series name/number, artist, manufacturer/publisher, piece count, tags, dimensions, description).
   - Enrich an existing jigsaw from associated box images (front/back/side) to populate missing fields.
   - Track AI token/cost usage per create-from-image call and enforce daily spend guardrails.
@@ -88,6 +93,9 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 - Admin can quick-add a jigsaw with only title and piece count, then enrich it later via edit.
 - Admin can create a jigsaw from an unassigned image using AI-assisted metadata extraction.
 - Admin can run non-destructive AI enrichment on an existing jigsaw using its assigned images.
+- Admin can submit a mobile guided-capture upload with at least one slot populated.
+- Completed-only guided capture stores an unassigned `Completed` image without creating a jigsaw.
+- Guided capture that includes a box image creates a jigsaw, tags/uploads captured slot images, and runs enrich-from-images once.
 - Admin can log, view, and delete completion diary entries with difficulty ratings and notes per jigsaw.
 - Admin can create users and assign one of the supported roles.
 - Borrower cannot access admin-only API endpoints.

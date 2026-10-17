@@ -10,6 +10,10 @@ _MODEL_CACHE = {
     "processor": None,
     "model": None,
 }
+_RUNTIME_CHECK = {
+    "checked": False,
+    "error": None,
+}
 
 
 def _normalize_vector(values):
@@ -36,21 +40,50 @@ def _compute_test_fallback_embedding(image_bytes):
 
 
 def _load_clip_model(model_name, model_revision):
-    from transformers import CLIPModel, CLIPProcessor
+    from transformers import AutoModel
+
+    try:
+        from transformers import AutoProcessor
+    except ImportError:
+        from transformers import CLIPProcessor as AutoProcessor
 
     model_key = f"{model_name}@{model_revision}"
     with _MODEL_LOCK:
         if _MODEL_CACHE["model_key"] == model_key and _MODEL_CACHE["processor"] is not None and _MODEL_CACHE["model"] is not None:
             return _MODEL_CACHE["processor"], _MODEL_CACHE["model"]
 
-        processor = CLIPProcessor.from_pretrained(model_name, revision=model_revision, use_fast=False)
-        model = CLIPModel.from_pretrained(model_name, revision=model_revision)
+        processor = AutoProcessor.from_pretrained(model_name, revision=model_revision, use_fast=False)
+        model = AutoModel.from_pretrained(model_name, revision=model_revision)
         model.eval()
 
         _MODEL_CACHE["model_key"] = model_key
         _MODEL_CACHE["processor"] = processor
         _MODEL_CACHE["model"] = model
         return processor, model
+
+
+def embedding_runtime_error():
+    with _MODEL_LOCK:
+        if _RUNTIME_CHECK["checked"]:
+            return _RUNTIME_CHECK["error"]
+
+        try:
+            import torch  # noqa: F401
+            from PIL import Image  # noqa: F401
+            from transformers import AutoModel  # noqa: F401
+
+            try:
+                from transformers import AutoProcessor  # noqa: F401
+            except ImportError:
+                from transformers import CLIPProcessor  # noqa: F401
+        except Exception as error:
+            _RUNTIME_CHECK["checked"] = True
+            _RUNTIME_CHECK["error"] = str(error)
+            return _RUNTIME_CHECK["error"]
+
+        _RUNTIME_CHECK["checked"] = True
+        _RUNTIME_CHECK["error"] = None
+        return None
 
 
 def build_model_key(model_name, model_revision):
@@ -84,7 +117,16 @@ def compute_image_embedding(image_bytes, *, model_name, model_revision, allow_te
 
     with torch.no_grad():
         inputs = processor(images=rgb_image, return_tensors="pt")
-        features = model.get_image_features(**inputs)
+        if hasattr(model, "get_image_features"):
+            features = model.get_image_features(**inputs)
+        else:
+            outputs = model(**inputs)
+            features = getattr(outputs, "pooler_output", None)
+            if features is None:
+                last_hidden_state = getattr(outputs, "last_hidden_state", None)
+                if last_hidden_state is None:
+                    raise RuntimeError("Image embedding model output is missing feature tensors.")
+                features = last_hidden_state.mean(dim=1)
 
     vector = features[0].detach().cpu().tolist()
     return _normalize_vector(vector)

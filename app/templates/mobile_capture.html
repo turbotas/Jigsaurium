@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <div class="app-mobile-capture-shell">
+    <span class="govuk-caption-l">Jigsaurium</span>
+    <h1 class="govuk-heading-l">Mobile jigsaw capture</h1>
+    <p class="govuk-body">Capture up to four photos in one flow: Box front, Box side, Box back, and Completed.</p>
+    <p class="govuk-body">If only Completed is captured, it is saved as an unassigned completed image. If any box photo is captured, a new jigsaw is created and enriched.</p>
+
+    <div id="mobile-intake-status" class="govuk-notification-banner govuk-notification-banner--success" aria-live="polite" hidden>
+      <div class="govuk-notification-banner__header">
+        <h2 class="govuk-notification-banner__title">Status</h2>
+      </div>
+      <div class="govuk-notification-banner__content">
+        <p id="mobile-intake-status-text" class="govuk-notification-banner__heading"></p>
+      </div>
+    </div>
+
+    <section class="app-mobile-capture-card govuk-!-margin-bottom-4" aria-labelledby="mobile-capture-auth-heading">
+      <h2 id="mobile-capture-auth-heading" class="govuk-heading-m">Sign in</h2>
+      <form id="mobile-capture-login-form" class="govuk-!-margin-bottom-3">
+        <div class="govuk-form-group">
+          <label class="govuk-label" for="mobile-capture-login-email">Email</label>
+          <input id="mobile-capture-login-email" name="email" class="govuk-input" type="email" autocomplete="username" required>
+        </div>
+        <div class="govuk-form-group">
+          <label class="govuk-label" for="mobile-capture-login-password">Password</label>
+          <input id="mobile-capture-login-password" name="password" class="govuk-input" type="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="govuk-button govuk-!-margin-bottom-0" data-module="govuk-button">Sign in</button>
+      </form>
+      <p id="mobile-capture-session-summary" class="govuk-body-s govuk-!-margin-bottom-2">Not signed in.</p>
+      <button id="mobile-capture-logout-button" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button" hidden>Sign out</button>
+    </section>
+
+    <section id="mobile-capture-workflow" class="app-mobile-capture-card" aria-labelledby="mobile-capture-workflow-heading" hidden>
+      <h2 id="mobile-capture-workflow-heading" class="govuk-heading-m">Capture photos</h2>
+      <p class="govuk-hint">Add at least one slot. Title and piece count are optional seeds for new jigsaws.</p>
+      <form id="mobile-intake-form" novalidate>
+        <div class="govuk-form-group">
+          <label class="govuk-label" for="mobile-intake-title">Optional title</label>
+          <input id="mobile-intake-title" name="title" class="govuk-input" type="text" maxlength="255" autocomplete="off">
+        </div>
+        <div class="govuk-form-group">
+          <label class="govuk-label" for="mobile-intake-piece-count">Optional piece count</label>
+          <input id="mobile-intake-piece-count" name="piece_count" class="govuk-input govuk-input--width-10" type="number" min="1" step="1" inputmode="numeric" autocomplete="off">
+        </div>
+
+        <div class="app-mobile-intake-grid">
+          <div class="app-mobile-intake-slot" data-slot-key="box_front">
+            <h3 class="govuk-heading-s govuk-!-margin-bottom-1">Box front</h3>
+            <input id="mobile-intake-box-front" class="govuk-file-upload" type="file" accept="image/*" capture="environment" data-slot-file="box_front">
+            <div class="app-mobile-intake-preview" data-slot-preview="box_front">No photo selected.</div>
+          </div>
+
+          <div class="app-mobile-intake-slot" data-slot-key="box_side">
+            <h3 class="govuk-heading-s govuk-!-margin-bottom-1">Box side</h3>
+            <input id="mobile-intake-box-side" class="govuk-file-upload" type="file" accept="image/*" capture="environment" data-slot-file="box_side">
+            <div class="app-mobile-intake-preview" data-slot-preview="box_side">No photo selected.</div>
+          </div>
+
+          <div class="app-mobile-intake-slot" data-slot-key="box_back">
+            <h3 class="govuk-heading-s govuk-!-margin-bottom-1">Box back</h3>
+            <input id="mobile-intake-box-back" class="govuk-file-upload" type="file" accept="image/*" capture="environment" data-slot-file="box_back">
+            <div class="app-mobile-intake-preview" data-slot-preview="box_back">No photo selected.</div>
+          </div>
+
+          <div class="app-mobile-intake-slot" data-slot-key="completed">
+            <h3 class="govuk-heading-s govuk-!-margin-bottom-1">Completed</h3>
+            <input id="mobile-intake-completed" class="govuk-file-upload" type="file" accept="image/*" capture="environment" data-slot-file="completed">
+            <div class="app-mobile-intake-preview" data-slot-preview="completed">No photo selected.</div>
+          </div>
+        </div>
+
+        <button id="mobile-intake-submit" type="submit" class="govuk-button govuk-!-margin-bottom-0" data-module="govuk-button">Process capture</button>
+      </form>
+    </section>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/mobile-intake.js') }}"></script>
+{% endblock %}

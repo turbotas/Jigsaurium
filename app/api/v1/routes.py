@@ -27,6 +27,7 @@ from app.image_embeddings import (
     compute_content_sha256,
     compute_image_embedding,
     cosine_similarity,
+    embedding_runtime_error,
 )
 from app.models import (
     AiUsageEvent,
@@ -1799,6 +1800,14 @@ def _refresh_image_embedding_for_image_id(app, image_id):
 
 def _queue_image_embedding_refresh(image_id):
     if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
+        return
+
+    runtime_error = embedding_runtime_error()
+    if runtime_error is not None:
+        current_app.logger.warning(
+            "image_embedding_refresh_skipped_runtime_unavailable",
+            extra={"image_id": int(image_id), "error": runtime_error},
+        )
         return
 
     app = current_app._get_current_object()
@@ -3895,6 +3904,15 @@ def create_image_embedding_backfill_job():
     if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
         return _error_response("conflict", "Image embeddings are disabled in server configuration.", 409)
 
+    runtime_error = embedding_runtime_error()
+    if runtime_error is not None:
+        return _error_response(
+            "conflict",
+            "Image embeddings runtime dependencies are unavailable.",
+            409,
+            [{"field": "image_embeddings", "issue": runtime_error}],
+        )
+
     db_session = get_session()
     job = _create_image_embedding_backfill_job(db_session)
     return _success_response({"job": _serialize_image_embedding_job(job)}, status_code=202)
@@ -3924,6 +3942,15 @@ def get_image_embedding_backfill_job(job_id):
 def get_image_match_suggestions(image_id):
     if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
         return _error_response("conflict", "Image embeddings are disabled in server configuration.", 409)
+
+    runtime_error = embedding_runtime_error()
+    if runtime_error is not None:
+        return _error_response(
+            "conflict",
+            "Image embeddings runtime dependencies are unavailable.",
+            409,
+            [{"field": "image_embeddings", "issue": runtime_error}],
+        )
 
     raw_limit = request.args.get("limit", "3")
     try:

@@ -261,8 +261,10 @@
   - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}` returns aggregate job status and counters (`queued` / `running` / `completed` / `failed`).
   - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}/items` returns per-image outcomes with list pagination.
   - `POST /api/v1/image-embeddings/backfill` is admin-only and queues an image-embedding backfill job across all stored images.
+  - `POST /api/v1/image-embeddings/backfill` returns `409` when embedding runtime dependencies are unavailable (for example incompatible `transformers` install).
   - `GET /api/v1/image-embeddings/backfill/{job_id}` is admin-only and returns backfill job status/counters.
   - `GET /api/v1/image-library/images/{image_id}/match-suggestions` is admin-only and returns top visual-match jigsaw candidates for one unassigned `Completed` image.
+  - `GET /api/v1/image-library/images/{image_id}/match-suggestions` returns `409` when embedding runtime dependencies are unavailable.
   - Each match candidate includes `reference_image` URLs (`content_url`, `thumbnail_url`, `preview_url`) so the admin UI can show side-by-side visual confirmation.
   - Visual-match suggestions require image embeddings to be enabled in server configuration and use cosine similarity against reference-tagged jigsaw images.
   - Embeddings are model-keyed (`model_name@revision`); when model key changes, backfill should be run before relying on suggestions.
