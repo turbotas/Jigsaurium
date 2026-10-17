@@ -14,10 +14,12 @@ from secrets import token_urlsafe
 from functools import wraps
 
 from flask import Blueprint, current_app, g, request, session
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import case, func, or_, select
 from sqlalchemy import update as sa_update
-from sqlalchemy.exc import DataError
+from sqlalchemy.exc import DataError, OperationalError
 
 from app.db import get_session
 from app.image_embeddings import (
@@ -287,29 +289,117 @@ def _upsert_image_embedding_for_image(db_session, image, *, model_name, model_re
         model_revision=model_revision,
         allow_test_fallback=allow_test_fallback,
     )
+    now = datetime.now(timezone.utc)
+    vector_json = json.dumps(vector)
+    vector_dim = len(vector)
     source_content_sha256 = compute_content_sha256(image.image_data)
 
-    embedding = db_session.execute(
+    insert_values = {
+        "image_id": image.id,
+        "model_key": model_key,
+        "vector_json": vector_json,
+        "vector_dim": vector_dim,
+        "source_content_sha256": source_content_sha256,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    engine_bind = db_session.get_bind()
+    dialect_name = str(getattr(engine_bind.dialect, "name", "") or "").lower()
+    if dialect_name in {"mysql", "mariadb"}:
+        insert_stmt = mysql_insert(ImageEmbedding).values(**insert_values)
+        upsert_stmt = insert_stmt.on_duplicate_key_update(
+            vector_json=insert_stmt.inserted.vector_json,
+            vector_dim=insert_stmt.inserted.vector_dim,
+            source_content_sha256=insert_stmt.inserted.source_content_sha256,
+            updated_at=insert_stmt.inserted.updated_at,
+        )
+    elif dialect_name == "sqlite":
+        insert_stmt = sqlite_insert(ImageEmbedding).values(**insert_values)
+        upsert_stmt = insert_stmt.on_conflict_do_update(
+            index_elements=[ImageEmbedding.image_id, ImageEmbedding.model_key],
+            set_={
+                "vector_json": insert_stmt.excluded.vector_json,
+                "vector_dim": insert_stmt.excluded.vector_dim,
+                "source_content_sha256": insert_stmt.excluded.source_content_sha256,
+                "updated_at": insert_stmt.excluded.updated_at,
+            },
+        )
+    else:
+        rows_updated = db_session.execute(
+            sa_update(ImageEmbedding)
+            .where(ImageEmbedding.image_id == image.id, ImageEmbedding.model_key == model_key)
+            .values(
+                vector_json=vector_json,
+                vector_dim=vector_dim,
+                source_content_sha256=source_content_sha256,
+                updated_at=now,
+            )
+        )
+        if not rows_updated.rowcount:
+            db_session.add(ImageEmbedding(**insert_values))
+        db_session.flush()
+        return db_session.execute(
+            select(ImageEmbedding)
+            .where(ImageEmbedding.image_id == image.id, ImageEmbedding.model_key == model_key)
+            .limit(1)
+        ).scalar_one_or_none()
+
+    db_session.execute(upsert_stmt)
+    db_session.flush()
+    return db_session.execute(
         select(ImageEmbedding)
         .where(ImageEmbedding.image_id == image.id, ImageEmbedding.model_key == model_key)
         .limit(1)
     ).scalar_one_or_none()
-    if embedding is None:
-        embedding = ImageEmbedding(
-            image_id=image.id,
-            model_key=model_key,
-            vector_json=json.dumps(vector),
-            vector_dim=len(vector),
-            source_content_sha256=source_content_sha256,
-        )
-        db_session.add(embedding)
-    else:
-        embedding.vector_json = json.dumps(vector)
-        embedding.vector_dim = len(vector)
-        embedding.source_content_sha256 = source_content_sha256
 
-    db_session.flush()
-    return embedding
+
+def _db_error_code(error):
+    original = getattr(error, "orig", None)
+    args = getattr(original, "args", ())
+    if not args:
+        return None
+    try:
+        return int(args[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_retryable_image_embedding_error(error):
+    if not isinstance(error, OperationalError):
+        return False
+    return _db_error_code(error) in {1020, 1205, 1213}
+
+
+def _refresh_image_embedding_with_retry(
+    db_session,
+    *,
+    image_id,
+    model_name,
+    model_revision,
+    model_key,
+    allow_test_fallback,
+    max_attempts=3,
+):
+    for attempt_index in range(max_attempts):
+        image = db_session.get(JigsawImage, int(image_id))
+        if image is None:
+            return None
+
+        try:
+            return _upsert_image_embedding_for_image(
+                db_session,
+                image,
+                model_name=model_name,
+                model_revision=model_revision,
+                model_key=model_key,
+                allow_test_fallback=allow_test_fallback,
+            )
+        except OperationalError as error:
+            db_session.rollback()
+            if (not _is_retryable_image_embedding_error(error)) or (attempt_index >= (max_attempts - 1)):
+                raise
+    return None
 
 
 def _process_image_embedding_job(app, job_id):
@@ -355,15 +445,18 @@ def _process_image_embedding_job(app, job_id):
                 continue
 
             try:
-                _upsert_image_embedding_for_image(
+                refreshed = _refresh_image_embedding_with_retry(
                     db_session,
-                    image,
+                    image_id=image.id,
                     model_name=model_name,
                     model_revision=model_revision,
                     model_key=model_key,
                     allow_test_fallback=allow_test_fallback,
                 )
-                job.succeeded_items += 1
+                if refreshed is None:
+                    job.failed_items += 1
+                else:
+                    job.succeeded_items += 1
             except Exception as error:
                 job.failed_items += 1
                 if len(errors) < 20:
@@ -1186,6 +1279,14 @@ def _parse_optional_iso_datetime(value, field_name):
     return parsed, None
 
 
+def _normalize_datetime_to_utc(value):
+    if value is None or not isinstance(value, datetime):
+        return value
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _validate_password(value, *, require_min_length=False):
     if not isinstance(value, str) or not value:
         return None, _error_response(
@@ -1682,21 +1783,18 @@ def _refresh_image_embedding_for_image_id(app, image_id):
             return
 
         db_session = get_session()
-        image = db_session.get(JigsawImage, int(image_id))
-        if image is None:
-            return
-
         model_name, model_revision, model_key = _get_embedding_model_config()
         allow_test_fallback = bool(current_app.config.get("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", False))
-        _upsert_image_embedding_for_image(
+        refreshed = _refresh_image_embedding_with_retry(
             db_session,
-            image,
+            image_id=int(image_id),
             model_name=model_name,
             model_revision=model_revision,
             model_key=model_key,
             allow_test_fallback=allow_test_fallback,
         )
-        db_session.commit()
+        if refreshed is not None:
+            db_session.commit()
 
 
 def _queue_image_embedding_refresh(image_id):
@@ -1828,7 +1926,7 @@ def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger):
     if existing_entry is not None:
         return None
 
-    completed_at = image.captured_at or datetime.now(timezone.utc)
+    completed_at = _normalize_datetime_to_utc(image.captured_at) or datetime.now(timezone.utc)
     source_label = "image_exif" if image.captured_at is not None else "fallback_now"
     notes = f"Auto-created from completed image ({source_label})."
 
@@ -1842,9 +1940,7 @@ def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger):
     db_session.add(entry)
     db_session.flush()
 
-    existing_last_completed_at = jigsaw.last_completed_at
-    if existing_last_completed_at is not None and existing_last_completed_at.tzinfo is None:
-        existing_last_completed_at = existing_last_completed_at.replace(tzinfo=timezone.utc)
+    existing_last_completed_at = _normalize_datetime_to_utc(jigsaw.last_completed_at)
     if existing_last_completed_at is None or completed_at > existing_last_completed_at:
         jigsaw.last_completed_at = completed_at
 
@@ -5081,6 +5177,7 @@ def create_diary_entry(jigsaw_id):
         return error
     if completed_at is None:
         completed_at = datetime.now(timezone.utc)
+    completed_at = _normalize_datetime_to_utc(completed_at)
 
     difficulty, error = _parse_optional_difficulty(payload.get("difficulty"))
     if error is not None:
@@ -5101,9 +5198,7 @@ def create_diary_entry(jigsaw_id):
     db_session.add(entry)
     db_session.flush()
 
-    existing_last_completed_at = jigsaw.last_completed_at
-    if existing_last_completed_at is not None and existing_last_completed_at.tzinfo is None:
-        existing_last_completed_at = existing_last_completed_at.replace(tzinfo=timezone.utc)
+    existing_last_completed_at = _normalize_datetime_to_utc(jigsaw.last_completed_at)
     if existing_last_completed_at is None or completed_at > existing_last_completed_at:
         jigsaw.last_completed_at = completed_at
 

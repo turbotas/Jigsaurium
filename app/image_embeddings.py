@@ -43,7 +43,7 @@ def _load_clip_model(model_name, model_revision):
         if _MODEL_CACHE["model_key"] == model_key and _MODEL_CACHE["processor"] is not None and _MODEL_CACHE["model"] is not None:
             return _MODEL_CACHE["processor"], _MODEL_CACHE["model"]
 
-        processor = CLIPProcessor.from_pretrained(model_name, revision=model_revision)
+        processor = CLIPProcessor.from_pretrained(model_name, revision=model_revision, use_fast=False)
         model = CLIPModel.from_pretrained(model_name, revision=model_revision)
         model.eval()
 

@@ -235,6 +235,40 @@
   width: min(100%, 12rem);
 }
 
+.app-image-library-table .app-image-tag-select {
+  min-width: 0;
+  width: min(100%, 10rem);
+}
+
+.app-jigsaw-images-toggle {
+  white-space: nowrap;
+}
+
+.app-jigsaw-images-row__cell {
+  background: #f8f8f8;
+}
+
+.app-jigsaw-images-row__heading {
+  margin: 0 0 8px;
+}
+
+.app-jigsaw-images-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.app-jigsaw-images-grid__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-jigsaw-images-grid__meta {
+  margin: 0;
+  color: #505a5f;
+}
+
 .app-image-actions .govuk-button {
   white-space: nowrap;
 }

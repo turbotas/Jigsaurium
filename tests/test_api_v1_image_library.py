@@ -5,7 +5,9 @@ import json
 import zipfile
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
+from app.api.v1 import routes
 from app.db import get_session
 from app.models import AiUsageEvent, ImageEmbedding, Jigsaw, JigsawImage, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
@@ -238,6 +240,67 @@ def test_admin_can_run_image_embedding_backfill_job(client, seeded_image_library
         db_session = get_session()
         embedding_count = db_session.query(ImageEmbedding).count()
         assert embedding_count >= 2
+
+
+@pytest.mark.functional
+def test_refresh_image_embedding_retries_retryable_db_errors(client, seeded_image_library_data, app, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    app.config["IMAGE_EMBEDDINGS_ENABLED"] = True
+    app.config["IMAGE_EMBEDDINGS_INLINE"] = True
+    app.config["IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK"] = True
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(_make_png_bytes(color=(90, 90, 90))), "retry-test.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    original_upsert = routes._upsert_image_embedding_for_image
+    calls = {"count": 0}
+
+    class _FakeMysqlError(Exception):
+        def __init__(self, errno, message):
+            self.args = (errno, message)
+
+    def flaky_upsert(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OperationalError(
+                statement="INSERT INTO image_embeddings (...) VALUES (...)",
+                params={},
+                orig=_FakeMysqlError(1020, "Record has changed since last read"),
+            )
+        return original_upsert(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "_upsert_image_embedding_for_image", flaky_upsert)
+
+    with app.app_context():
+        db_session = get_session()
+        model_name, model_revision, model_key = routes._get_embedding_model_config()
+        refreshed = routes._refresh_image_embedding_with_retry(
+            db_session,
+            image_id=image_id,
+            model_name=model_name,
+            model_revision=model_revision,
+            model_key=model_key,
+            allow_test_fallback=True,
+            max_attempts=3,
+        )
+        db_session.commit()
+
+        assert refreshed is not None
+        assert calls["count"] == 2
+        embedding = (
+            db_session.query(ImageEmbedding)
+            .filter(ImageEmbedding.image_id == image_id, ImageEmbedding.model_key == model_key)
+            .one_or_none()
+        )
+        assert embedding is not None
 
 
 @pytest.mark.functional
@@ -1023,6 +1086,47 @@ def test_assigning_completed_image_creates_diary_entry(client, seeded_image_libr
     assert len(entries) == 1
     assert entries[0]["source_image_id"] == image_id
     assert entries[0]["completed_at"].startswith("2022-09-10T08:45:00")
+
+
+@pytest.mark.functional
+def test_assigning_completed_image_with_naive_capture_time_does_not_crash(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "tag": "Completed",
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"m" * 24), "completed-naive.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    with app.app_context():
+        db_session = get_session()
+        image = db_session.get(JigsawImage, image_id)
+        jigsaw = db_session.get(Jigsaw, seeded_image_library_data["jigsaw_id"])
+        assert image is not None
+        assert jigsaw is not None
+
+        image.captured_at = datetime(2023, 1, 2, 3, 4, 5)
+        jigsaw.last_completed_at = datetime(2022, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        db_session.commit()
+
+    assign_response = client.patch(
+        f"/api/v1/image-library/images/{image_id}/assign",
+        headers=_csrf_headers(),
+        json={"jigsaw_id": seeded_image_library_data["jigsaw_id"]},
+    )
+    assert assign_response.status_code == 200
+
+    diary_response = client.get(f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/diary-entries")
+    assert diary_response.status_code == 200
+    entries = diary_response.get_json()["data"]
+    assert len(entries) == 1
+    assert entries[0]["source_image_id"] == image_id
 
 
 @pytest.mark.functional

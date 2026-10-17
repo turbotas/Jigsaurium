@@ -60,6 +60,7 @@
     bulkCreateJobPollTimer: null,
     imageEmbeddingBackfillJobId: null,
     imageEmbeddingBackfillPollTimer: null,
+    jigsawExpandedImageRowsById: {},
     tableSorts: createDefaultTableSortState(),
     pagination: {
       jigsaws: 1,
@@ -839,6 +840,67 @@
     });
 
     return preferredByJigsawId;
+  }
+
+  function compareJigsawAssignedImages(left, right) {
+    const leftPriority = imageTagPriority(left?.tag);
+    const rightPriority = imageTagPriority(right?.tag);
+    if (leftPriority !== rightPriority) {
+      return leftPriority - rightPriority;
+    }
+
+    const leftId = Number(left?.id || 0);
+    const rightId = Number(right?.id || 0);
+    if (leftId !== rightId) {
+      return rightId - leftId;
+    }
+
+    const leftCreatedAt = String(left?.created_at || "");
+    const rightCreatedAt = String(right?.created_at || "");
+    return rightCreatedAt.localeCompare(leftCreatedAt);
+  }
+
+  function buildAssignedJigsawImagesByJigsawId(images) {
+    const imagesByJigsawId = new Map();
+    if (!Array.isArray(images)) {
+      return imagesByJigsawId;
+    }
+
+    images.forEach((image) => {
+      const jigsawId = Number(image?.jigsaw_id || 0);
+      if (!jigsawId || !image?.content_url) {
+        return;
+      }
+
+      const existing = imagesByJigsawId.get(jigsawId);
+      if (existing) {
+        existing.push(image);
+      } else {
+        imagesByJigsawId.set(jigsawId, [image]);
+      }
+    });
+
+    imagesByJigsawId.forEach((entries, jigsawId) => {
+      imagesByJigsawId.set(jigsawId, [...entries].sort(compareJigsawAssignedImages));
+    });
+    return imagesByJigsawId;
+  }
+
+  function getAdditionalAssignedImagesForJigsaw(jigsawId, preferredImage, imagesByJigsawId) {
+    const assignedImages = imagesByJigsawId.get(Number(jigsawId)) || [];
+    if (assignedImages.length === 0) {
+      return [];
+    }
+
+    const preferredImageId = Number(preferredImage?.id || 0);
+    if (preferredImageId > 0) {
+      return assignedImages.filter((image) => Number(image?.id || 0) !== preferredImageId);
+    }
+
+    if (assignedImages.length <= 1) {
+      return [];
+    }
+    return assignedImages.slice(1);
   }
 
   function toLocalTimestamp(value) {
@@ -1673,12 +1735,16 @@
     const sortedJigsawsRows = sortRowsForTable(filteredJigsaws, "jigsaws");
     const pageResult = paginateItems(sortedJigsawsRows, "jigsaws");
     const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.jigsawThumbnailImages);
+    const assignedImagesByJigsawId = buildAssignedJigsawImagesByJigsawId(state.imageLibraryImages);
 
     pageResult.rows.forEach((jigsaw) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
       const preferredImage = preferredImagesByJigsawId.get(Number(jigsaw.id));
+      const additionalImages = getAdditionalAssignedImagesForJigsaw(jigsaw.id, preferredImage, assignedImagesByJigsawId);
+      const additionalImageCount = additionalImages.length;
+      const isExpanded = Boolean(state.jigsawExpandedImageRowsById?.[Number(jigsaw.id)]);
       row.appendChild(
         buildThumbnailCell(preferredImage?.thumbnail_url || preferredImage?.content_url, {
           altText: `Thumbnail for ${jigsaw.title || "jigsaw"}`,
@@ -1696,6 +1762,18 @@
 
       const controlsWrap = document.createElement("div");
       controlsWrap.className = "app-inline-controls";
+
+      if (additionalImageCount > 0) {
+        const toggleImagesButton = document.createElement("button");
+        toggleImagesButton.type = "button";
+        toggleImagesButton.className = "govuk-button govuk-button--secondary app-inline-button app-jigsaw-images-toggle";
+        toggleImagesButton.setAttribute("data-module", "govuk-button");
+        toggleImagesButton.dataset.jigsawImagesToggle = String(jigsaw.id);
+        toggleImagesButton.textContent = isExpanded
+          ? `Hide images (${additionalImageCount})`
+          : `Show images (${additionalImageCount})`;
+        controlsWrap.appendChild(toggleImagesButton);
+      }
 
       const editButton = document.createElement("button");
       editButton.type = "button";
@@ -1733,6 +1811,47 @@
 
       row.appendChild(actionCell);
       tableBody.appendChild(row);
+
+      if (isExpanded && additionalImageCount > 0) {
+        const expandedRow = document.createElement("tr");
+        expandedRow.className = "govuk-table__row app-jigsaw-images-row";
+
+        const expandedCell = document.createElement("td");
+        expandedCell.className = "govuk-table__cell app-jigsaw-images-row__cell";
+        expandedCell.colSpan = 5;
+
+        const heading = document.createElement("p");
+        heading.className = "govuk-body-s app-jigsaw-images-row__heading";
+        heading.textContent = "Other assigned images";
+        expandedCell.appendChild(heading);
+
+        const grid = document.createElement("div");
+        grid.className = "app-jigsaw-images-grid";
+
+        additionalImages.forEach((image) => {
+          const item = document.createElement("div");
+          item.className = "app-jigsaw-images-grid__item";
+
+          const thumbnail = buildThumbnailWidget(image.thumbnail_url || image.content_url, {
+            altText: `${jigsaw.title || "Jigsaw"} image ${image.id}`,
+            previewUrl: image.preview_url || image.content_url,
+            openUrl: image.content_url,
+            widthPx: 120,
+          });
+          item.appendChild(thumbnail);
+
+          const metadata = document.createElement("p");
+          metadata.className = "govuk-body-s app-jigsaw-images-grid__meta";
+          metadata.textContent = image.tag || "untagged";
+          item.appendChild(metadata);
+
+          grid.appendChild(item);
+        });
+
+        expandedCell.appendChild(grid);
+        expandedRow.appendChild(expandedCell);
+        tableBody.appendChild(expandedRow);
+      }
     });
 
     renderPagination(elements.jigsawsPagination, "jigsaws", pageResult);
@@ -2123,7 +2242,7 @@
       tagControls.className = "app-inline-controls app-image-actions__row";
 
       const tagSelect = document.createElement("select");
-      tagSelect.className = "govuk-select";
+      tagSelect.className = "govuk-select app-image-tag-select";
       tagSelect.dataset.imageTagSelect = String(image.id);
 
       const normalizedCurrentTag = normalizeImageTagLabel(image.tag);
@@ -4855,6 +4974,14 @@
     }
 
     const editJigsawButton = event.target.closest("[data-jigsaw-edit]");
+    const toggleJigsawImagesButton = event.target.closest("[data-jigsaw-images-toggle]");
+    if (toggleJigsawImagesButton) {
+      event.preventDefault();
+      const jigsawId = Number(toggleJigsawImagesButton.getAttribute("data-jigsaw-images-toggle"));
+      toggleJigsawInventoryImagesRow(jigsawId);
+      return;
+    }
+
     if (editJigsawButton) {
       event.preventDefault();
       clearFeedback();
@@ -5201,6 +5328,34 @@
     state.jigsawFilterWithoutDiaryEntries = Boolean(event.currentTarget?.checked);
     state.pagination.jigsaws = 1;
     renderJigsaws(state.jigsaws);
+  }
+
+  function toggleJigsawInventoryImagesRow(jigsawId) {
+    const normalizedJigsawId = Number(jigsawId || 0);
+    if (normalizedJigsawId <= 0) {
+      return;
+    }
+
+    const previousScrollY = Number(window.scrollY || window.pageYOffset || 0);
+    const jigsawsTableWrap = document.getElementById("jigsaws-table")?.closest(".table-scroll-wrap") || null;
+    const previousScrollLeft = jigsawsTableWrap ? Number(jigsawsTableWrap.scrollLeft || 0) : 0;
+
+    state.jigsawExpandedImageRowsById[normalizedJigsawId] = !Boolean(state.jigsawExpandedImageRowsById[normalizedJigsawId]);
+    renderJigsaws(state.jigsaws);
+
+    window.requestAnimationFrame(() => {
+      if (jigsawsTableWrap) {
+        jigsawsTableWrap.scrollLeft = previousScrollLeft;
+      }
+      window.scrollTo({ top: previousScrollY });
+
+      const toggledButton = elements.jigsawsTableBody?.querySelector(
+        `[data-jigsaw-images-toggle="${normalizedJigsawId}"]`,
+      );
+      if (toggledButton instanceof HTMLButtonElement) {
+        toggledButton.focus({ preventScroll: true });
+      }
+    });
   }
 
   function handleImageLibraryFilterChange(event) {
