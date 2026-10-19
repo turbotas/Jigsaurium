@@ -9,6 +9,6 @@
   "private": true,
   "license": "UNLICENSED",
   "devDependencies": {
-    "govuk-frontend": "6.2.0"
+    "govuk-frontend": "6.6.0"
   }
 }

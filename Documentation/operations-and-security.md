@@ -16,6 +16,7 @@
 
 - Use `requirements/prod.txt` for production/runtime-only installs.
 - Use `requirements/dev.txt` for developer environments and test execution.
+- Use `requirements/known-good-dev.txt` and `requirements/known-good-prod.txt` as constraints files for reproducible installs.
 - `requirements.txt` points to production dependencies for compatibility.
 
 - `DATABASE_URL`: SQLAlchemy MariaDB connection string.
@@ -23,6 +24,7 @@
 - `APP_ENV`: one of `dev`, `test`, `prod`.
 - `LOG_LEVEL`: application logging level.
 - `CANONICAL_HOST`: expected public host per environment.
+- `MAX_CONTENT_LENGTH_BYTES`: optional hard cap for inbound request payload size (defaults to `33554432` / 32 MiB).
 - `TRUSTED_PROXY_CIDRS`: comma-separated proxy CIDRs for header trust.
 - `TRUSTED_PROXY_HOPS`: optional fixed proxy depth if CIDR is not used.
 - `AI_ENABLED`: enable/disable AI create-from-image endpoint.
@@ -90,6 +92,10 @@
 - Bootstrap initial admin credentials via `scripts/bootstrap_admin.py`; do not hardcode credentials in source or env templates.
 - Input validation at API boundary and domain service layers.
 - Least-privilege role enforcement at API/service layer.
+- Security response headers are applied to all responses (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and `Cross-Origin-Resource-Policy`).
+- Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` outside dev.
+- Login endpoint enforces basic anti-brute-force throttling per client IP and email (15-minute block after repeated failures in the same window).
+- Image upload endpoints accept raster image MIME types only (`image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`); SVG and other active/image-document formats are rejected.
 
 ## Release Checks (manual now, automated later)
 

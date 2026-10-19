@@ -14,6 +14,7 @@
 
   const titleInput = document.getElementById("mobile-intake-title");
   const pieceCountInput = document.getElementById("mobile-intake-piece-count");
+  const commentInput = document.getElementById("mobile-intake-comment");
   const submitButton = document.getElementById("mobile-intake-submit");
   const statusPanel = document.getElementById("mobile-intake-status");
   const statusText = document.getElementById("mobile-intake-status-text");
@@ -136,6 +137,9 @@
     if (pieceCountInput) {
       pieceCountInput.disabled = isSubmitting;
     }
+    if (commentInput) {
+      commentInput.disabled = isSubmitting;
+    }
   }
 
   async function parseJsonSafe(response) {
@@ -239,9 +243,12 @@
     return payload;
   }
 
-  async function uploadImageLibraryItem(file, tag) {
+  async function uploadImageLibraryItem(file, tag, comment) {
     const formData = new FormData();
     formData.append("tag", tag);
+    if (comment) {
+      formData.append("comment", comment);
+    }
     formData.append("files", file, file.name || "capture.jpg");
     return apiRequest("/api/v1/image-library/uploads", {
       method: "POST",
@@ -249,9 +256,12 @@
     });
   }
 
-  async function uploadJigsawImage(jigsawId, file, tag) {
+  async function uploadJigsawImage(jigsawId, file, tag, comment) {
     const formData = new FormData();
     formData.append("tag", tag);
+    if (comment) {
+      formData.append("comment", comment);
+    }
     formData.append("image", file, file.name || "capture.jpg");
     return apiRequest(`/api/v1/jigsaws/${Number(jigsawId)}/images`, {
       method: "POST",
@@ -302,6 +312,7 @@
 
     const selectedBoxEntries = entries.filter((entry) => boxSlotKeys.includes(entry.slotKey));
     const completedEntry = entries.find((entry) => entry.slotKey === "completed") || null;
+    const commentText = String(commentInput?.value || "").trim();
 
     setSubmitting(true);
     setStatus("Starting mobile capture workflow...");
@@ -309,7 +320,7 @@
     try {
       if (selectedBoxEntries.length === 0 && completedEntry) {
         setStatus("Uploading completed image to the unassigned image library...");
-        const uploadPayload = await uploadImageLibraryItem(completedEntry.file, slotTagMap.completed);
+        const uploadPayload = await uploadImageLibraryItem(completedEntry.file, slotTagMap.completed, commentText);
         const createdCount = Number(uploadPayload?.data?.created_count || 0);
         const skippedCount = Number(uploadPayload?.data?.skipped_count || 0);
         setStatus(`Completed image stored as unassigned. Added ${createdCount} image(s), skipped ${skippedCount}.`);
@@ -332,13 +343,15 @@
       if (completedEntry) {
         uploadQueue.push(completedEntry);
       }
+      const hasCompleted = Boolean(completedEntry);
 
       const duplicateWarnings = [];
       for (let index = 0; index < uploadQueue.length; index += 1) {
         const entry = uploadQueue[index];
         const tag = slotTagMap[entry.slotKey];
+        const attachComment = commentText && (entry.slotKey === "completed" || (!hasCompleted && index === 0));
         setStatus(`Uploading ${index + 1}/${uploadQueue.length}: ${tag}...`);
-        const payload = await uploadJigsawImage(jigsawId, entry.file, tag);
+        const payload = await uploadJigsawImage(jigsawId, entry.file, tag, attachComment ? commentText : "");
         const image = payload?.data || {};
         if (Number(image?.jigsaw_id || 0) !== Number(jigsawId)) {
           duplicateWarnings.push(tag);

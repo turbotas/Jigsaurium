@@ -3,6 +3,7 @@ import base64
 import hashlib
 import mimetypes
 import threading
+import time
 import re
 import urllib.error
 import urllib.request
@@ -10,7 +11,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
-from secrets import token_urlsafe
+from secrets import compare_digest, token_urlsafe
 from functools import wraps
 
 from flask import Blueprint, current_app, g, request, session
@@ -49,11 +50,15 @@ from app.models.loan import LoanStatus
 
 try:  # pragma: no cover - optional dependency fallback
     from PIL import Image, ImageOps, UnidentifiedImageError
+    from PIL import DecompressionBombError
 except ImportError:  # pragma: no cover
     Image = None
     ImageOps = None
 
     class UnidentifiedImageError(Exception):
+        pass
+
+    class DecompressionBombError(Exception):
         pass
 
 
@@ -74,7 +79,9 @@ JIGSAW_DIMENSIONS_MAX_LENGTH = 64
 JIGSAW_TAGS_MAX_LENGTH = 512
 JIGSAW_DESCRIPTION_MAX_LENGTH = 4000
 JIGSAW_IMAGE_TAG_MAX_LENGTH = 64
+JIGSAW_IMAGE_COMMENT_MAX_LENGTH = 2000
 JIGSAW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+JIGSAW_IMAGE_MAX_PIXELS = 40_000_000
 DEFAULT_JIGSAW_IMAGE_TAG = "untagged"
 IMAGE_BROWSER_TAG_BOX = "Box"
 IMAGE_BROWSER_TAG_COMPLETED = "Completed"
@@ -84,6 +91,16 @@ IMAGE_BROWSER_TAG_BOX_FRONT = "Box front"
 IMAGE_BROWSER_TAG_REFERENCE = "Reference"
 IMAGE_BROWSER_TAG_IN_PROGRESS = "In progress"
 ZIP_UPLOAD_MIME_TYPES = {"application/zip", "application/x-zip-compressed", "multipart/x-zip"}
+ALLOWED_RASTER_IMAGE_MIME_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/pjpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/heic",
+    "image/heif",
+}
 AI_IMAGE_CREATE_OPERATION = "image_to_jigsaw"
 AI_JIGSAW_ENRICH_OPERATION = "jigsaw_enrich_from_images"
 AI_USAGE_STATUS_SUCCESS = "success"
@@ -112,6 +129,15 @@ IMAGE_EMBEDDING_JOB_STATUS_QUEUED = "queued"
 IMAGE_EMBEDDING_JOB_STATUS_RUNNING = "running"
 IMAGE_EMBEDDING_JOB_STATUS_COMPLETED = "completed"
 IMAGE_EMBEDDING_JOB_STATUS_FAILED = "failed"
+
+LOGIN_RATE_LIMIT_WINDOW_SECONDS = 15 * 60
+LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 10
+LOGIN_RATE_LIMIT_BLOCK_SECONDS = 15 * 60
+_failed_login_attempts = {}
+_failed_login_attempts_lock = threading.Lock()
+
+if Image is not None:
+    Image.MAX_IMAGE_PIXELS = JIGSAW_IMAGE_MAX_PIXELS
 
 
 class AiProviderRequestError(RuntimeError):
@@ -280,6 +306,12 @@ def _queue_image_embedding_job(job_id):
     _start_image_embedding_job_thread(current_app._get_current_object(), int(job_id))
 
 
+def _allow_image_embeddings_test_fallback():
+    return bool(current_app.config.get("TESTING", False)) and bool(
+        current_app.config.get("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", False)
+    )
+
+
 def _upsert_image_embedding_for_image(db_session, image, *, model_name, model_revision, model_key, allow_test_fallback):
     if image is None:
         return None
@@ -407,7 +439,7 @@ def _process_image_embedding_job(app, job_id):
     with app.app_context():
         db_session = get_session()
         model_name, model_revision, model_key = _get_embedding_model_config()
-        allow_test_fallback = bool(current_app.config.get("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", False))
+        allow_test_fallback = _allow_image_embeddings_test_fallback()
 
         rows_updated = db_session.execute(
             sa_update(ImageEmbeddingJob)
@@ -851,6 +883,7 @@ def _serialize_jigsaw_image(image):
         "preview_url": f"/api/v1/images/{image.id}/content?variant={IMAGE_VARIANT_PREVIEW}",
         "captured_at": image.captured_at.isoformat() if image.captured_at else None,
         "captured_at_source": image.captured_at_source,
+        "user_comment": image.user_comment,
         "created_at": image.created_at.isoformat() if image.created_at else None,
     }
 
@@ -864,6 +897,7 @@ def _serialize_jigsaw_image_fields(
     mime_type,
     captured_at,
     captured_at_source,
+    user_comment,
     created_at,
 ):
     return {
@@ -877,6 +911,7 @@ def _serialize_jigsaw_image_fields(
         "preview_url": f"/api/v1/images/{int(image_id)}/content?variant={IMAGE_VARIANT_PREVIEW}",
         "captured_at": captured_at.isoformat() if captured_at else None,
         "captured_at_source": captured_at_source,
+        "user_comment": user_comment,
         "created_at": created_at.isoformat() if created_at else None,
     }
 
@@ -1354,10 +1389,71 @@ def _validate_csrf_for_request():
 
     expected_token = session.get("csrf_token")
     provided_token = request.headers.get("X-CSRF-Token")
-    if expected_token is None or provided_token != expected_token:
+    if (
+        not isinstance(expected_token, str)
+        or not isinstance(provided_token, str)
+        or not compare_digest(provided_token, expected_token)
+    ):
         return _error_response("forbidden", "CSRF token is missing or invalid.", 403)
 
     return None
+
+
+def _login_rate_limit_key(email):
+    client_ip = str(request.remote_addr or "unknown")
+    return f"{client_ip}|{email}"
+
+
+def _check_login_rate_limit(email):
+    now = time.time()
+    key = _login_rate_limit_key(email)
+    with _failed_login_attempts_lock:
+        state = _failed_login_attempts.get(key)
+        if not state:
+            return None
+
+        blocked_until = float(state.get("blocked_until", 0) or 0)
+        if blocked_until > now:
+            retry_after_seconds = max(1, int(blocked_until - now))
+            payload, status_code = _error_response(
+                "too_many_requests",
+                "Too many failed login attempts. Please try again later.",
+                429,
+            )
+            return payload, status_code, retry_after_seconds
+
+        window_started_at = float(state.get("window_started_at", 0) or 0)
+        if window_started_at and now - window_started_at > LOGIN_RATE_LIMIT_WINDOW_SECONDS:
+            _failed_login_attempts.pop(key, None)
+    return None
+
+
+def _record_failed_login_attempt(email):
+    now = time.time()
+    key = _login_rate_limit_key(email)
+    with _failed_login_attempts_lock:
+        state = _failed_login_attempts.get(key)
+        if not state or now - float(state.get("window_started_at", 0) or 0) > LOGIN_RATE_LIMIT_WINDOW_SECONDS:
+            state = {"count": 0, "window_started_at": now, "blocked_until": 0}
+
+        state["count"] = int(state.get("count", 0)) + 1
+        if state["count"] >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS:
+            state["blocked_until"] = now + LOGIN_RATE_LIMIT_BLOCK_SECONDS
+            state["count"] = 0
+            state["window_started_at"] = now
+
+        _failed_login_attempts[key] = state
+
+
+def _clear_failed_login_attempts(email):
+    key = _login_rate_limit_key(email)
+    with _failed_login_attempts_lock:
+        _failed_login_attempts.pop(key, None)
+
+
+def reset_runtime_security_state():
+    with _failed_login_attempts_lock:
+        _failed_login_attempts.clear()
 
 
 def require_auth(view_func):
@@ -1651,6 +1747,11 @@ def _is_zip_upload(upload):
     return mime_type in ZIP_UPLOAD_MIME_TYPES or filename.endswith(".zip")
 
 
+def _is_allowed_image_mime_type(mime_type):
+    normalized = str(mime_type or "").strip().lower()
+    return normalized in ALLOWED_RASTER_IMAGE_MIME_TYPES
+
+
 def _is_truthy_form_value(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -1778,6 +1879,16 @@ def _backfill_image_capture_metadata(image, captured_at, captured_at_source, cap
     return True
 
 
+def _backfill_image_user_comment(image, user_comment):
+    comment = str(user_comment or "").strip()
+    if not comment:
+        return False
+    if str(image.user_comment or "").strip():
+        return False
+    image.user_comment = comment
+    return True
+
+
 def _refresh_image_embedding_for_image_id(app, image_id):
     with app.app_context():
         if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
@@ -1785,7 +1896,7 @@ def _refresh_image_embedding_for_image_id(app, image_id):
 
         db_session = get_session()
         model_name, model_revision, model_key = _get_embedding_model_config()
-        allow_test_fallback = bool(current_app.config.get("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", False))
+        allow_test_fallback = _allow_image_embeddings_test_fallback()
         refreshed = _refresh_image_embedding_with_retry(
             db_session,
             image_id=int(image_id),
@@ -1803,7 +1914,7 @@ def _queue_image_embedding_refresh(image_id):
         return
 
     runtime_error = embedding_runtime_error()
-    if runtime_error is not None:
+    if runtime_error is not None and not _allow_image_embeddings_test_fallback():
         current_app.logger.warning(
             "image_embedding_refresh_skipped_runtime_unavailable",
             extra={"image_id": int(image_id), "error": runtime_error},
@@ -1937,7 +2048,12 @@ def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger):
 
     completed_at = _normalize_datetime_to_utc(image.captured_at) or datetime.now(timezone.utc)
     source_label = "image_exif" if image.captured_at is not None else "fallback_now"
-    notes = f"Auto-created from completed image ({source_label})."
+    default_notes = f"Auto-created from completed image ({source_label})."
+    comment = str(image.user_comment or "").strip()
+    if comment:
+        notes = comment
+    else:
+        notes = default_notes
 
     entry = JigsawDiaryEntry(
         jigsaw_id=jigsaw.id,
@@ -1990,6 +2106,7 @@ def _create_jigsaw_image_record(
     captured_at=None,
     captured_at_source=None,
     captured_at_raw=None,
+    user_comment=None,
     variants=None,
 ):
     if variants is None:
@@ -2008,6 +2125,7 @@ def _create_jigsaw_image_record(
         captured_at=captured_at,
         captured_at_source=captured_at_source,
         captured_at_raw=captured_at_raw,
+        user_comment=user_comment,
     )
     db_session.add(image)
     db_session.flush()
@@ -2017,6 +2135,7 @@ def _create_jigsaw_image_record(
 def _extract_zip_image_items(upload):
     issues = []
     images = []
+    total_uncompressed_bytes = 0
 
     zip_bytes = upload.read()
     if not zip_bytes:
@@ -2036,7 +2155,7 @@ def _extract_zip_image_items(upload):
 
                 mime_type, _encoding = mimetypes.guess_type(filename)
                 mime_type = (mime_type or "").lower()
-                if not mime_type.startswith("image/"):
+                if not _is_allowed_image_mime_type(mime_type):
                     issues.append({"filename": filename, "issue": "not an image file"})
                     continue
 
@@ -2052,6 +2171,28 @@ def _extract_zip_image_items(upload):
                         }
                     )
                     continue
+
+                total_uncompressed_bytes += int(entry.file_size or 0)
+                if total_uncompressed_bytes > (JIGSAW_IMAGE_MAX_BYTES * 20):
+                    issues.append(
+                        {
+                            "filename": filename,
+                            "issue": "zip archive contains too much uncompressed image data",
+                        }
+                    )
+                    break
+
+                compressed_size = int(entry.compress_size or 0)
+                if compressed_size > 0:
+                    compression_ratio = float(entry.file_size) / float(compressed_size)
+                    if compression_ratio > 100:
+                        issues.append(
+                            {
+                                "filename": filename,
+                                "issue": "zip entry compression ratio is too high",
+                            }
+                        )
+                        continue
 
                 image_data = archive.read(entry)
                 if len(image_data) > JIGSAW_IMAGE_MAX_BYTES:
@@ -2102,8 +2243,13 @@ def _extract_bulk_image_items(uploads):
             continue
 
         mime_type = (upload.mimetype or "").strip().lower()
-        if not mime_type.startswith("image/"):
-            issues.append({"filename": upload.filename or "(unnamed)", "issue": "must be an image or zip file"})
+        if not _is_allowed_image_mime_type(mime_type):
+            issues.append(
+                {
+                    "filename": upload.filename or "(unnamed)",
+                    "issue": "must be a supported image type or zip file",
+                }
+            )
             continue
 
         image_data = upload.read()
@@ -2188,7 +2334,7 @@ def _build_image_variants(image_data, mime_type):
             preview_image = _resize_image_for_width(normalized, PREVIEW_TARGET_WIDTH)
             thumbnail_mime_type, thumbnail_data = _encode_variant_image(thumbnail_image)
             preview_mime_type, preview_data = _encode_variant_image(preview_image)
-    except (UnidentifiedImageError, OSError, ValueError):
+    except (UnidentifiedImageError, DecompressionBombError, OSError, ValueError):
         return fallback
 
     return {
@@ -2797,14 +2943,28 @@ def auth_login():
     if error is not None:
         return error
 
+    rate_limit_response = _check_login_rate_limit(email)
+    if rate_limit_response is not None:
+        payload, status_code, retry_after_seconds = rate_limit_response
+        response = current_app.response_class(
+            response=json.dumps(payload),
+            status=status_code,
+            mimetype="application/json",
+        )
+        response.headers["Retry-After"] = str(retry_after_seconds)
+        return response
+
     db_session = get_session()
     user = db_session.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if user is None or not user.is_active or not user.check_password(password):
+        _record_failed_login_attempt(email)
         return _error_response("authentication_failed", "Invalid credentials.", 401)
 
+    _clear_failed_login_attempts(email)
     role_names = _get_role_names_for_user_id(user.id)
     csrf_token = token_urlsafe(24)
 
+    session.clear()
     session["user_id"] = user.id
     session["csrf_token"] = csrf_token
     g.current_user = user
@@ -2927,8 +3087,7 @@ def auth_logout():
     )
     db_session.commit()
 
-    session.pop("user_id", None)
-    session.pop("csrf_token", None)
+    session.clear()
 
     g.current_user = None
     g.current_user_roles = []
@@ -3742,6 +3901,12 @@ def create_jigsaw_image(jigsaw_id):
     else:
         tag = _normalize_known_image_tag(tag)
 
+    user_comment, error = _validate_optional_text_field(
+        request.form.get("comment"), field_name="comment", max_length=JIGSAW_IMAGE_COMMENT_MAX_LENGTH
+    )
+    if error is not None:
+        return error
+
     defer_processing = _is_truthy_form_value(request.form.get("defer_processing"))
 
     upload = request.files.get("image")
@@ -3754,12 +3919,12 @@ def create_jigsaw_image(jigsaw_id):
         )
 
     mime_type = (upload.mimetype or "").strip().lower()
-    if not mime_type.startswith("image/"):
+    if not _is_allowed_image_mime_type(mime_type):
         return _error_response(
             "validation_error",
             "Invalid request payload.",
             422,
-            [{"field": "image", "issue": "must be an image content type"}],
+            [{"field": "image", "issue": "must be a supported raster image type"}],
         )
 
     image_data = upload.read()
@@ -3802,6 +3967,7 @@ def create_jigsaw_image(jigsaw_id):
             captured_at_source,
             captured_at_raw,
         )
+        comment_backfilled = _backfill_image_user_comment(duplicate_image, user_comment)
         _record_audit_event(
             action="jigsaw.image_duplicate_ignored",
             entity_type="jigsaw_image",
@@ -3811,6 +3977,7 @@ def create_jigsaw_image(jigsaw_id):
                 "source_filename": filename,
                 "duplicate_hash": image_sha256,
                 "metadata_backfilled": metadata_backfilled,
+                "comment_backfilled": comment_backfilled,
             },
         )
         db_session.commit()
@@ -3837,6 +4004,7 @@ def create_jigsaw_image(jigsaw_id):
             captured_at=captured_at,
             captured_at_source=captured_at_source,
             captured_at_raw=captured_at_raw,
+            user_comment=user_comment,
             variants=variants,
         )
 
@@ -3905,7 +4073,7 @@ def create_image_embedding_backfill_job():
         return _error_response("conflict", "Image embeddings are disabled in server configuration.", 409)
 
     runtime_error = embedding_runtime_error()
-    if runtime_error is not None:
+    if runtime_error is not None and not _allow_image_embeddings_test_fallback():
         return _error_response(
             "conflict",
             "Image embeddings runtime dependencies are unavailable.",
@@ -3944,7 +4112,7 @@ def get_image_match_suggestions(image_id):
         return _error_response("conflict", "Image embeddings are disabled in server configuration.", 409)
 
     runtime_error = embedding_runtime_error()
-    if runtime_error is not None:
+    if runtime_error is not None and not _allow_image_embeddings_test_fallback():
         return _error_response(
             "conflict",
             "Image embeddings runtime dependencies are unavailable.",
@@ -3984,7 +4152,7 @@ def get_image_match_suggestions(image_id):
         return _error_response("conflict", "Image is already assigned to a jigsaw.", 409)
 
     model_name, model_revision, model_key = _get_embedding_model_config()
-    allow_test_fallback = bool(current_app.config.get("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", False))
+    allow_test_fallback = _allow_image_embeddings_test_fallback()
 
     query_embedding = db_session.execute(
         select(ImageEmbedding)
@@ -4228,6 +4396,12 @@ def upload_image_library_items():
     else:
         tag = _normalize_known_image_tag(tag)
 
+    user_comment, error = _validate_optional_text_field(
+        request.form.get("comment"), field_name="comment", max_length=JIGSAW_IMAGE_COMMENT_MAX_LENGTH
+    )
+    if error is not None:
+        return error
+
     uploads = request.files.getlist("files")
     if not uploads:
         return _error_response(
@@ -4272,11 +4446,13 @@ def upload_image_library_items():
                     item.get("captured_at_source"),
                     item.get("captured_at_raw"),
                 )
+                comment_backfilled = _backfill_image_user_comment(existing_image, user_comment)
                 issues.append(
                     {
                         "filename": item["filename"] or "(unnamed)",
                         "issue": "duplicate image content already exists",
                         "metadata_backfilled": metadata_backfilled,
+                        "comment_backfilled": comment_backfilled,
                     }
                 )
                 continue
@@ -4301,6 +4477,7 @@ def upload_image_library_items():
                 captured_at=item.get("captured_at"),
                 captured_at_source=item.get("captured_at_source"),
                 captured_at_raw=item.get("captured_at_raw"),
+                user_comment=user_comment,
             )
             created_images.append((image, item["source"]))
             if image_sha256:
@@ -4519,12 +4696,12 @@ def replace_image_library_item_content(image_id):
         )
 
     mime_type = (upload.mimetype or "").strip().lower()
-    if not mime_type.startswith("image/"):
+    if not _is_allowed_image_mime_type(mime_type):
         return _error_response(
             "validation_error",
             "Invalid request payload.",
             422,
-            [{"field": "image", "issue": "must be an image content type"}],
+            [{"field": "image", "issue": "must be a supported raster image type"}],
         )
 
     image_data = upload.read()
@@ -5067,6 +5244,7 @@ def list_diary_feed_entries():
                 JigsawImage.mime_type,
                 JigsawImage.captured_at,
                 JigsawImage.captured_at_source,
+                JigsawImage.user_comment,
                 JigsawImage.created_at,
             ).where(JigsawImage.id.in_(source_image_ids))
         ).all()
@@ -5079,6 +5257,7 @@ def list_diary_feed_entries():
                 mime_type=mime_type,
                 captured_at=captured_at,
                 captured_at_source=captured_at_source,
+                user_comment=user_comment,
                 created_at=created_at,
             )
             for (
@@ -5089,6 +5268,7 @@ def list_diary_feed_entries():
                 mime_type,
                 captured_at,
                 captured_at_source,
+                user_comment,
                 created_at,
             ) in source_image_rows
         }
@@ -5122,6 +5302,7 @@ def list_diary_feed_entries():
                 JigsawImage.mime_type,
                 JigsawImage.captured_at,
                 JigsawImage.captured_at_source,
+                JigsawImage.user_comment,
                 JigsawImage.created_at,
             )
             .where(
@@ -5143,6 +5324,7 @@ def list_diary_feed_entries():
             mime_type,
             captured_at,
             captured_at_source,
+            user_comment,
             created_at,
         ) in orphan_candidates:
             if not _is_completed_image_tag(tag):
@@ -5155,6 +5337,7 @@ def list_diary_feed_entries():
                 mime_type=mime_type,
                 captured_at=captured_at,
                 captured_at_source=captured_at_source,
+                user_comment=user_comment,
                 created_at=created_at,
             )
             orphan_feed_items.append(_serialize_diary_feed_orphan_completed_image(image_payload))

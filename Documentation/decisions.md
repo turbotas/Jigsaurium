@@ -176,3 +176,17 @@
 - Why: a standalone completed photo often lacks enough metadata to safely identify a jigsaw at capture time.
 - Decision: when any box slot is present, create a jigsaw, upload/tag all captured slot images, then run one non-destructive enrich-from-images call.
 - Why: this reuses proven APIs while giving users a single, responsive workflow that extracts metadata from all box photos together.
+
+## 2026-10-17 - Upload Comments for User Feedback
+
+- Decision: add optional per-upload `comment` support and persist it as `jigsaw_images.user_comment`.
+- Why: mobile capture and image-import workflows need a simple place for user feedback/notes at upload time.
+- Decision: when a completed image auto-creates a diary entry, prefer the image `user_comment` as the diary `notes` value.
+- Why: user-entered completion context should flow directly into the diary without extra edit steps.
+
+## 2026-10-19 - Dependency Update Promotion Workflow
+
+- Decision: keep version ranges in `requirements/base.txt` and `requirements/dev.txt`, and store tested exact installs in `requirements/known-good-dev.txt` and `requirements/known-good-prod.txt`.
+- Why: range files preserve upgrade intent while known-good locks preserve reproducibility and rollback clarity.
+- Decision: promote Python updates through `scripts/update_python_dependencies.(bat|sh)` in full-profile mode by default (upgrade resolvable packages, run pytest for dev profile, then sync direct requirement lower bounds and refresh known-good lock).
+- Why: a small-team workflow needs one-command batch promotion with a single test gate rather than per-package manual selection.

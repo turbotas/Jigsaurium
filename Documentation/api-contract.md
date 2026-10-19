@@ -157,6 +157,7 @@
 - `GET /api/v1/auth/me` also returns `csrf_token` so SPA clients can recover CSRF state after page reload.
 - `PATCH /api/v1/auth/me` allows users to update their own `display_name` (username) and change password with `current_password` + `new_password`.
 - `PATCH /api/v1/auth/me` rejects email changes.
+- Repeated failed login attempts for the same client/IP + email are rate-limited; blocked attempts return `429` and include `Retry-After`.
 
 - User-field validation baseline:
   - `email` must be valid format and `<= 255` chars.
@@ -218,7 +219,10 @@
   - `POST /api/v1/jigsaws/{id}/images` is admin-only.
   - `POST /api/v1/jigsaws/{id}/images` expects multipart form data:
     - `tag` (optional string, defaults to `untagged` when omitted)
+    - `comment` (optional string up to 2000 chars; stored as user feedback on the image)
     - `image` (required file, image MIME type)
+  - Accepted upload MIME types are raster formats only: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`.
+  - SVG and other active image-document formats are rejected.
   - Uploaded images are stored in the database for v1.
   - Image payloads include derivative URLs:
     - `content_url` (original)
@@ -226,6 +230,7 @@
     - `preview_url` (`variant=preview`, optimized for hover/magnify preview)
   - Image content hash (`SHA-256`) is used for duplicate suppression; uploading identical bytes returns the existing image instead of creating a duplicate row.
   - Image payloads include optional capture metadata: `captured_at` (UTC ISO 8601) and `captured_at_source`.
+  - Image payloads include optional `user_comment` (admin-uploaded feedback/notes for that image).
   - `GET /api/v1/jigsaws/{id}/images/{image_id}/content` remains supported for jigsaw-associated images.
 
 - Image library endpoint notes:
@@ -239,7 +244,10 @@
     - `files` (one or more uploads; each may be an image file or a `.zip` archive containing image files)
     - `jigsaw_id` (optional positive integer association)
     - `tag` (optional string, defaults to `untagged`)
+    - `comment` (optional string up to 2000 chars; applied to created image rows)
   - Images uploaded through the image-library endpoint may be unassigned (`jigsaw_id = null`).
+  - Accepted upload MIME types are raster formats only: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`.
+  - SVG and other active image-document formats are rejected.
   - `POST /api/v1/image-library/uploads` returns a summary: `created_count`, `skipped_count`, `metadata_backfilled_count`, and per-item `created` / `skipped` details.
   - Hash duplicate handling applies to bulk imports too: duplicate image bytes are skipped and reported in `skipped`.
   - Duplicate-image skips may still backfill missing capture metadata on the existing image record when newly uploaded bytes include EXIF capture time.
@@ -317,5 +325,7 @@
 - `403` for unauthorized access.
 - `404` for unknown resources.
 - `409` for state conflicts.
+- `413` for request payloads above the configured server limit.
+- `429` for rate-limited requests (for example repeated failed login attempts).
 - `422` for validation failures.
 - `500` for unhandled server errors.

@@ -52,6 +52,7 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
   - Windows: `scripts\update_govuk_assets.bat`
   - Linux/macOS: `./scripts/update_govuk_assets.sh`
   - Optional explicit version: `scripts\update_govuk_assets.bat 6.2.0` or `./scripts/update_govuk_assets.sh 6.2.0`
+  - UNC path fallback: `.venv\Scripts\python.exe scripts\vendor_govuk_assets.py --update 6.2.0`
 - Dev startup performs a GOV.UK version freshness check and warns if npm has a newer release.
 - Set `GOVUK_VERSION_CHECK=0` to disable the startup warning check.
 
@@ -69,17 +70,27 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
 - Run all tests:
   - Windows: `scripts\run_tests.bat`
   - Linux/macOS: `./scripts/run_tests.sh`
-- Run functional tests only: `python -m pytest -m functional`
-- Run non-functional tests only: `python -m pytest -m nonfunctional`
+- Run functional tests only:
+  - Windows: `.venv\Scripts\python.exe -m pytest -m functional -p no:cacheprovider`
+  - Linux/macOS: `.venv/bin/python -m pytest -m functional -p no:cacheprovider`
+- Run non-functional tests only:
+  - Windows: `.venv\Scripts\python.exe -m pytest -m nonfunctional -p no:cacheprovider`
+  - Linux/macOS: `.venv/bin/python -m pytest -m nonfunctional -p no:cacheprovider`
 - GUI smoke tests are included in pytest as marker `ui`.
 - Install browser runtime once per machine for GUI tests:
   - Windows: `.venv\Scripts\python.exe -m playwright install chromium`
   - Linux/macOS: `.venv/bin/python -m playwright install chromium`
-- Run GUI tests only: `python -m pytest -m ui`
+- Run GUI tests only:
+  - Windows: `.venv\Scripts\python.exe -m pytest -m ui -p no:cacheprovider`
+  - Linux/macOS: `.venv/bin/python -m pytest -m ui -p no:cacheprovider`
 - CI runs automatically with GitHub Actions:
   - `API and Core Tests` runs `pytest -m "not ui"` on pushes and pull requests.
   - `UI Smoke Tests` runs `pytest -m ui` on pull requests and pushes to `main`.
 - Note: test scripts disable pytest cache provider (`-p no:cacheprovider`) to avoid Windows network-share permission issues at test finalization.
+- Troubleshooting:
+  - If `ModuleNotFoundError: No module named 'flask'` appears in tests, Python is not using this repo's virtual environment.
+  - Confirm interpreter path before debugging dependencies: `py -3 -c "import sys; print(sys.executable)"` and `.venv\Scripts\python.exe -c "import flask; print('ok')"`.
+  - On UNC paths, `.bat` wrappers can print a `CMD.EXE ... UNC paths are not supported` warning. Use direct `.venv` Python commands when needed.
 
 ## Admin credential bootstrap
 
@@ -106,10 +117,26 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
   - Windows: `scripts\check_updates.bat`
   - Linux/macOS: `./scripts/check_updates.sh`
 - Update check scripts report both Python package updates and GOV.UK frontend pinned/installed/latest versions.
+- Targeted Python dependency updates with known-good lock refresh:
+  - Full profile promotion (recommended):
+    - Windows: `scripts\update_python_dependencies.bat`
+    - Linux/macOS: `./scripts/update_python_dependencies.sh`
+  - This upgrades everything resolvable in the selected profile, runs tests (dev profile), then rewrites requirement minimums to tested installed versions and refreshes known-good lock.
+  - Optional targeted mode:
+    - Windows: `scripts\update_python_dependencies.bat Flask==3.1.1`
+    - Linux/macOS: `./scripts/update_python_dependencies.sh Flask==3.1.1`
+  - Multiple targets: `scripts\update_python_dependencies.bat Flask==3.1.1 SQLAlchemy==2.0.37`
+  - Default dev test gate: full suite (`pytest -p no:cacheprovider`).
+  - When `playwright` is installed in the dev profile, the workflow auto-runs `python -m playwright install chromium` before tests to avoid UI skips due to missing browser binaries.
+  - Optional opt-out: `--skip-playwright-install`.
+  - Optional custom gate example: `scripts\update_python_dependencies.bat --test-cmd "-m pytest -p no:cacheprovider -q"`
+  - Prod profile option: `scripts\update_python_dependencies.bat --profile prod PyMySQL==1.1.1`
 
 ## Dependency files
 
 - `requirements/base.txt`: shared runtime dependencies.
 - `requirements/prod.txt`: production install set (no pytest).
 - `requirements/dev.txt`: developer/test install set (includes pytest).
+- `requirements/known-good-dev.txt`: exact tested dependency lock for dev/test installs.
+- `requirements/known-good-prod.txt`: exact tested dependency lock for production profile installs.
 - `requirements.txt`: compatibility alias to production dependencies.

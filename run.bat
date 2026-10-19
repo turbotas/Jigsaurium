@@ -15,7 +15,11 @@ if not exist ".venv\Scripts\python.exe" (
 
 if "%APP_ENV%"=="" set "APP_ENV=dev"
 
-.venv\Scripts\python.exe run.py
+if /I "%APP_ENV%"=="dev" (
+  .venv\Scripts\python.exe -m flask --app run:app run --host 0.0.0.0 --debug
+) else (
+  .venv\Scripts\python.exe -m flask --app run:app run --host 0.0.0.0
+)
 set "APP_EXIT=%ERRORLEVEL%"
 popd
 exit /b %APP_EXIT%

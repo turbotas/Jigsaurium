@@ -61,6 +61,7 @@ def test_mobile_capture_route_renders_expected_content(client):
     assert b"Mobile jigsaw capture" in response.data
     assert b"id=\"mobile-capture-login-form\"" in response.data
     assert b"id=\"mobile-intake-form\"" in response.data
+    assert b"id=\"mobile-intake-comment\"" in response.data
     assert b"/static/js/mobile-intake.js" in response.data
 
 
@@ -81,3 +82,15 @@ def test_api_health_returns_contract_shape(client):
     assert payload["data"]["status"] == "ok"
     assert payload["data"]["environment"] == "test"
     assert payload["meta"]["request_id"].startswith("req_")
+
+
+@pytest.mark.functional
+def test_security_headers_are_present_on_html_and_api_responses(client):
+    home_response = client.get("/")
+    api_response = client.get("/api/v1/health")
+
+    for response in (home_response, api_response):
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+        assert "default-src 'self'" in response.headers["Content-Security-Policy"]

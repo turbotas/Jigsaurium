@@ -39,6 +39,7 @@
 - Every image stores a SHA-256 content hash.
 - Duplicate uploads (same bytes, even with different filenames) are ignored using hash matching.
 - Images may store `captured_at` extracted from EXIF date metadata; EXIF timestamps without timezone are interpreted as UTC.
+- Images may store optional user-entered feedback/notes (`user_comment`) from upload workflows.
 - Duplicate uploads can backfill missing `captured_at` metadata on an existing image record without overwriting image content.
 - Image browser edits (rotation/crop) overwrite image content in-place but preserve the original dedupe hash.
 - Tag/classification updates (`Box`, `Completed`, etc.) are allowed before jigsaw assignment.

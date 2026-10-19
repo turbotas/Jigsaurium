@@ -1,0 +1,2 @@
+# Auto-generated known-good dependency lock.
+# Refresh with scripts/update_python_dependencies.bat or ./scripts/update_python_dependencies.sh.

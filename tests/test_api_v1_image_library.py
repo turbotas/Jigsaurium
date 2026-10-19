@@ -9,7 +9,8 @@ from sqlalchemy.exc import OperationalError
 
 from app.api.v1 import routes
 from app.db import get_session
-from app.models import AiUsageEvent, ImageEmbedding, Jigsaw, JigsawImage, Role, User, UserRole
+from app import image_embeddings as image_embeddings_module
+from app.models import AiUsageEvent, ImageEmbedding, Jigsaw, JigsawDiaryEntry, JigsawImage, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
 from PIL import Image
 
@@ -82,6 +83,16 @@ def _make_png_bytes(color=(64, 64, 64), size=(24, 24)):
     return output.getvalue()
 
 
+@pytest.fixture()
+def embedding_test_fallback(monkeypatch):
+    monkeypatch.setattr(routes, "embedding_runtime_error", lambda: None)
+
+    def _compute(image_bytes, *, model_name, model_revision, allow_test_fallback=False):
+        return image_embeddings_module._compute_test_fallback_embedding(image_bytes)
+
+    monkeypatch.setattr(routes, "compute_image_embedding", _compute)
+
+
 @pytest.mark.functional
 @pytest.mark.parametrize(
     ("method", "path", "content_type", "json_payload"),
@@ -142,6 +153,26 @@ def test_borrower_cannot_use_image_library_admin_endpoints(client, seeded_image_
     )
     assert bulk_create_response.status_code == 403
 
+
+@pytest.mark.functional
+def test_image_library_upload_rejects_svg_files(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={"files": (BytesIO(b"<svg xmlns='http://www.w3.org/2000/svg'></svg>"), "vector.svg", "image/svg+xml")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["code"] == "validation_error"
+    assert payload["error"]["details"][0]["field"] == "files"
+    assert payload["error"]["details"][0]["issue"] == "must be a supported image type or zip file"
+
+    _set_user_session(client, seeded_image_library_data["borrower_user_id"])
+
     bulk_create_unassigned_box_response = client.post(
         "/api/v1/image-library/bulk-create-jigsaws/unassigned-box",
         headers=_csrf_headers(),
@@ -200,7 +231,7 @@ def test_borrower_cannot_use_image_library_admin_endpoints(client, seeded_image_
 
 
 @pytest.mark.functional
-def test_admin_can_run_image_embedding_backfill_job(client, seeded_image_library_data, app):
+def test_admin_can_run_image_embedding_backfill_job(client, seeded_image_library_data, app, embedding_test_fallback):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
     app.config["IMAGE_EMBEDDINGS_ENABLED"] = True
     app.config["IMAGE_EMBEDDINGS_INLINE"] = True
@@ -243,7 +274,9 @@ def test_admin_can_run_image_embedding_backfill_job(client, seeded_image_library
 
 
 @pytest.mark.functional
-def test_refresh_image_embedding_retries_retryable_db_errors(client, seeded_image_library_data, app, monkeypatch):
+def test_refresh_image_embedding_retries_retryable_db_errors(
+    client, seeded_image_library_data, app, monkeypatch, embedding_test_fallback
+):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
     app.config["IMAGE_EMBEDDINGS_ENABLED"] = True
     app.config["IMAGE_EMBEDDINGS_INLINE"] = True
@@ -304,7 +337,65 @@ def test_refresh_image_embedding_retries_retryable_db_errors(client, seeded_imag
 
 
 @pytest.mark.functional
-def test_admin_can_get_visual_match_suggestions_for_unassigned_completed_image(client, seeded_image_library_data, app):
+def test_admin_can_store_image_library_comment(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "comment": "Photo taken in low light; please verify AI title.",
+            "files": [(BytesIO(_make_png_bytes(color=(20, 120, 20))), "commented-upload.png", "image/png")],
+            "tag": "Box",
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 201
+    payload = response.get_json()["data"]
+    assert payload["created_count"] == 1
+    assert payload["created"][0]["user_comment"] == "Photo taken in low light; please verify AI title."
+
+    with app.app_context():
+        db_session = get_session()
+        image_id = int(payload["created"][0]["id"])
+        image = db_session.get(JigsawImage, image_id)
+        assert image is not None
+        assert image.user_comment == "Photo taken in low light; please verify AI title."
+
+
+@pytest.mark.functional
+def test_completed_image_comment_is_used_for_auto_diary_notes(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    jigsaw_id = seeded_image_library_data["jigsaw_id"]
+
+    upload_response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "Completed",
+            "comment": "Finished with family over the weekend.",
+            "image": (BytesIO(_make_png_bytes(color=(120, 20, 120))), "completed-comment.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+
+    with app.app_context():
+        db_session = get_session()
+        entry = (
+            db_session.query(JigsawDiaryEntry)
+            .filter(JigsawDiaryEntry.jigsaw_id == jigsaw_id)
+            .order_by(JigsawDiaryEntry.id.desc())
+            .first()
+        )
+        assert entry is not None
+        assert entry.notes == "Finished with family over the weekend."
+
+
+@pytest.mark.functional
+def test_admin_can_get_visual_match_suggestions_for_unassigned_completed_image(
+    client, seeded_image_library_data, app, embedding_test_fallback
+):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
     app.config["IMAGE_EMBEDDINGS_ENABLED"] = True
     app.config["IMAGE_EMBEDDINGS_INLINE"] = True

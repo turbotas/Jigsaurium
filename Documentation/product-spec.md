@@ -64,6 +64,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
   - If only `Completed` is captured, store it as an unassigned `Completed` image (no new jigsaw created).
   - If one or more box images are captured, create a jigsaw, upload all captured images with slot tags, and run enrich-from-images once for that jigsaw.
   - Guided capture accepts optional title and piece count seed values but does not require them.
+  - Guided capture accepts optional free-text comments to capture user feedback/notes alongside uploaded images.
   - Create a new jigsaw from an image via AI metadata extraction (title, series name/number, artist, manufacturer/publisher, piece count, tags, dimensions, description).
   - Enrich an existing jigsaw from associated box images (front/back/side) to populate missing fields.
   - Track AI token/cost usage per create-from-image call and enforce daily spend guardrails.

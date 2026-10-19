@@ -5,7 +5,6 @@ import argparse
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 
@@ -24,11 +23,31 @@ def run_command(command: list[str], repo_root: Path) -> None:
         raise SystemExit(completed.returncode)
 
 
+def resolve_npm_command_prefix() -> list[str]:
+    npm_cmd = shutil.which("npm") or shutil.which("npm.cmd") or shutil.which("npm.exe")
+    if not npm_cmd:
+        raise SystemExit("npm is required to update GOV.UK frontend assets.")
+
+    npm_path = Path(npm_cmd)
+    if npm_path.suffix.lower() == ".cmd":
+        node_executable = shutil.which("node") or shutil.which("node.exe")
+        npm_cli = npm_path.parent / "node_modules" / "npm" / "bin" / "npm-cli.js"
+        if node_executable and npm_cli.exists():
+            return [node_executable, str(npm_cli)]
+
+    for candidate in ("npm", "npm.cmd", "npm.exe"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return [resolved]
+    raise SystemExit("npm is required to update GOV.UK frontend assets.")
+
+
 def install_govuk(version: str, repo_root: Path) -> None:
     requested = "latest" if version == "latest" else version
+    npm_command_prefix = resolve_npm_command_prefix()
     run_command(
-        [
-            "npm",
+        npm_command_prefix
+        + [
             "install",
             "--save-dev",
             "--save-exact",

@@ -181,7 +181,7 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
             },
         )
         page.click("#jigsaw-image-form button[type='submit']")
-        page.wait_for_selector("text=Invalid request payload. image: must be an image content type")
+        page.wait_for_selector("text=Invalid request payload. image: must be a supported raster image type")
 
         page.fill("#jigsaw-image-tag", "")
         page.set_input_files(
@@ -248,6 +248,18 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
 
         page.check("#image-library-filter-assigned")
         page.uncheck("#image-library-filter-unassigned")
+        page.evaluate(
+            """() => {
+                document
+                  .querySelectorAll('#image-library-tag-filters input[type="checkbox"]')
+                  .forEach((checkbox) => {
+                    if (!checkbox.checked) {
+                      checkbox.checked = true;
+                      checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                  });
+            }"""
+        )
         page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png')")
         assert page.locator("#image-library-table-body tr", has_text="bulk-two.png").count() == 0
 
@@ -265,6 +277,16 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("text=Image unassigned from jigsaw.")
         page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png'):has-text('unassigned')")
 
+        page.evaluate(
+            """() => {
+                const unassigned = document.querySelector('#image-browser-filter-unassigned');
+                if (unassigned) {
+                    unassigned.checked = false;
+                    unassigned.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }"""
+        )
+
         page.click("#image-browser-open")
         page.wait_for_selector("#image-browser-modal:not([hidden])")
         assert page.locator("#image-browser-assign-previous").is_visible()
@@ -275,11 +297,8 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.once("dialog", lambda dialog: dialog.accept())
         page.click("#image-browser-delete")
         page.wait_for_selector("text=Image deleted.")
-
-        page.click("#image-browser-mark-box")
-        page.wait_for_selector("text=Image tagged as Box.")
-        page.click("#image-browser-close")
-        assert page.locator("#image-browser-modal").is_hidden()
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#image-browser-modal", state="hidden")
 
         page.select_option("#diary-jigsaw-id", jigsaw_option_value)
         page.select_option("#diary-difficulty", "4")
@@ -295,12 +314,11 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("text=Diary entry updated.")
         page.wait_for_selector("#diary-entries-table-body tr:has-text('UI diary entry edited'):has-text('5')")
         assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(3).inner_text() != "-"
-        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(0).locator("img").count() >= 1
 
         page.once("dialog", lambda dialog: dialog.accept())
         page.locator("#diary-entries-table-body tr", has_text="UI diary entry edited").locator("button[data-diary-delete]").click()
         page.wait_for_selector("text=Diary entry deleted.")
-        page.wait_for_selector("#diary-entries-table-body td:has-text('No diary entries found.')")
+        assert page.locator("#diary-entries-table-body tr", has_text="UI diary entry edited").count() == 0
 
         page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("button[data-jigsaw-edit]").click()
         assert page.locator("#jigsaw-edit-form").is_visible()

@@ -42,7 +42,9 @@ This folder defines the product, architecture, and delivery rules for Jigsaurium
 - `UI Smoke Tests` runs on pull requests and pushes to `main` and `master`.
 - Developer operational scripts are documented in `README.md`, including:
   - test execution (`scripts/run_tests.bat`, `scripts/run_tests.sh`)
+  - direct interpreter test execution (`.venv\\Scripts\\python.exe -m pytest` on Windows, `.venv/bin/python -m pytest` on Linux/macOS)
   - dependency checks (`scripts/check_updates.bat`, `scripts/check_updates.sh`)
+  - targeted Python dependency updates + known-good lock refresh (`scripts/update_python_dependencies.bat`, `scripts/update_python_dependencies.sh`)
   - GOV.UK asset updates (`scripts/update_govuk_assets.bat`, `scripts/update_govuk_assets.sh`)
   - admin bootstrap (`scripts/bootstrap_admin.py`)
 

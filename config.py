@@ -51,6 +51,9 @@ class Config:
     IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES = _parse_csv(
         os.getenv("IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES", "box,reference")
     )
+    MAX_CONTENT_LENGTH = _parse_optional_int(os.getenv("MAX_CONTENT_LENGTH_BYTES")) or (32 * 1024 * 1024)
     SESSION_COOKIE_SECURE = APP_ENV != "dev"
     REMEMBER_COOKIE_SECURE = APP_ENV != "dev"
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
     PREFERRED_URL_SCHEME = "https" if APP_ENV != "dev" else "http"

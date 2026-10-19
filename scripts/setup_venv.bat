@@ -10,6 +10,7 @@ pushd "%SCRIPT_DIR%.." >nul 2>&1 || (
 set "PROFILE=%~1"
 if "%PROFILE%"=="" set "PROFILE=dev"
 set "REQ_FILE=requirements\%PROFILE%.txt"
+set "KNOWN_GOOD_FILE=requirements\known-good-%PROFILE%.txt"
 
 if not exist "%REQ_FILE%" (
   echo Unknown dependency profile "%PROFILE%".
@@ -36,7 +37,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
-.venv\Scripts\python.exe -m pip install -r "%REQ_FILE%"
+if exist "%KNOWN_GOOD_FILE%" (
+  echo Applying known-good constraints: %KNOWN_GOOD_FILE%
+  .venv\Scripts\python.exe -m pip install -r "%REQ_FILE%" -c "%KNOWN_GOOD_FILE%"
+) else (
+  .venv\Scripts\python.exe -m pip install -r "%REQ_FILE%"
+)
 if errorlevel 1 (
   popd
   exit /b 1

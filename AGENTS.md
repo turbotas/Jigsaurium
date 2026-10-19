@@ -52,6 +52,7 @@ Before making changes, read:
 ## Workflow Expectations
 
 - Make small, reviewable changes.
+- Before claiming missing dependencies, verify interpreter path and prefer explicit virtualenv commands for tests (`.venv\\Scripts\\python.exe -m pytest` on Windows, `.venv/bin/python -m pytest` on Linux/macOS).
 - Add or update tests for behavior changes.
 - Keep naming clear and consistent with existing code.
 - Record major architectural changes in `Documentation/decisions.md`.

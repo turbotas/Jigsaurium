@@ -969,7 +969,29 @@ def test_upload_jigsaw_image_rejects_non_image_mime_type(client, seeded_identity
     payload = response.get_json()
     assert payload["error"]["code"] == "validation_error"
     assert payload["error"]["details"][0]["field"] == "image"
-    assert payload["error"]["details"][0]["issue"] == "must be an image content type"
+    assert payload["error"]["details"][0]["issue"] == "must be a supported raster image type"
+
+
+@pytest.mark.functional
+def test_upload_jigsaw_image_rejects_svg_mime_type(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "notes",
+            "image": (BytesIO(b"<svg xmlns='http://www.w3.org/2000/svg'></svg>"), "notes.svg", "image/svg+xml"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["code"] == "validation_error"
+    assert payload["error"]["details"][0]["field"] == "image"
+    assert payload["error"]["details"][0]["issue"] == "must be a supported raster image type"
 
 
 @pytest.mark.functional
@@ -1221,6 +1243,26 @@ def test_auth_login_rejects_wrong_password(client, seeded_identity_data):
 
 
 @pytest.mark.functional
+def test_auth_login_rate_limits_repeated_failures(client, seeded_identity_data):
+    for _ in range(10):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@example.com", "password": "WrongPassword999!"},
+        )
+        assert response.status_code == 401
+
+    throttled_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@example.com", "password": "WrongPassword999!"},
+    )
+
+    assert throttled_response.status_code == 429
+    payload = throttled_response.get_json()
+    assert payload["error"]["code"] == "too_many_requests"
+    assert int(throttled_response.headers["Retry-After"]) > 0
+
+
+@pytest.mark.functional
 def test_auth_login_accepts_existing_user_email_without_dot_domain(app, client, seeded_identity_data):
     with app.app_context():
         db_session = get_session()
@@ -1281,6 +1323,32 @@ def test_audit_events_returns_recent_activity(app, client, seeded_identity_data)
 @pytest.mark.functional
 def test_audit_events_supports_page_and_page_size(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    create_first_response = client.post(
+        "/api/v1/users",
+        headers=_csrf_headers(),
+        json={
+            "email": "audit.page.one@example.com",
+            "password": "AuditPageOnePass123!",
+            "display_name": "Audit Page One",
+            "is_active": True,
+            "roles": ["borrower"],
+        },
+    )
+    create_second_response = client.post(
+        "/api/v1/users",
+        headers=_csrf_headers(),
+        json={
+            "email": "audit.page.two@example.com",
+            "password": "AuditPageTwoPass123!",
+            "display_name": "Audit Page Two",
+            "is_active": True,
+            "roles": ["borrower"],
+        },
+    )
+
+    assert create_first_response.status_code == 201
+    assert create_second_response.status_code == 201
 
     first_page_response = client.get("/api/v1/audit-events?page=1&page_size=1")
     second_page_response = client.get("/api/v1/audit-events?page=2&page_size=1")
