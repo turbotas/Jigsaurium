@@ -2433,7 +2433,7 @@
       selected.push("in-progress");
     }
     if (selected.length === 0) {
-      return false;
+      return true;
     }
 
     const isUnassigned = !image?.jigsaw_id;
@@ -2835,10 +2835,39 @@
     if (!elements.imageBrowserModal) {
       return;
     }
-    const filtered = getImageBrowserFilteredImages();
+    let filtered = getImageBrowserFilteredImages();
     if (filtered.length === 0) {
-      showFeedback("No images match the active browser filters.", true);
-      return;
+      const hasAnyImages = Array.isArray(state.imageLibraryImages) && state.imageLibraryImages.length > 0;
+      const hasActiveBrowserFilter =
+        state.imageBrowser.filterUnassigned ||
+        state.imageBrowser.filterBox ||
+        state.imageBrowser.filterReference ||
+        state.imageBrowser.filterCompleted ||
+        state.imageBrowser.filterInProgress;
+
+      if (!hasAnyImages) {
+        showFeedback("No images are available in the image library yet.", true);
+        return;
+      }
+
+      if (hasActiveBrowserFilter) {
+        state.imageBrowser.filterUnassigned = false;
+        state.imageBrowser.filterBox = false;
+        state.imageBrowser.filterReference = false;
+        state.imageBrowser.filterCompleted = false;
+        state.imageBrowser.filterInProgress = false;
+        setImageBrowserFilterInputsFromState();
+        filtered = getImageBrowserFilteredImages();
+
+        if (filtered.length > 0) {
+          showFeedback("No images matched the current browser filters, so all images are shown.");
+        }
+      }
+
+      if (filtered.length === 0) {
+        showFeedback("No images match the active browser filters.", true);
+        return;
+      }
     }
 
     state.imageBrowser.isOpen = true;
@@ -2850,7 +2879,7 @@
       if (error.status === 502) {
         await loadAiUsageDiagnostics();
         const requestId = error?.payload?.meta?.request_id;
-        const hint = buildAiFailureHintForImage(item.id, requestId);
+        const hint = buildAiFailureHintForImage(getCurrentImageBrowserItem()?.id, requestId);
         if (hint) {
           showFeedback(`${error.message} Diagnostic: ${hint}`, true);
           return;
