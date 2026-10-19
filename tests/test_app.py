@@ -46,8 +46,10 @@ def test_unknown_route_returns_404(client):
 def test_home_route_renders_expected_content(client):
     response = client.get("/")
 
-    assert b"Admin control panel" in response.data
+    assert b"Jigsaurium Main Page" in response.data
     assert b"id=\"login-form\"" in response.data
+    assert b"id=\"workspace-tabs\"" in response.data
+    assert b"data-workspace-tab=\"collection\"" in response.data
     assert b"id=\"admin-sections\" hidden" in response.data
     assert b"/static/js/app.js" in response.data
     assert b"/mobile-capture" in response.data

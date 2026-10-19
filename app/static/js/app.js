@@ -35,6 +35,22 @@
   const state = {
     csrfToken: null,
     user: null,
+    activeWorkspaceTab: null,
+    workspaceTabVisibility: {
+      account: false,
+      collection: false,
+      admin: false,
+    },
+    workspaceSectionAccess: {
+      account: false,
+      adminSections: false,
+      users: false,
+      jigsaws: false,
+      aiUsage: false,
+      loans: false,
+      audit: false,
+      ipBlocks: false,
+    },
     roleDefinitions: [],
     users: [],
     jigsaws: [],
@@ -96,10 +112,13 @@
     feedback: document.getElementById("app-feedback"),
     feedbackText: document.getElementById("app-feedback-text"),
     sessionSummary: document.getElementById("session-summary"),
+    authSection: document.getElementById("auth-section"),
     loginForm: document.getElementById("login-form"),
     authCredentialsWrap: document.getElementById("auth-credentials-wrap"),
     signInControls: document.getElementById("sign-in-controls"),
     signOutControls: document.getElementById("sign-out-controls"),
+    workspaceTabs: document.getElementById("workspace-tabs"),
+    workspaceTabButtons: Array.from(document.querySelectorAll("[data-workspace-tab]")),
     accountSection: document.getElementById("account-section"),
     accountForm: document.getElementById("account-form"),
     accountUsername: document.getElementById("account-username"),
@@ -1652,6 +1671,112 @@
     syncBulkCreateFromUploadVisibility();
   }
 
+  function getFirstVisibleWorkspaceTab() {
+    const tabOrder = ["collection", "account", "admin"];
+    return tabOrder.find((tabName) => state.workspaceTabVisibility[tabName]) || null;
+  }
+
+  function normalizeWorkspaceTab(tabName) {
+    if (typeof tabName !== "string") {
+      return null;
+    }
+    const normalized = tabName.trim().toLowerCase();
+    return state.workspaceTabVisibility[normalized] ? normalized : null;
+  }
+
+  function setActiveWorkspaceTab(tabName, { updateHash = true } = {}) {
+    const nextTab = normalizeWorkspaceTab(tabName) || getFirstVisibleWorkspaceTab();
+    state.activeWorkspaceTab = nextTab;
+
+    if (updateHash && typeof window !== "undefined") {
+      const expectedHash = nextTab ? `#${nextTab}` : "";
+      if (window.location.hash !== expectedHash) {
+        if (expectedHash) {
+          window.history.replaceState(null, "", expectedHash);
+        } else {
+          window.history.replaceState(null, "", window.location.pathname + window.location.search);
+        }
+      }
+    }
+  }
+
+  function updateWorkspaceTabsUi() {
+    const hasVisibleTabs = Boolean(getFirstVisibleWorkspaceTab());
+    if (elements.workspaceTabs) {
+      elements.workspaceTabs.hidden = !state.user || !hasVisibleTabs;
+    }
+
+    elements.workspaceTabButtons.forEach((button) => {
+      const tabName = String(button.dataset.workspaceTab || "").trim().toLowerCase();
+      const isVisible = state.workspaceTabVisibility[tabName] === true;
+      const isSelected = isVisible && state.activeWorkspaceTab === tabName;
+      button.hidden = !isVisible;
+      button.setAttribute("aria-selected", isSelected ? "true" : "false");
+      button.setAttribute("tabindex", isSelected ? "0" : "-1");
+      button.classList.toggle("is-active", isSelected);
+    });
+  }
+
+  function applyWorkspaceSectionVisibility() {
+    const activeTab = state.activeWorkspaceTab;
+    const showingWorkspacePanels = activeTab === "collection" || activeTab === "admin";
+
+    if (elements.accountSection) {
+      elements.accountSection.hidden = !(state.workspaceSectionAccess.account && activeTab === "account");
+    }
+    if (elements.adminSections) {
+      elements.adminSections.hidden = !(state.workspaceSectionAccess.adminSections && showingWorkspacePanels);
+    }
+    if (elements.usersSection) {
+      elements.usersSection.hidden = !(state.workspaceSectionAccess.users && activeTab === "admin");
+    }
+    if (elements.jigsawsSection) {
+      elements.jigsawsSection.hidden = !(state.workspaceSectionAccess.jigsaws && activeTab === "collection");
+    }
+    if (elements.aiUsageSection) {
+      elements.aiUsageSection.hidden = !(state.workspaceSectionAccess.aiUsage && activeTab === "admin");
+    }
+    if (elements.loansSection) {
+      elements.loansSection.hidden = !(state.workspaceSectionAccess.loans && activeTab === "admin");
+    }
+    if (elements.auditSection) {
+      elements.auditSection.hidden = !(state.workspaceSectionAccess.audit && activeTab === "admin");
+    }
+    if (elements.ipBlocksSection) {
+      elements.ipBlocksSection.hidden = !(state.workspaceSectionAccess.ipBlocks && activeTab === "admin");
+    }
+  }
+
+  function setWorkspaceSectionAccess(sectionName, isVisible) {
+    state.workspaceSectionAccess[sectionName] = Boolean(isVisible);
+  }
+
+  function handleWorkspaceTabClick(event) {
+    const button = event.target?.closest("[data-workspace-tab]");
+    if (!button) {
+      return;
+    }
+    event.preventDefault();
+    const tabName = String(button.dataset.workspaceTab || "").trim().toLowerCase();
+    if (!state.workspaceTabVisibility[tabName]) {
+      return;
+    }
+    setActiveWorkspaceTab(tabName);
+    updateWorkspaceTabsUi();
+    applyWorkspaceSectionVisibility();
+  }
+
+  function handleWorkspaceHashChange() {
+    const hashTab = typeof window !== "undefined" ? String(window.location.hash || "").replace(/^#/, "") : "";
+    const normalizedHashTab = normalizeWorkspaceTab(hashTab);
+    if (!normalizedHashTab || normalizedHashTab === state.activeWorkspaceTab) {
+      return;
+    }
+    state.activeWorkspaceTab = normalizedHashTab;
+    updateWorkspaceTabsUi();
+    applyWorkspaceSectionVisibility();
+  }
+
   function setSessionSummary() {
     if (!elements.sessionSummary) {
       return;
@@ -1660,23 +1785,34 @@
     if (!state.user) {
       resetDiaryEntryFormEditingState({ keepJigsawSelection: false });
       elements.sessionSummary.textContent = "Not signed in.";
-      if (elements.adminSections) {
-        elements.adminSections.hidden = true;
-      }
+      setWorkspaceSectionAccess("account", false);
+      setWorkspaceSectionAccess("adminSections", false);
+      setWorkspaceSectionAccess("users", false);
+      setWorkspaceSectionAccess("jigsaws", false);
+      setWorkspaceSectionAccess("aiUsage", false);
+      setWorkspaceSectionAccess("loans", false);
+      setWorkspaceSectionAccess("audit", false);
+      setWorkspaceSectionAccess("ipBlocks", false);
+      state.workspaceTabVisibility.account = false;
+      state.workspaceTabVisibility.collection = false;
+      state.workspaceTabVisibility.admin = false;
+      setActiveWorkspaceTab(null);
+      updateWorkspaceTabsUi();
+      applyWorkspaceSectionVisibility();
       if (elements.userEditForm) {
         elements.userEditForm.hidden = true;
       }
       if (elements.jigsawEditForm) {
         elements.jigsawEditForm.hidden = true;
       }
-      if (elements.accountSection) {
-        elements.accountSection.hidden = true;
-      }
       if (elements.signInControls) {
         elements.signInControls.hidden = false;
       }
       if (elements.signOutControls) {
         elements.signOutControls.hidden = true;
+      }
+      if (elements.authSection) {
+        elements.authSection.hidden = false;
       }
       if (elements.authCredentialsWrap) {
         elements.authCredentialsWrap.hidden = false;
@@ -1709,38 +1845,36 @@
     const canManageSecurity = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
     const canSeeMainWorkspace = canReadJigsaw || canReadDiary || canManageUsers || canManageLoans || canManageImages || canManageAi || canReadAudit || canManageSecurity;
 
-    if (elements.adminSections) {
-      elements.adminSections.hidden = !canSeeMainWorkspace;
-    }
-    if (elements.usersSection) {
-      elements.usersSection.hidden = !canManageUsers;
-    }
-    if (elements.jigsawsSection) {
-      elements.jigsawsSection.hidden = !(canReadJigsaw || canReadDiary);
-    }
-    if (elements.aiUsageSection) {
-      elements.aiUsageSection.hidden = !canManageAi;
-    }
-    if (elements.loansSection) {
-      elements.loansSection.hidden = !canManageLoans;
-    }
-    if (elements.auditSection) {
-      elements.auditSection.hidden = !canReadAudit;
-    }
-    if (elements.ipBlocksSection) {
-      elements.ipBlocksSection.hidden = !canManageSecurity;
-    }
+    setWorkspaceSectionAccess("account", true);
+    setWorkspaceSectionAccess("adminSections", canSeeMainWorkspace);
+    setWorkspaceSectionAccess("users", canManageUsers);
+    setWorkspaceSectionAccess("jigsaws", canReadJigsaw || canReadDiary);
+    setWorkspaceSectionAccess("aiUsage", canManageAi);
+    setWorkspaceSectionAccess("loans", canManageLoans);
+    setWorkspaceSectionAccess("audit", canReadAudit);
+    setWorkspaceSectionAccess("ipBlocks", canManageSecurity);
+
+    const hasAdminTabContent = canManageUsers || canManageLoans || canManageAi || canReadAudit || canManageSecurity;
+    state.workspaceTabVisibility.account = true;
+    state.workspaceTabVisibility.collection = Boolean(canReadJigsaw || canReadDiary);
+    state.workspaceTabVisibility.admin = Boolean(hasAdminTabContent);
+
+    const requestedTab = typeof window !== "undefined" ? String(window.location.hash || "").replace(/^#/, "") : "";
+    const preferredTab = normalizeWorkspaceTab(requestedTab) || state.activeWorkspaceTab;
+    setActiveWorkspaceTab(preferredTab);
+    updateWorkspaceTabsUi();
+    applyWorkspaceSectionVisibility();
     if (elements.signInControls) {
       elements.signInControls.hidden = true;
     }
     if (elements.signOutControls) {
       elements.signOutControls.hidden = false;
     }
+    if (elements.authSection) {
+      elements.authSection.hidden = true;
+    }
     if (elements.authCredentialsWrap) {
       elements.authCredentialsWrap.hidden = true;
-    }
-    if (elements.accountSection) {
-      elements.accountSection.hidden = false;
     }
     if (state.diaryEditingEntryId && !canUpdateDiaryAny && !canUpdateDiaryOwn) {
       resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
@@ -4110,11 +4244,11 @@
 
   function renderDiarySuggestionOptions(imageId, candidates) {
     if (!elements.diaryEntriesTableBody) {
-      return;
+      return false;
     }
     const wrap = elements.diaryEntriesTableBody.querySelector(`[data-diary-suggest-wrap="${Number(imageId)}"]`);
     if (!wrap) {
-      return;
+      return false;
     }
 
     while (wrap.firstChild) {
@@ -4126,7 +4260,7 @@
       const note = document.createElement("span");
       note.textContent = "No candidates";
       wrap.appendChild(note);
-      return;
+      return true;
     }
 
     wrap.classList.add("app-diary-suggestions");
@@ -4179,6 +4313,8 @@
       candidateRow.appendChild(details);
       wrap.appendChild(candidateRow);
     });
+
+    return true;
   }
 
   async function handleDiarySuggestMatch(imageId) {
@@ -4193,7 +4329,11 @@
     try {
       const payload = await apiRequest(`/api/v1/image-library/images/${resolvedImageId}/match-suggestions?limit=3`);
       const candidates = Array.isArray(payload?.data?.candidates) ? payload.data.candidates : [];
-      renderDiarySuggestionOptions(resolvedImageId, candidates);
+      const rendered = renderDiarySuggestionOptions(resolvedImageId, candidates);
+      if (!rendered) {
+        showFeedback("Suggestions loaded, but the image row changed before results were shown. Please click Find similar again.", true);
+        return;
+      }
       if (candidates.length > 0) {
         showFeedback(`Loaded ${candidates.length} similar match candidate(s) for image #${resolvedImageId}.`);
       } else {
@@ -4234,23 +4374,24 @@
 
   function renderImageLibrarySuggestionOptions(imageId, candidates) {
     if (!elements.imageLibraryTableBody) {
-      return;
+      return false;
     }
 
     const wrap = elements.imageLibraryTableBody.querySelector(`[data-image-suggest-wrap="${Number(imageId)}"]`);
     if (!wrap) {
-      return;
+      return false;
     }
 
     while (wrap.firstChild) {
       wrap.removeChild(wrap.firstChild);
     }
+    wrap.classList.add("app-diary-suggestions");
 
     if (!Array.isArray(candidates) || candidates.length === 0) {
       const note = document.createElement("span");
       note.textContent = "No candidates";
       wrap.appendChild(note);
-      return;
+      return true;
     }
 
     candidates.forEach((candidate) => {
@@ -4301,6 +4442,8 @@
       row.appendChild(details);
       wrap.appendChild(row);
     });
+
+    return true;
   }
 
   async function handleImageLibrarySuggestMatch(imageId) {
@@ -4315,7 +4458,11 @@
     try {
       const payload = await apiRequest(`/api/v1/image-library/images/${resolvedImageId}/match-suggestions?limit=3`);
       const candidates = Array.isArray(payload?.data?.candidates) ? payload.data.candidates : [];
-      renderImageLibrarySuggestionOptions(resolvedImageId, candidates);
+      const rendered = renderImageLibrarySuggestionOptions(resolvedImageId, candidates);
+      if (!rendered) {
+        showFeedback("Suggestions loaded, but the image row changed before results were shown. Please click Find similar again.", true);
+        return;
+      }
       showFeedback(`Loaded ${candidates.length} similar match candidate(s) for image #${resolvedImageId}.`);
     } catch (error) {
       showFeedback(error.message, true);
@@ -6161,6 +6308,12 @@
     if (elements.logoutButton) {
       elements.logoutButton.addEventListener("click", handleLogout);
     }
+
+    if (elements.workspaceTabs) {
+      elements.workspaceTabs.addEventListener("click", handleWorkspaceTabClick);
+    }
+
+    window.addEventListener("hashchange", handleWorkspaceHashChange);
 
     if (elements.userCreateForm) {
       elements.userCreateForm.addEventListener("submit", handleCreateUser);
