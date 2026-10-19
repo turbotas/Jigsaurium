@@ -15,6 +15,15 @@ if not exist ".venv\Scripts\python.exe" (
 
 if "%APP_ENV%"=="" set "APP_ENV=dev"
 
+.venv\Scripts\python.exe scripts\warn_if_migrations_pending.py
+
+if /I "%APP_ENV%"=="dev" if not "%STARTUP_UPDATE_CHECK%"=="0" (
+  echo.
+  echo Dependency freshness check:
+  call scripts\check_updates.bat
+  if errorlevel 1 echo WARNING: Dependency update check encountered an issue; continuing startup.
+)
+
 if /I "%APP_ENV%"=="dev" (
   .venv\Scripts\python.exe -m flask --app run:app run --host 0.0.0.0 --debug
 ) else (

@@ -43,6 +43,9 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
    - Windows: `run.bat`
    - Linux/macOS: `./run.sh`
    - Direct Python alternative: `.venv/bin/python run.py` (Linux/macOS) or `.venv\Scripts\python.exe run.py` (Windows)
+   - Startup scripts now warn when the configured database appears behind the latest Alembic head.
+   - In `APP_ENV=dev`, startup scripts also run dependency freshness checks (Python packages + GOV.UK frontend npm status).
+   - Set `STARTUP_UPDATE_CHECK=0` to skip startup dependency checks.
 
 ## GOV.UK Frontend assets
 

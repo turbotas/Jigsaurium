@@ -8,4 +8,15 @@ if [ ! -x "$VENV_PYTHON" ]; then
   exit 1
 fi
 
-APP_ENV="${APP_ENV:-dev}" "$VENV_PYTHON" run.py
+"$VENV_PYTHON" scripts/warn_if_migrations_pending.py
+
+APP_ENV_VALUE="${APP_ENV:-dev}"
+if [ "$APP_ENV_VALUE" = "dev" ] && [ "${STARTUP_UPDATE_CHECK:-1}" != "0" ]; then
+  echo
+  echo "Dependency freshness check:"
+  if ! sh ./scripts/check_updates.sh; then
+    echo "WARNING: Dependency update check encountered an issue; continuing startup."
+  fi
+fi
+
+APP_ENV="$APP_ENV_VALUE" "$VENV_PYTHON" run.py

@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -21,7 +22,11 @@ def _read_vendored_version(app):
 
 
 def _fetch_latest_version(timeout_seconds=3):
-    command = ["npm", "view", "govuk-frontend", "version", "--silent"]
+    npm_executable = shutil.which("npm") or shutil.which("npm.cmd")
+    if not npm_executable:
+        return None
+
+    command = [npm_executable, "view", "govuk-frontend", "version", "--silent"]
     try:
         completed = subprocess.run(
             command,
