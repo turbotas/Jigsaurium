@@ -1,4 +1,5 @@
 from app import create_app
+from app.dev_server import ForwardedAwareWSGIRequestHandler
 from app.govuk import check_govuk_version_freshness
 
 try:
@@ -16,4 +17,7 @@ check_govuk_version_freshness(app)
 
 
 if __name__ == "__main__":
-    app.run(debug=app.config["APP_ENV"] == "dev")
+    app.run(
+        debug=app.config["APP_ENV"] == "dev",
+        request_handler=ForwardedAwareWSGIRequestHandler,
+    )
