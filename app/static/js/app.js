@@ -1690,6 +1690,7 @@
     const canReadJigsaw = currentUserHasCapability("jigsaw.read");
     const canCreateJigsaw = currentUserHasCapability("jigsaw.create");
     const canUpdateJigsaw = currentUserHasCapability("jigsaw.update");
+    const canEnrichJigsaw = currentUserHasCapability("jigsaw.enrich");
     const canReadDiary = currentUserHasCapability("diary.read");
     const canCreateDiary = currentUserHasCapability("diary.create");
     const canUpdateDiaryAny = currentUserHasCapability("diary.update_any");
@@ -1740,6 +1741,9 @@
     }
     if (!canUpdateJigsaw) {
       closeJigsawEditor();
+    }
+    if (elements.jigsawEditEnrichButton) {
+      elements.jigsawEditEnrichButton.hidden = !canEnrichJigsaw;
     }
     if (elements.jigsawImageForm) {
       elements.jigsawImageForm.hidden = !canUploadImages;
@@ -1950,7 +1954,7 @@
     const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.jigsawThumbnailImages);
     const assignedImagesByJigsawId = buildAssignedJigsawImagesByJigsawId(state.imageLibraryImages);
     const canEditJigsaw = currentUserHasCapability("jigsaw.update");
-    const canUseAi = currentUserHasCapability("ai.manage");
+    const canEnrichJigsaw = currentUserHasCapability("jigsaw.enrich");
     const canRetireOrDelete = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
 
     pageResult.rows.forEach((jigsaw) => {
@@ -2011,7 +2015,7 @@
         controlsWrap.appendChild(retireButton);
       }
 
-      if (canUseAi) {
+      if (canEnrichJigsaw) {
         const enrichButton = document.createElement("button");
         enrichButton.type = "button";
         enrichButton.className = "govuk-button govuk-button--secondary app-inline-button";
@@ -2570,21 +2574,21 @@
         createButton.dataset.imageCreate = String(image.id);
         createButton.textContent = "Create";
         actionButtons.appendChild(createButton);
+      }
 
-        if (toImageTagKey(image.tag) === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED)) {
-          const suggestButton = document.createElement("button");
-          suggestButton.type = "button";
-          suggestButton.className = "govuk-button govuk-button--secondary app-inline-button";
-          suggestButton.setAttribute("data-module", "govuk-button");
-          suggestButton.dataset.imageSuggest = String(image.id);
-          suggestButton.textContent = "Find similar";
-          suggestControls.appendChild(suggestButton);
+      if (canAssign && !image.jigsaw_id && toImageTagKey(image.tag) === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED)) {
+        const suggestButton = document.createElement("button");
+        suggestButton.type = "button";
+        suggestButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        suggestButton.setAttribute("data-module", "govuk-button");
+        suggestButton.dataset.imageSuggest = String(image.id);
+        suggestButton.textContent = "Find similar";
+        suggestControls.appendChild(suggestButton);
 
-          const suggestWrap = document.createElement("div");
-          suggestWrap.className = "app-inline-controls app-image-actions__row";
-          suggestWrap.dataset.imageSuggestWrap = String(image.id);
-          suggestControls.appendChild(suggestWrap);
-        }
+        const suggestWrap = document.createElement("div");
+        suggestWrap.className = "app-inline-controls app-image-actions__row";
+        suggestWrap.dataset.imageSuggestWrap = String(image.id);
+        suggestControls.appendChild(suggestWrap);
       }
 
       const link = document.createElement("a");
@@ -3769,16 +3773,24 @@
           actionCell.appendChild(deleteButton);
         }
       } else if (!isFormalDiaryEntry && canAssignImages) {
+        const suggestImageId = Number(entry?.source_image_id || entry?.id || 0);
+        if (suggestImageId <= 0) {
+          actionCell.textContent = "-";
+          row.appendChild(actionCell);
+          tableBody.appendChild(row);
+          return;
+        }
+
         const suggestButton = document.createElement("button");
         suggestButton.type = "button";
         suggestButton.className = "govuk-button govuk-button--secondary app-inline-button";
         suggestButton.setAttribute("data-module", "govuk-button");
-        suggestButton.dataset.diarySuggestImage = String(Number(entry?.source_image_id || entry?.id || 0));
+        suggestButton.dataset.diarySuggestImage = String(suggestImageId);
         suggestButton.textContent = "Find similar";
 
         const assignWrap = document.createElement("div");
         assignWrap.className = "app-inline-controls app-image-actions__row govuk-!-margin-top-2";
-        assignWrap.dataset.diarySuggestWrap = String(Number(entry?.source_image_id || entry?.id || 0));
+        assignWrap.dataset.diarySuggestWrap = String(suggestImageId);
 
         actionCell.appendChild(suggestButton);
         actionCell.appendChild(assignWrap);
@@ -4115,8 +4127,11 @@
   async function handleDiarySuggestMatch(imageId) {
     const resolvedImageId = Number(imageId || 0);
     if (!resolvedImageId) {
+      showFeedback("Could not determine which completed image to match.", true);
       return;
     }
+
+    showFeedback(`Finding similar matches for image #${resolvedImageId}...`);
 
     try {
       const payload = await apiRequest(`/api/v1/image-library/images/${resolvedImageId}/match-suggestions?limit=3`);
@@ -4234,8 +4249,11 @@
   async function handleImageLibrarySuggestMatch(imageId) {
     const resolvedImageId = Number(imageId || 0);
     if (!resolvedImageId) {
+      showFeedback("Could not determine which image to match.", true);
       return;
     }
+
+    showFeedback(`Finding similar matches for image #${resolvedImageId}...`);
 
     try {
       const payload = await apiRequest(`/api/v1/image-library/images/${resolvedImageId}/match-suggestions?limit=3`);
@@ -5311,6 +5329,11 @@
   async function handleEnrichJigsaw() {
     clearFeedback();
 
+    if (!currentUserHasCapability("jigsaw.enrich")) {
+      showFeedback("You do not have permission to enrich jigsaws.", true);
+      return;
+    }
+
     const jigsawId = Number(elements.editJigsawId?.value || "0");
     if (!jigsawId) {
       showFeedback("Open a jigsaw in the editor before running enrichment.", true);
@@ -5442,7 +5465,7 @@
       event.preventDefault();
       clearFeedback();
 
-      if (!currentUserHasCapability("ai.manage")) {
+      if (!currentUserHasCapability("jigsaw.enrich")) {
         showFeedback("You do not have permission to enrich jigsaws.", true);
         return;
       }
@@ -5557,7 +5580,7 @@
       event.preventDefault();
       clearFeedback();
 
-      if (!currentUserHasCapability("ai.manage")) {
+      if (!currentUserHasCapability("image.assign")) {
         showFeedback("You do not have permission to access image suggestions.", true);
         return;
       }

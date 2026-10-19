@@ -1112,6 +1112,28 @@ def test_member_can_create_jigsaw_but_cannot_retire_or_delete(client, seeded_ide
     assert create_response.status_code == 201
     created_id = int(create_response.get_json()["data"]["id"])
 
+    edit_response = client.patch(
+        f"/api/v1/jigsaws/{created_id}",
+        headers=_csrf_headers(),
+        json={"title": "Member Edited"},
+    )
+    assert edit_response.status_code == 200
+    assert edit_response.get_json()["data"]["title"] == "Member Edited"
+
+    retire_via_patch_response = client.patch(
+        f"/api/v1/jigsaws/{created_id}",
+        headers=_csrf_headers(),
+        json={"status": "retired"},
+    )
+    assert retire_via_patch_response.status_code == 403
+
+    enrich_response = client.post(
+        f"/api/v1/jigsaws/{created_id}/enrich-from-images",
+        headers=_csrf_headers(),
+        json={},
+    )
+    assert enrich_response.status_code != 403
+
     retire_response = client.delete(f"/api/v1/jigsaws/{created_id}", headers=_csrf_headers())
     assert retire_response.status_code == 403
 
@@ -1157,16 +1179,22 @@ def test_member_can_use_image_library_and_jigsaw_image_upload(client, seeded_ide
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "tag": "box",
+            "tag": "completed",
             "files": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"n" * 128), "member-library.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
     assert upload_library_response.status_code == 201
+    created_images = upload_library_response.get_json().get("data", {}).get("created", [])
+    assert len(created_images) >= 1
+    created_image_id = int(created_images[0]["id"])
 
     list_library_response = client.get("/api/v1/image-library/images?limit=50")
     assert list_library_response.status_code == 200
     assert len(list_library_response.get_json()["data"]) >= 1
+
+    suggest_response = client.get(f"/api/v1/image-library/images/{created_image_id}/match-suggestions?limit=3")
+    assert suggest_response.status_code in {200, 409}
 
 
 @pytest.mark.functional

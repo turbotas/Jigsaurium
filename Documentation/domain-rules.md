@@ -3,7 +3,7 @@
 ## Role Rules
 
 - `administrator` can manage users, roles, lending records, AI operations, and destructive lifecycle actions.
-- `member` can use shared household collection workflows: jigsaw create/read, diary create/read/update-own, image upload/library/tag/assign, and audit read.
+- `member` can use shared household collection workflows: jigsaw create/read/update/enrich, diary create/read/update-own, image upload/library/tag/assign, and audit read.
 - `borrower` remains supported as a legacy compatibility role and currently maps to member-style capabilities.
 - Borrowers cannot mutate user/role data.
 
@@ -14,6 +14,8 @@
 - Series metadata is supported with optional `series_name` and `series_number` fields, stored separately from `title`.
 - When provided, `piece_count` must be a positive integer.
 - Duplicate jigsaw titles are allowed.
+- Jigsaw metadata edits require capability `jigsaw.update`.
+- Non-admin callers cannot retire jigsaws via metadata edits (setting status to `retired` is forbidden).
 - Status values in v1:
   - `available`
   - `on_loan`
@@ -36,6 +38,7 @@
 - Image-library uploads may optionally associate imported images to a jigsaw at upload time.
 - Each image can be associated to at most one jigsaw.
 - Callers with `image.assign` can attach an unassigned image to a jigsaw and can unassign by setting `jigsaw_id = null`; reassigning an already-associated image to a different jigsaw is blocked.
+- Visual match suggestions for unassigned `Completed` images require capability `image.assign`.
 - Admins can permanently delete image-library records (assigned or unassigned) as cleanup actions.
 - Every image stores a SHA-256 content hash.
 - Duplicate uploads (same bytes, even with different filenames) are ignored using hash matching.
@@ -46,7 +49,7 @@
 - Tag/classification updates (`Box`, `Completed`, etc.) are allowed before jigsaw assignment.
 - Built-in image-browser tags use canonical title-case values: `Box`, `Box front`, `Box side`, `Box back`, `Completed`, `In progress`.
 - Admin create-from-image action can create a new jigsaw from an unassigned image and then bind the image to that created jigsaw.
-- Admin enrich-from-images action can infer metadata for an existing jigsaw from assigned box images.
+- Callers with `jigsaw.enrich` can infer metadata for an existing jigsaw from assigned box images.
 - Enrichment input only uses box-tagged images (for example `Box`, `Box front`, `Box side`, `Box back`); completed-puzzle images are excluded.
 - Enrichment is non-destructive by default: only empty fields are populated unless overwrite mode is explicitly requested.
 - Create-from-image uses AI metadata extraction and records per-call token/cost usage.

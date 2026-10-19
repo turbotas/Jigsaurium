@@ -127,7 +127,9 @@ ROLE_CAPABILITIES = {
         "image.tag",
         "image.upload",
         "jigsaw.create",
+        "jigsaw.enrich",
         "jigsaw.read",
+        "jigsaw.update",
     },
     "member": {
         "diary.create",
@@ -139,7 +141,9 @@ ROLE_CAPABILITIES = {
         "image.tag",
         "image.upload",
         "jigsaw.create",
+        "jigsaw.enrich",
         "jigsaw.read",
+        "jigsaw.update",
     },
     "administrator": {
         "ai.manage",
@@ -155,6 +159,7 @@ ROLE_CAPABILITIES = {
         "image.tag",
         "image.upload",
         "jigsaw.create",
+        "jigsaw.enrich",
         "jigsaw.read",
         "jigsaw.update",
         "loan.manage",
@@ -1166,7 +1171,6 @@ def _serialize_loan(loan):
 
 def _record_audit_event(action, entity_type, entity_id, payload=None):
     db_session = get_session()
-    forwarded_chain = request.headers.get("Forwarded") or request.headers.get("X-Forwarded-For")
 
     audit_event = AuditEvent(
         actor_user_id=getattr(g.current_user, "id", None),
@@ -1174,9 +1178,9 @@ def _record_audit_event(action, entity_type, entity_id, payload=None):
         entity_type=entity_type,
         entity_id=str(entity_id),
         request_id=g.request_id,
-        remote_addr=request.remote_addr,
-        client_ip_resolved=request.remote_addr,
-        forwarded_chain=forwarded_chain,
+        remote_addr=getattr(g, "remote_addr", request.remote_addr),
+        client_ip_resolved=getattr(g, "client_ip_resolved", request.remote_addr),
+        forwarded_chain=getattr(g, "forwarded_chain", None),
         scheme=request.scheme,
         host=request.host,
         payload_json=json.dumps(payload, sort_keys=True) if payload is not None else None,
@@ -1466,7 +1470,7 @@ def _validate_csrf_for_request():
 
 
 def _login_rate_limit_key(email):
-    client_ip = str(request.remote_addr or "unknown")
+    client_ip = str(getattr(g, "client_ip_resolved", request.remote_addr) or "unknown")
     return f"{client_ip}|{email}"
 
 
@@ -3812,8 +3816,15 @@ def get_jigsaw(jigsaw_id):
 
 
 @api_v1_bp.patch("/jigsaws/<int:jigsaw_id>")
-@require_role("administrator")
+@require_auth
 def update_jigsaw(jigsaw_id):
+    if not _current_user_has_capability("jigsaw.update"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     payload, error = _parse_json_object()
     if error is not None:
         return error
@@ -3938,6 +3949,12 @@ def update_jigsaw(jigsaw_id):
         status, error = _parse_jigsaw_status(payload.get("status"))
         if error is not None:
             return error
+        if "administrator" not in g.current_user_roles and status == JigsawStatus.RETIRED:
+            return _error_response(
+                "forbidden",
+                "You do not have permission to access this resource.",
+                403,
+            )
         jigsaw.status = status
 
     if "tags" in payload:
@@ -4231,8 +4248,15 @@ def get_image_embedding_backfill_job(job_id):
 
 
 @api_v1_bp.get("/image-library/images/<int:image_id>/match-suggestions")
-@require_role("administrator")
+@require_auth
 def get_image_match_suggestions(image_id):
+    if not _current_user_has_capability("image.assign"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
         return _error_response("conflict", "Image embeddings are disabled in server configuration.", 409)
 
@@ -5067,8 +5091,15 @@ def create_jigsaw_from_image(image_id):
 
 
 @api_v1_bp.post("/jigsaws/<int:jigsaw_id>/enrich-from-images")
-@require_role("administrator")
+@require_auth
 def enrich_jigsaw_from_images(jigsaw_id):
+    if not _current_user_has_capability("jigsaw.enrich"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     payload, error = _parse_json_object()
     if error is not None:
         return error

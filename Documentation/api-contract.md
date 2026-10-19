@@ -159,11 +159,12 @@
 - Auth payload user objects include a derived `capabilities` array to support SPA feature-gating without hardcoding role names.
 - Current role capability defaults:
   - `administrator`: full administrative capabilities, including user/loan/AI management and destructive actions.
-  - `member`: shared-collection capabilities for jigsaw create/read, diary create/read/update-own, image upload/library/tag/assign, and audit read.
+  - `member`: shared-collection capabilities for jigsaw create/read/update/enrich, diary create/read/update-own, image upload/library/tag/assign, and audit read.
   - `borrower`: legacy compatibility role that currently maps to the same capabilities as `member`.
 - `PATCH /api/v1/auth/me` allows users to update their own `display_name` (username) and change password with `current_password` + `new_password`.
 - `PATCH /api/v1/auth/me` rejects email changes.
 - Repeated failed login attempts for the same client/IP + email are rate-limited; blocked attempts return `429` and include `Retry-After`.
+- Repeated request probing that yields 5 consecutive `404` responses from the same client IP triggers a 24-hour temporary block; blocked requests return `429` and include `Retry-After`.
 
 - User-field validation baseline:
   - `email` must be valid format and `<= 255` chars.
@@ -215,6 +216,8 @@
   - When pagination params are provided, response includes standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
   - `GET /api/v1/jigsaws/thumbnail-images` returns one preferred image per jigsaw for fast stock-list thumbnail rendering.
   - `POST /api/v1/jigsaws` requires `jigsaw.create` capability and allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.
+  - `PATCH /api/v1/jigsaws/{id}` requires `jigsaw.update` capability.
+  - Non-admin callers cannot set jigsaw status to `retired` through `PATCH /api/v1/jigsaws/{id}`.
   - Duplicate `title` values are allowed.
   - Jigsaw payloads now support optional fields: `series_name`, `series_number`, `manufacturer`, `artist`, `dimensions_cm`, `description`, `last_completed_at`.
   - `last_completed_at` uses UTC ISO 8601 format.
@@ -279,7 +282,7 @@
   - `POST /api/v1/image-embeddings/backfill` is admin-only and queues an image-embedding backfill job across all stored images.
   - `POST /api/v1/image-embeddings/backfill` returns `409` when embedding runtime dependencies are unavailable (for example incompatible `transformers` install).
   - `GET /api/v1/image-embeddings/backfill/{job_id}` is admin-only and returns backfill job status/counters.
-  - `GET /api/v1/image-library/images/{image_id}/match-suggestions` is admin-only and returns top visual-match jigsaw candidates for one unassigned `Completed` image.
+  - `GET /api/v1/image-library/images/{image_id}/match-suggestions` requires `image.assign` capability and returns top visual-match jigsaw candidates for one unassigned `Completed` image.
   - `GET /api/v1/image-library/images/{image_id}/match-suggestions` returns `409` when embedding runtime dependencies are unavailable.
   - Each match candidate includes `reference_image` URLs (`content_url`, `thumbnail_url`, `preview_url`) so the admin UI can show side-by-side visual confirmation.
   - Visual-match suggestions require image embeddings to be enabled in server configuration and use cosine similarity against reference-tagged jigsaw images.
@@ -287,7 +290,7 @@
   - AI extraction expects these metadata keys: `title`, `series_name`, `series_number`, `manufacturer`/`publisher`, `artist`, `piece_count`, `tags`, `dimensions_cm`, `description`.
   - AI usage is cost-tracked per call (`ai_usage_events`) with token usage and final USD cost.
   - Daily AI spend guardrail: when configured budget is reached, create-from-image requests return `409` and are blocked before provider calls.
-  - `POST /api/v1/jigsaws/{id}/enrich-from-images` is admin-only and uses assigned box-tagged images only (`Box`, `Box front`, `Box side`, `Box back`, and similar `box*` tags) to infer missing metadata.
+  - `POST /api/v1/jigsaws/{id}/enrich-from-images` requires `jigsaw.enrich` capability and uses assigned box-tagged images only (`Box`, `Box front`, `Box side`, `Box back`, and similar `box*` tags) to infer missing metadata.
   - Completed-puzzle images are excluded from enrichment input.
   - Enrichment is non-destructive by default (`overwrite_existing=false`): only empty fields are populated.
   - Enrichment request body optionally accepts `overwrite_existing` (boolean).
