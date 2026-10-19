@@ -33,7 +33,10 @@ def _compute_test_fallback_embedding(image_bytes):
         normalized = ImageOps.exif_transpose(source_image)
         grayscale = normalized.convert("L")
         thumbnail = grayscale.resize((32, 16))
-        pixels = list(thumbnail.getdata())
+        if hasattr(thumbnail, "get_flattened_data"):
+            pixels = list(thumbnail.get_flattened_data())
+        else:
+            pixels = list(thumbnail.getdata())
 
     values = [float(pixel) / 255.0 for pixel in pixels]
     return _normalize_vector(values)
