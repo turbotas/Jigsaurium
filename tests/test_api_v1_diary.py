@@ -452,6 +452,47 @@ def test_diary_feed_jigsaw_filter_excludes_orphan_rows(client, seeded_diary_data
 
 
 @pytest.mark.functional
+def test_admin_can_delete_orphan_completed_image_visible_in_diary_feed(client, seeded_diary_data, app):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+
+    with app.app_context():
+        db_session = get_session()
+        orphan_completed = JigsawImage(
+            jigsaw_id=None,
+            tag="Completed",
+            filename="delete-orphan-from-diary.png",
+            mime_type="image/png",
+            image_data=b"\x89PNG\r\n\x1a\n" + b"x" * 24,
+        )
+        db_session.add(orphan_completed)
+        db_session.commit()
+        orphan_image_id = orphan_completed.id
+
+    before_delete_response = _list_diary_feed(client)
+    assert before_delete_response.status_code == 200
+    before_delete_rows = before_delete_response.get_json()["data"]
+    assert any(
+        row["entry_type"] == "orphan_completed_image" and int(row["source_image_id"]) == orphan_image_id
+        for row in before_delete_rows
+    )
+
+    delete_response = client.delete(
+        f"/api/v1/image-library/images/{orphan_image_id}",
+        headers=_csrf_headers(),
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.get_json()["data"]["deleted"] is True
+
+    after_delete_response = _list_diary_feed(client)
+    assert after_delete_response.status_code == 200
+    after_delete_rows = after_delete_response.get_json()["data"]
+    assert not any(
+        row["entry_type"] == "orphan_completed_image" and int(row["source_image_id"]) == orphan_image_id
+        for row in after_delete_rows
+    )
+
+
+@pytest.mark.functional
 def test_diary_feed_validates_query_params(client, seeded_diary_data):
     _set_user_session(client, seeded_diary_data["admin_user_id"])
 
