@@ -66,6 +66,48 @@ def test_compute_image_embedding_falls_back_to_model_outputs_without_get_image_f
     assert vector == [0.6, 0.8]
 
 
+def test_compute_image_embedding_flattens_nested_pooler_output(monkeypatch):
+    class FakeProcessor:
+        def __call__(self, *, images, return_tensors):
+            assert return_tensors == "pt"
+            return {"pixel_values": torch.zeros((1, 3, 12, 12))}
+
+    class FakeModel:
+        def __call__(self, **kwargs):
+            return SimpleNamespace(pooler_output=torch.tensor([[[3.0, 4.0]]]))
+
+    monkeypatch.setattr(image_embeddings, "_load_clip_model", lambda model_name, model_revision: (FakeProcessor(), FakeModel()))
+
+    vector = image_embeddings.compute_image_embedding(
+        _make_png_bytes(),
+        model_name="demo/model",
+        model_revision="main",
+    )
+
+    assert vector == [0.6, 0.8]
+
+
+def test_compute_image_embedding_handles_model_output_from_get_image_features(monkeypatch):
+    class FakeProcessor:
+        def __call__(self, *, images, return_tensors):
+            assert return_tensors == "pt"
+            return {"pixel_values": torch.zeros((1, 3, 12, 12))}
+
+    class FakeModel:
+        def get_image_features(self, **kwargs):
+            return SimpleNamespace(pooler_output=torch.tensor([[3.0, 4.0]]))
+
+    monkeypatch.setattr(image_embeddings, "_load_clip_model", lambda model_name, model_revision: (FakeProcessor(), FakeModel()))
+
+    vector = image_embeddings.compute_image_embedding(
+        _make_png_bytes(),
+        model_name="demo/model",
+        model_revision="main",
+    )
+
+    assert vector == [0.6, 0.8]
+
+
 def test_embedding_runtime_error_reports_missing_transformer_exports(monkeypatch):
     image_embeddings._RUNTIME_CHECK["checked"] = False
     image_embeddings._RUNTIME_CHECK["error"] = None

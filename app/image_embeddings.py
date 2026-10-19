@@ -17,13 +17,41 @@ _RUNTIME_CHECK = {
 
 
 def _normalize_vector(values):
-    total = 0.0
+    flattened_values = []
     for value in values:
-        total += float(value) * float(value)
+        if isinstance(value, (list, tuple)):
+            for nested_value in value:
+                flattened_values.append(float(nested_value))
+            continue
+        flattened_values.append(float(value))
+
+    total = 0.0
+    for value in flattened_values:
+        total += value * value
     norm = math.sqrt(total)
     if norm <= 0:
-        return [0.0 for _ in values]
-    return [float(value) / norm for value in values]
+        return [0.0 for _ in flattened_values]
+    return [value / norm for value in flattened_values]
+
+
+def _extract_feature_tensor(features):
+    if hasattr(features, "detach"):
+        return features
+
+    if isinstance(features, (list, tuple)):
+        for value in features:
+            if hasattr(value, "detach"):
+                return value
+
+    pooler_output = getattr(features, "pooler_output", None)
+    if hasattr(pooler_output, "detach"):
+        return pooler_output
+
+    last_hidden_state = getattr(features, "last_hidden_state", None)
+    if hasattr(last_hidden_state, "mean"):
+        return last_hidden_state.mean(dim=1)
+
+    raise RuntimeError("Image embedding model output is missing feature tensors.")
 
 
 def _compute_test_fallback_embedding(image_bytes):
@@ -94,6 +122,11 @@ def build_model_key(model_name, model_revision):
 
 
 def compute_image_embedding(image_bytes, *, model_name, model_revision, allow_test_fallback=False):
+    if allow_test_fallback:
+        runtime_error = embedding_runtime_error()
+        if runtime_error is not None:
+            return _compute_test_fallback_embedding(image_bytes)
+
     try:
         import torch
         from PIL import Image, ImageOps
@@ -123,15 +156,11 @@ def compute_image_embedding(image_bytes, *, model_name, model_revision, allow_te
         if hasattr(model, "get_image_features"):
             features = model.get_image_features(**inputs)
         else:
-            outputs = model(**inputs)
-            features = getattr(outputs, "pooler_output", None)
-            if features is None:
-                last_hidden_state = getattr(outputs, "last_hidden_state", None)
-                if last_hidden_state is None:
-                    raise RuntimeError("Image embedding model output is missing feature tensors.")
-                features = last_hidden_state.mean(dim=1)
+            features = model(**inputs)
 
-    vector = features[0].detach().cpu().tolist()
+    feature_tensor = _extract_feature_tensor(features)
+
+    vector = feature_tensor.detach().cpu().reshape(-1).tolist()
     return _normalize_vector(vector)
 
 

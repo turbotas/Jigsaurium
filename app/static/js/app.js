@@ -256,24 +256,62 @@
   }
 
   async function apiRequest(path, options = {}) {
+    const { timeoutMs: timeoutMsOption, ...fetchOptions } = options || {};
     const headers = new Headers(options.headers || {});
     headers.set("Accept", "application/json");
 
-    if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    if (fetchOptions.body && !(fetchOptions.body instanceof FormData) && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
 
-    const method = (options.method || "GET").toUpperCase();
+    const method = (fetchOptions.method || "GET").toUpperCase();
     if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && state.csrfToken) {
       headers.set("X-CSRF-Token", state.csrfToken);
     }
 
-    const response = await fetch(path, {
-      credentials: "same-origin",
-      ...options,
-      method,
-      headers,
-    });
+    const parsedTimeoutMs = Number(timeoutMsOption);
+    const timeoutMs = Number.isFinite(parsedTimeoutMs) && parsedTimeoutMs > 0 ? parsedTimeoutMs : 120000;
+    const timeoutSeconds = Math.max(1, Math.round(timeoutMs / 1000));
+    const abortController = new AbortController();
+    const parentSignal = fetchOptions.signal;
+    if (parentSignal) {
+      if (parentSignal.aborted) {
+        abortController.abort(parentSignal.reason);
+      } else {
+        parentSignal.addEventListener(
+          "abort",
+          () => {
+            abortController.abort(parentSignal.reason);
+          },
+          { once: true }
+        );
+      }
+    }
+
+    let timeoutHandle = null;
+    timeoutHandle = setTimeout(() => {
+      abortController.abort();
+    }, timeoutMs);
+
+    let response;
+    try {
+      response = await fetch(path, {
+        credentials: "same-origin",
+        ...fetchOptions,
+        method,
+        headers,
+        signal: abortController.signal,
+      });
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw new Error(`Request timed out after ${timeoutSeconds}s.`);
+      }
+      throw error;
+    } finally {
+      if (timeoutHandle !== null) {
+        clearTimeout(timeoutHandle);
+      }
+    }
 
     const responseText = await response.text();
     let payload = {};
@@ -3334,29 +3372,29 @@
     updateImageBrowserStatus();
 
     showFeedback("Reference image save started in background.");
-    apiRequest(`/api/v1/jigsaws/${jigsawId}/images`, {
-      method: "POST",
-      body: formData,
-    })
-      .then((payload) => {
-        const createdReference = payload?.data || null;
-        if (!createdReference || !Number(createdReference.id || 0)) {
-          showFeedback("Reference image create did not return a created image.", true);
-          return;
-        }
-
-        showFeedback(`Reference image created as image #${createdReference.id}.`);
-        Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]).catch(() => {
-          // Background refresh errors are surfaced by individual loaders.
-        });
-      })
-      .catch((error) => {
-        showFeedback(error.message, true);
-      })
-      .finally(() => {
-        delete state.imageBrowserSavingImageIds[String(sourceImageId)];
-        updateImageBrowserStatus();
+    try {
+      const payload = await apiRequest(`/api/v1/jigsaws/${jigsawId}/images`, {
+        method: "POST",
+        body: formData,
+        timeoutMs: 120000,
       });
+
+      const createdReference = payload?.data || null;
+      if (!createdReference || !Number(createdReference.id || 0)) {
+        showFeedback("Reference image create did not return a created image.", true);
+        return;
+      }
+
+      showFeedback(`Reference image created as image #${createdReference.id}.`);
+      Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]).catch(() => {
+        // Background refresh errors are surfaced by individual loaders.
+      });
+    } catch (error) {
+      showFeedback(error.message, true);
+    } finally {
+      delete state.imageBrowserSavingImageIds[String(sourceImageId)];
+      updateImageBrowserStatus();
+    }
   }
 
   function handleImageBrowserKeyDown(event) {
