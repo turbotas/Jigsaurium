@@ -33,4 +33,5 @@ class JigsawImage(Base):
     captured_at_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     captured_at_raw: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_comment: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    uploaded_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

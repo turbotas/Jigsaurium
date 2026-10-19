@@ -78,7 +78,7 @@
   </section>
 
   <div id="admin-sections" hidden>
-  <section class="govuk-!-margin-bottom-8" aria-labelledby="users-heading">
+  <section id="users-section" class="govuk-!-margin-bottom-8" aria-labelledby="users-heading">
     <h2 id="users-heading" class="govuk-heading-l">Users</h2>
     <form id="user-create-form" class="govuk-!-margin-bottom-4">
       <div class="govuk-grid-row">
@@ -109,16 +109,7 @@
             <fieldset class="govuk-fieldset" aria-describedby="user-roles-hint">
               <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">Roles</legend>
               <div id="user-roles-hint" class="govuk-hint">Select one or more roles.</div>
-              <div class="govuk-checkboxes" data-module="govuk-checkboxes">
-                <div class="govuk-checkboxes__item">
-                  <input id="user-role-borrower" name="roles" class="govuk-checkboxes__input" type="checkbox" value="borrower" checked>
-                  <label class="govuk-label govuk-checkboxes__label" for="user-role-borrower">borrower</label>
-                </div>
-                <div class="govuk-checkboxes__item">
-                  <input id="user-role-administrator" name="roles" class="govuk-checkboxes__input" type="checkbox" value="administrator">
-                  <label class="govuk-label govuk-checkboxes__label" for="user-role-administrator">administrator</label>
-                </div>
-              </div>
+              <div id="user-roles-checkboxes" class="govuk-checkboxes" data-module="govuk-checkboxes"></div>
             </fieldset>
           </div>
         </div>
@@ -176,16 +167,7 @@
             <fieldset class="govuk-fieldset" aria-describedby="edit-user-roles-hint">
               <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">Roles</legend>
               <div id="edit-user-roles-hint" class="govuk-hint">Select one or more roles.</div>
-              <div class="govuk-checkboxes" data-module="govuk-checkboxes">
-                <div class="govuk-checkboxes__item">
-                  <input id="edit-user-role-borrower" name="roles" class="govuk-checkboxes__input" type="checkbox" value="borrower" checked>
-                  <label class="govuk-label govuk-checkboxes__label" for="edit-user-role-borrower">borrower</label>
-                </div>
-                <div class="govuk-checkboxes__item">
-                  <input id="edit-user-role-administrator" name="roles" class="govuk-checkboxes__input" type="checkbox" value="administrator">
-                  <label class="govuk-label govuk-checkboxes__label" for="edit-user-role-administrator">administrator</label>
-                </div>
-              </div>
+              <div id="edit-user-roles-checkboxes" class="govuk-checkboxes" data-module="govuk-checkboxes"></div>
             </fieldset>
           </div>
         </div>
@@ -213,7 +195,7 @@
     </form>
   </section>
 
-  <section aria-labelledby="jigsaws-heading">
+  <section id="jigsaws-section" aria-labelledby="jigsaws-heading">
     <h2 id="jigsaws-heading" class="govuk-heading-l">Jigsaw stock</h2>
     <form id="jigsaw-create-form" class="govuk-!-margin-bottom-4">
       <div class="govuk-grid-row">
@@ -688,7 +670,7 @@
     </section>
   </section>
 
-  <section class="govuk-!-margin-top-8" aria-labelledby="ai-usage-heading">
+  <section id="ai-usage-section" class="govuk-!-margin-top-8" aria-labelledby="ai-usage-heading">
     <h2 id="ai-usage-heading" class="govuk-heading-l">AI spend and diagnostics</h2>
     <p class="govuk-body">Track AI cost and inspect recent call failures without direct database access.</p>
 
@@ -791,7 +773,7 @@
     </div>
   </section>
 
-  <section class="govuk-!-margin-top-8" aria-labelledby="audit-heading">
+  <section id="audit-section" class="govuk-!-margin-top-8" aria-labelledby="audit-heading">
     <h2 id="audit-heading" class="govuk-heading-l">Audit events</h2>
     <p class="govuk-body">Recent administrative and authentication events.</p>
     <div class="table-scroll-wrap">
@@ -812,7 +794,7 @@
     <div id="audit-pagination" class="app-pagination" aria-live="polite"></div>
   </section>
 
-  <section class="govuk-!-margin-top-8" aria-labelledby="loans-heading">
+  <section id="loans-section" class="govuk-!-margin-top-8" aria-labelledby="loans-heading">
     <h2 id="loans-heading" class="govuk-heading-l">Loans</h2>
     <p class="govuk-body">Loan an available jigsaw to an active borrower account.</p>
     <form id="loan-create-form" class="govuk-!-margin-bottom-4">

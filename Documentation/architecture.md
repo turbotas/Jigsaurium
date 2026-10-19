@@ -48,8 +48,12 @@
   - title, series_name, series_number, manufacturer, artist, dimensions_cm, description, piece_count, condition, status, metadata
 - `jigsaw_images`
   - jigsaw_id, tag, filename, mime_type, image_data
+  - uploaded_by_user_id attribution for shared-household workflows
   - stored derivative variants for UI performance (thumbnail + preview blobs with mime types)
   - capture metadata, timestamp
+- `jigsaw_diary_entries`
+  - jigsaw_id, completed_at, difficulty, notes
+  - created_by_user_id and updated_by_user_id attribution
 - `image_embeddings`
   - image_id, model_key, normalized embedding vector, source-content hash
   - used for visual similarity suggestions (completed-photo reconciliation)

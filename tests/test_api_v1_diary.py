@@ -120,13 +120,15 @@ def test_diary_endpoints_require_authentication(client, seeded_diary_data, metho
 
 
 @pytest.mark.functional
-def test_diary_create_forbidden_for_borrower(client, seeded_diary_data):
+def test_diary_create_allows_borrower(client, seeded_diary_data):
     _set_user_session(client, seeded_diary_data["borrower_user_id"])
 
-    response = _create_entry(client, seeded_diary_data["available_jigsaw_id"], {"notes": "Nope"})
+    response = _create_entry(client, seeded_diary_data["available_jigsaw_id"], {"notes": "Borrower note"})
 
-    assert response.status_code == 403
-    assert response.get_json()["error"]["code"] == "forbidden"
+    assert response.status_code == 201
+    data = response.get_json()["data"]
+    assert data["notes"] == "Borrower note"
+    assert data["created_by_user_id"] == seeded_diary_data["borrower_user_id"]
 
 
 @pytest.mark.functional
@@ -143,9 +145,23 @@ def test_diary_delete_forbidden_for_borrower(client, seeded_diary_data):
 
 
 @pytest.mark.functional
-def test_diary_update_forbidden_for_borrower(client, seeded_diary_data):
-    _set_user_session(client, seeded_diary_data["admin_user_id"])
+def test_diary_update_allows_borrower_for_own_entry(client, seeded_diary_data):
+    _set_user_session(client, seeded_diary_data["borrower_user_id"])
     created = _create_entry(client, seeded_diary_data["available_jigsaw_id"], {"notes": "Mine"})
+    entry_id = created.get_json()["data"]["id"]
+
+    response = _update_entry(client, entry_id, {"notes": "Nope"})
+
+    assert response.status_code == 200
+    payload = response.get_json()["data"]
+    assert payload["notes"] == "Nope"
+    assert payload["updated_by_user_id"] == seeded_diary_data["borrower_user_id"]
+
+
+@pytest.mark.functional
+def test_diary_update_forbidden_for_borrower_when_entry_created_by_another_user(client, seeded_diary_data):
+    _set_user_session(client, seeded_diary_data["admin_user_id"])
+    created = _create_entry(client, seeded_diary_data["available_jigsaw_id"], {"notes": "Admin entry"})
     entry_id = created.get_json()["data"]["id"]
 
     _set_user_session(client, seeded_diary_data["borrower_user_id"])

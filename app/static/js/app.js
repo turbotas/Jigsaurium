@@ -35,6 +35,7 @@
   const state = {
     csrfToken: null,
     user: null,
+    roleDefinitions: [],
     users: [],
     jigsaws: [],
     jigsawSearchQuery: "",
@@ -105,6 +106,11 @@
     accountNewPassword: document.getElementById("account-new-password"),
     accountConfirmPassword: document.getElementById("account-confirm-password"),
     adminSections: document.getElementById("admin-sections"),
+    usersSection: document.getElementById("users-section"),
+    jigsawsSection: document.getElementById("jigsaws-section"),
+    aiUsageSection: document.getElementById("ai-usage-section"),
+    loansSection: document.getElementById("loans-section"),
+    auditSection: document.getElementById("audit-section"),
     logoutButton: document.getElementById("logout-button"),
     userCreateForm: document.getElementById("user-create-form"),
     userEditForm: document.getElementById("user-edit-form"),
@@ -113,10 +119,8 @@
     editUserId: document.getElementById("edit-user-id"),
     editUserEmail: document.getElementById("edit-user-email"),
     editUserDisplayName: document.getElementById("edit-user-display-name"),
-    userRoleBorrower: document.getElementById("user-role-borrower"),
-    userRoleAdministrator: document.getElementById("user-role-administrator"),
-    editUserRoleBorrower: document.getElementById("edit-user-role-borrower"),
-    editUserRoleAdministrator: document.getElementById("edit-user-role-administrator"),
+    userRolesCheckboxes: document.getElementById("user-roles-checkboxes"),
+    editUserRolesCheckboxes: document.getElementById("edit-user-roles-checkboxes"),
     editUserActive: document.getElementById("edit-user-active"),
     editUserPassword: document.getElementById("edit-user-password"),
     usersTableBody: document.getElementById("users-table-body"),
@@ -1261,6 +1265,105 @@
       .filter((value, index, values) => value && values.indexOf(value) === index);
   }
 
+  function getCurrentUserCapabilities() {
+    if (!state.user || !Array.isArray(state.user.capabilities)) {
+      return [];
+    }
+    return state.user.capabilities
+      .map((value) => String(value || "").trim())
+      .filter((value) => Boolean(value));
+  }
+
+  function currentUserHasCapability(capability) {
+    const target = String(capability || "").trim();
+    if (!target) {
+      return false;
+    }
+    return getCurrentUserCapabilities().includes(target);
+  }
+
+  function getDefaultCreateRoleNames() {
+    const availableRoleNames = state.roleDefinitions.map((role) => String(role?.name || "").trim()).filter(Boolean);
+    if (availableRoleNames.includes("member")) {
+      return ["member"];
+    }
+    if (availableRoleNames.includes("borrower")) {
+      return ["borrower"];
+    }
+    return [];
+  }
+
+  function createRoleSlug(roleName) {
+    return String(roleName || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+
+  function renderRoleCheckboxes(container, { selectedRoleNames = [], idPrefix = "role" } = {}) {
+    if (!container) {
+      return;
+    }
+
+    const selected = new Set(
+      (Array.isArray(selectedRoleNames) ? selectedRoleNames : [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean),
+    );
+
+    container.innerHTML = "";
+
+    let roleDefinitions = Array.isArray(state.roleDefinitions) ? state.roleDefinitions : [];
+    if (roleDefinitions.length === 0) {
+      roleDefinitions = [
+        { name: "member" },
+        { name: "borrower" },
+        { name: "administrator" },
+      ];
+    }
+    roleDefinitions.forEach((roleDefinition, index) => {
+      const roleName = String(roleDefinition?.name || "").trim();
+      if (!roleName) {
+        return;
+      }
+
+      const slug = createRoleSlug(roleName) || `role-${index}`;
+      const inputId = `${idPrefix}-${slug}`;
+
+      const item = document.createElement("div");
+      item.className = "govuk-checkboxes__item";
+
+      const input = document.createElement("input");
+      input.id = inputId;
+      input.name = "roles";
+      input.className = "govuk-checkboxes__input";
+      input.type = "checkbox";
+      input.value = roleName;
+      input.checked = selected.has(roleName);
+
+      const label = document.createElement("label");
+      label.className = "govuk-label govuk-checkboxes__label";
+      label.setAttribute("for", inputId);
+      label.textContent = roleName;
+
+      item.appendChild(input);
+      item.appendChild(label);
+      container.appendChild(item);
+    });
+  }
+
+  function renderUserRoleSelectors() {
+    renderRoleCheckboxes(elements.userRolesCheckboxes, {
+      selectedRoleNames: getDefaultCreateRoleNames(),
+      idPrefix: "user-role",
+    });
+    renderRoleCheckboxes(elements.editUserRolesCheckboxes, {
+      selectedRoleNames: getDefaultCreateRoleNames(),
+      idPrefix: "edit-user-role",
+    });
+  }
+
   function populateLoanFormOptions() {
     if (!elements.loanBorrowerUserId || !elements.loanJigsawId) {
       return;
@@ -1282,7 +1385,7 @@
         (user) =>
           Boolean(user.is_active) &&
           Array.isArray(user.roles) &&
-          (user.roles.includes("borrower") || user.roles.includes("administrator")),
+          (user.roles.includes("member") || user.roles.includes("borrower") || user.roles.includes("administrator")),
       )
       .sort((left, right) => String(left.email || "").localeCompare(String(right.email || "")));
 
@@ -1454,6 +1557,15 @@
       return;
     }
 
+    const canUpdateAny = currentUserHasCapability("diary.update_any");
+    const canUpdateOwn = currentUserHasCapability("diary.update_own");
+    const canEdit =
+      canUpdateAny || (canUpdateOwn && Number(entry.created_by_user_id || 0) === Number(state.user?.id || 0));
+    if (!canEdit) {
+      showFeedback("You do not have permission to edit this diary entry.", true);
+      return;
+    }
+
     state.diaryEditingEntryId = resolvedEntryId;
     if (elements.diaryJigsawId) {
       elements.diaryJigsawId.value = String(entry.jigsaw_id || "");
@@ -1575,8 +1687,38 @@
     elements.sessionSummary.textContent = `Signed in as ${state.user.email} (${roleText}).`;
 
     const isAdministrator = Array.isArray(state.user.roles) && state.user.roles.includes("administrator");
+    const canReadJigsaw = currentUserHasCapability("jigsaw.read");
+    const canCreateJigsaw = currentUserHasCapability("jigsaw.create");
+    const canUpdateJigsaw = currentUserHasCapability("jigsaw.update");
+    const canReadDiary = currentUserHasCapability("diary.read");
+    const canCreateDiary = currentUserHasCapability("diary.create");
+    const canUpdateDiaryAny = currentUserHasCapability("diary.update_any");
+    const canUpdateDiaryOwn = currentUserHasCapability("diary.update_own");
+    const canManageUsers = currentUserHasCapability("user.manage");
+    const canManageLoans = currentUserHasCapability("loan.manage");
+    const canManageImages = currentUserHasCapability("image.manage_library") || currentUserHasCapability("image.upload");
+    const canUploadImages = currentUserHasCapability("image.upload");
+    const canManageAi = currentUserHasCapability("ai.manage");
+    const canReadAudit = currentUserHasCapability("audit.read");
+    const canSeeMainWorkspace = canReadJigsaw || canReadDiary || canManageUsers || canManageLoans || canManageImages || canManageAi || canReadAudit;
+
     if (elements.adminSections) {
-      elements.adminSections.hidden = !isAdministrator;
+      elements.adminSections.hidden = !canSeeMainWorkspace;
+    }
+    if (elements.usersSection) {
+      elements.usersSection.hidden = !canManageUsers;
+    }
+    if (elements.jigsawsSection) {
+      elements.jigsawsSection.hidden = !(canReadJigsaw || canReadDiary);
+    }
+    if (elements.aiUsageSection) {
+      elements.aiUsageSection.hidden = !canManageAi;
+    }
+    if (elements.loansSection) {
+      elements.loansSection.hidden = !canManageLoans;
+    }
+    if (elements.auditSection) {
+      elements.auditSection.hidden = !canReadAudit;
     }
     if (elements.signInControls) {
       elements.signInControls.hidden = true;
@@ -1590,15 +1732,50 @@
     if (elements.accountSection) {
       elements.accountSection.hidden = false;
     }
-    if (state.diaryEditingEntryId && (!Array.isArray(state.user.roles) || !state.user.roles.includes("administrator"))) {
+    if (state.diaryEditingEntryId && !canUpdateDiaryAny && !canUpdateDiaryOwn) {
       resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
+    }
+    if (elements.jigsawCreateForm) {
+      elements.jigsawCreateForm.hidden = !canCreateJigsaw;
+    }
+    if (!canUpdateJigsaw) {
+      closeJigsawEditor();
+    }
+    if (elements.jigsawImageForm) {
+      elements.jigsawImageForm.hidden = !canUploadImages;
+    }
+    if (elements.imageLibraryUploadForm) {
+      elements.imageLibraryUploadForm.hidden = !canUploadImages;
+    }
+    if (elements.imageLibraryBulkCreateWrap) {
+      elements.imageLibraryBulkCreateWrap.hidden = !canManageAi;
+    }
+    if (elements.imageLibraryBulkCreateUnassignedBoxButton) {
+      elements.imageLibraryBulkCreateUnassignedBoxButton.hidden = !canManageAi;
+    }
+    if (!isAdministrator) {
+      closeUserEditor();
+    }
+    if (elements.diaryEntrySubmitButton) {
+      elements.diaryEntrySubmitButton.disabled = !canCreateDiary;
+    }
+    if (elements.diaryEntryCancelButton && !canUpdateDiaryAny && !canUpdateDiaryOwn) {
+      elements.diaryEntryCancelButton.hidden = true;
+    }
+    if (elements.diaryJigsawId) {
+      elements.diaryJigsawId.disabled = !canCreateDiary;
+    }
+    if (elements.diaryCompletedAt) {
+      elements.diaryCompletedAt.disabled = !canCreateDiary;
+    }
+    if (elements.diaryDifficulty) {
+      elements.diaryDifficulty.disabled = !canCreateDiary;
+    }
+    if (elements.diaryNotes) {
+      elements.diaryNotes.disabled = !canCreateDiary;
     }
     if (elements.accountUsername) {
       elements.accountUsername.value = state.user.display_name || "";
-    }
-
-    if (!isAdministrator) {
-      showFeedback("Signed in, but this account is not an administrator.", true);
     }
 
     const loginPasswordInput = document.getElementById("login-password");
@@ -1620,12 +1797,10 @@
     if (elements.editUserDisplayName) {
       elements.editUserDisplayName.value = "";
     }
-    if (elements.editUserRoleBorrower) {
-      elements.editUserRoleBorrower.checked = true;
-    }
-    if (elements.editUserRoleAdministrator) {
-      elements.editUserRoleAdministrator.checked = false;
-    }
+    renderRoleCheckboxes(elements.editUserRolesCheckboxes, {
+      selectedRoleNames: getDefaultCreateRoleNames(),
+      idPrefix: "edit-user-role",
+    });
     if (elements.editUserActive) {
       elements.editUserActive.checked = false;
     }
@@ -1774,6 +1949,9 @@
     const pageResult = paginateItems(sortedJigsawsRows, "jigsaws");
     const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.jigsawThumbnailImages);
     const assignedImagesByJigsawId = buildAssignedJigsawImagesByJigsawId(state.imageLibraryImages);
+    const canEditJigsaw = currentUserHasCapability("jigsaw.update");
+    const canUseAi = currentUserHasCapability("ai.manage");
+    const canRetireOrDelete = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
 
     pageResult.rows.forEach((jigsaw) => {
       const row = document.createElement("tr");
@@ -1813,37 +1991,45 @@
         controlsWrap.appendChild(toggleImagesButton);
       }
 
-      const editButton = document.createElement("button");
-      editButton.type = "button";
-      editButton.className = "govuk-button govuk-button--secondary app-inline-button";
-      editButton.setAttribute("data-module", "govuk-button");
-      editButton.dataset.jigsawEdit = String(jigsaw.id);
-      editButton.textContent = "Edit";
-      controlsWrap.appendChild(editButton);
+      if (canEditJigsaw) {
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        editButton.setAttribute("data-module", "govuk-button");
+        editButton.dataset.jigsawEdit = String(jigsaw.id);
+        editButton.textContent = "Edit";
+        controlsWrap.appendChild(editButton);
+      }
 
-      const retireButton = document.createElement("button");
-      retireButton.type = "button";
-      retireButton.className = "govuk-button govuk-button--secondary app-inline-button";
-      retireButton.setAttribute("data-module", "govuk-button");
-      retireButton.dataset.jigsawRetire = String(jigsaw.id);
-      retireButton.textContent = "Retire";
-      controlsWrap.appendChild(retireButton);
+      if (canRetireOrDelete) {
+        const retireButton = document.createElement("button");
+        retireButton.type = "button";
+        retireButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        retireButton.setAttribute("data-module", "govuk-button");
+        retireButton.dataset.jigsawRetire = String(jigsaw.id);
+        retireButton.textContent = "Retire";
+        controlsWrap.appendChild(retireButton);
+      }
 
-      const enrichButton = document.createElement("button");
-      enrichButton.type = "button";
-      enrichButton.className = "govuk-button govuk-button--secondary app-inline-button";
-      enrichButton.setAttribute("data-module", "govuk-button");
-      enrichButton.dataset.jigsawEnrich = String(jigsaw.id);
-      enrichButton.textContent = "Enrich";
-      controlsWrap.appendChild(enrichButton);
+      if (canUseAi) {
+        const enrichButton = document.createElement("button");
+        enrichButton.type = "button";
+        enrichButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        enrichButton.setAttribute("data-module", "govuk-button");
+        enrichButton.dataset.jigsawEnrich = String(jigsaw.id);
+        enrichButton.textContent = "Enrich";
+        controlsWrap.appendChild(enrichButton);
+      }
 
-      const deleteButton = document.createElement("button");
-      deleteButton.type = "button";
-      deleteButton.className = "govuk-button govuk-button--secondary app-inline-button";
-      deleteButton.setAttribute("data-module", "govuk-button");
-      deleteButton.dataset.jigsawDelete = String(jigsaw.id);
-      deleteButton.textContent = "Delete";
-      controlsWrap.appendChild(deleteButton);
+      if (canRetireOrDelete) {
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        deleteButton.setAttribute("data-module", "govuk-button");
+        deleteButton.dataset.jigsawDelete = String(jigsaw.id);
+        deleteButton.textContent = "Delete";
+        controlsWrap.appendChild(deleteButton);
+      }
 
       actionCell.appendChild(controlsWrap);
 
@@ -2253,6 +2439,10 @@
     const pageResult = paginateItems(sortedFilteredImages, "imageLibrary");
     const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
     const jigsawsById = new Map(state.jigsaws.map((jigsaw) => [Number(jigsaw.id), jigsaw]));
+    const canSetTag = currentUserHasCapability("image.tag");
+    const canAssign = currentUserHasCapability("image.assign");
+    const canDelete = currentUserHasCapability("image.delete");
+    const canUseAi = currentUserHasCapability("ai.manage");
     pageResult.rows.forEach((image) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
@@ -2279,30 +2469,36 @@
       const tagControls = document.createElement("div");
       tagControls.className = "app-inline-controls app-image-actions__row";
 
-      const tagSelect = document.createElement("select");
-      tagSelect.className = "govuk-select app-image-tag-select";
-      tagSelect.dataset.imageTagSelect = String(image.id);
+      if (canSetTag) {
+        const tagSelect = document.createElement("select");
+        tagSelect.className = "govuk-select app-image-tag-select";
+        tagSelect.dataset.imageTagSelect = String(image.id);
 
-      const normalizedCurrentTag = normalizeImageTagLabel(image.tag);
-      getImageTagDropdownValues(image.tag).forEach((tagValue) => {
-        const option = document.createElement("option");
-        option.value = tagValue;
-        option.textContent = tagValue;
-        if (toImageTagKey(tagValue) === toImageTagKey(normalizedCurrentTag)) {
-          option.selected = true;
-        }
-        tagSelect.appendChild(option);
-      });
+        const normalizedCurrentTag = normalizeImageTagLabel(image.tag);
+        getImageTagDropdownValues(image.tag).forEach((tagValue) => {
+          const option = document.createElement("option");
+          option.value = tagValue;
+          option.textContent = tagValue;
+          if (toImageTagKey(tagValue) === toImageTagKey(normalizedCurrentTag)) {
+            option.selected = true;
+          }
+          tagSelect.appendChild(option);
+        });
 
-      const tagButton = document.createElement("button");
-      tagButton.type = "button";
-      tagButton.className = "govuk-button govuk-button--secondary app-inline-button";
-      tagButton.setAttribute("data-module", "govuk-button");
-      tagButton.dataset.imageTagSet = String(image.id);
-      tagButton.textContent = "Set tag";
+        const tagButton = document.createElement("button");
+        tagButton.type = "button";
+        tagButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        tagButton.setAttribute("data-module", "govuk-button");
+        tagButton.dataset.imageTagSet = String(image.id);
+        tagButton.textContent = "Set tag";
 
-      tagControls.appendChild(tagSelect);
-      tagControls.appendChild(tagButton);
+        tagControls.appendChild(tagSelect);
+        tagControls.appendChild(tagButton);
+      } else {
+        const tagReadOnly = document.createElement("span");
+        tagReadOnly.textContent = String(image.tag || "-");
+        tagControls.appendChild(tagReadOnly);
+      }
       tagCell.appendChild(tagControls);
       row.appendChild(tagCell);
 
@@ -2320,7 +2516,7 @@
       const actionButtons = document.createElement("div");
       actionButtons.className = "app-inline-controls app-image-actions__row";
 
-      if (!image.jigsaw_id && sortedJigsaws.length > 0) {
+      if (canAssign && !image.jigsaw_id && sortedJigsaws.length > 0) {
         const select = document.createElement("select");
         select.className = "govuk-select";
         select.dataset.imageAssignSelect = String(image.id);
@@ -2348,23 +2544,25 @@
         assignControls.appendChild(button);
       } else if (!image.jigsaw_id) {
         const note = document.createElement("span");
-        note.textContent = "No jigsaws available";
+        note.textContent = canAssign ? "No jigsaws available" : "Assign unavailable";
         assignControls.appendChild(note);
       } else {
         const assignedNote = document.createElement("span");
         assignedNote.textContent = "Assigned";
         assignControls.appendChild(assignedNote);
 
-        const unassignButton = document.createElement("button");
-        unassignButton.type = "button";
-        unassignButton.className = "govuk-button govuk-button--secondary app-inline-button";
-        unassignButton.setAttribute("data-module", "govuk-button");
-        unassignButton.dataset.imageUnassign = String(image.id);
-        unassignButton.textContent = "Unassign";
-        assignControls.appendChild(unassignButton);
+        if (canAssign) {
+          const unassignButton = document.createElement("button");
+          unassignButton.type = "button";
+          unassignButton.className = "govuk-button govuk-button--secondary app-inline-button";
+          unassignButton.setAttribute("data-module", "govuk-button");
+          unassignButton.dataset.imageUnassign = String(image.id);
+          unassignButton.textContent = "Unassign";
+          assignControls.appendChild(unassignButton);
+        }
       }
 
-      if (!image.jigsaw_id) {
+      if (canUseAi && !image.jigsaw_id) {
         const createButton = document.createElement("button");
         createButton.type = "button";
         createButton.className = "govuk-button govuk-button--secondary app-inline-button";
@@ -2399,13 +2597,15 @@
       link.rel = "noopener noreferrer";
       actionButtons.appendChild(link);
 
-      const deleteButton = document.createElement("button");
-      deleteButton.type = "button";
-      deleteButton.className = "govuk-button govuk-button--warning app-inline-button";
-      deleteButton.setAttribute("data-module", "govuk-button");
-      deleteButton.dataset.imageDelete = String(image.id);
-      deleteButton.textContent = "Delete";
-      actionButtons.appendChild(deleteButton);
+      if (canDelete) {
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "govuk-button govuk-button--warning app-inline-button";
+        deleteButton.setAttribute("data-module", "govuk-button");
+        deleteButton.dataset.imageDelete = String(image.id);
+        deleteButton.textContent = "Delete";
+        actionButtons.appendChild(deleteButton);
+      }
 
       controlsWrap.appendChild(assignControls);
       controlsWrap.appendChild(suggestControls);
@@ -3537,14 +3737,24 @@
       const actionCell = document.createElement("td");
       actionCell.className = "govuk-table__cell";
 
-      const isAdministrator = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
-      if (isFormalDiaryEntry && isAdministrator) {
+      const canUpdateDiaryAny = currentUserHasCapability("diary.update_any");
+      const canUpdateDiaryOwn = currentUserHasCapability("diary.update_own");
+      const canDeleteDiaryAny = currentUserHasCapability("diary.delete_any");
+      const canAssignImages = currentUserHasCapability("image.assign");
+      const canEditThisEntry =
+        isFormalDiaryEntry && (
+          canUpdateDiaryAny ||
+          (canUpdateDiaryOwn && Number(entry?.created_by_user_id || 0) === Number(state.user?.id || 0))
+        );
+
+      if (canEditThisEntry || (isFormalDiaryEntry && canDeleteDiaryAny)) {
         const editButton = document.createElement("button");
         editButton.type = "button";
         editButton.className = "govuk-button govuk-button--secondary app-inline-button";
         editButton.setAttribute("data-module", "govuk-button");
         editButton.dataset.diaryEdit = String(entry.id);
         editButton.textContent = "Edit";
+        editButton.disabled = !canEditThisEntry;
 
         const deleteButton = document.createElement("button");
         deleteButton.type = "button";
@@ -3552,9 +3762,13 @@
         deleteButton.setAttribute("data-module", "govuk-button");
         deleteButton.dataset.diaryDelete = String(entry.id);
         deleteButton.textContent = "Delete";
+        deleteButton.disabled = !canDeleteDiaryAny;
+
         actionCell.appendChild(editButton);
-        actionCell.appendChild(deleteButton);
-      } else if (!isFormalDiaryEntry && isAdministrator) {
+        if (canDeleteDiaryAny) {
+          actionCell.appendChild(deleteButton);
+        }
+      } else if (!isFormalDiaryEntry && canAssignImages) {
         const suggestButton = document.createElement("button");
         suggestButton.type = "button";
         suggestButton.className = "govuk-button govuk-button--secondary app-inline-button";
@@ -3588,11 +3802,46 @@
     } catch (error) {
       state.user = null;
       state.csrfToken = null;
+      state.roleDefinitions = [];
+      renderUserRoleSelectors();
       setSessionSummary();
       if (error.status !== 401) {
         showFeedback(error.message, true);
       }
       return false;
+    }
+  }
+
+  async function loadRoles() {
+    if (!state.user) {
+      state.roleDefinitions = [];
+      renderUserRoleSelectors();
+      return;
+    }
+
+    if (!currentUserHasCapability("user.manage")) {
+      state.roleDefinitions = [];
+      renderUserRoleSelectors();
+      return;
+    }
+
+    try {
+      const payload = await apiRequest("/api/v1/roles");
+      const fetchedRoles = Array.isArray(payload.data) ? payload.data : [];
+      state.roleDefinitions = fetchedRoles
+        .map((entry) => ({
+          name: String(entry?.name || "").trim(),
+          description: String(entry?.description || "").trim() || null,
+        }))
+        .filter((entry) => Boolean(entry.name));
+      renderUserRoleSelectors();
+    } catch (error) {
+      if (error.status === 403) {
+        state.roleDefinitions = [];
+        renderUserRoleSelectors();
+        return;
+      }
+      showFeedback(error.message, true);
     }
   }
 
@@ -3667,6 +3916,12 @@
   }
 
   async function loadJigsawImagesForSelected() {
+    if (!currentUserHasCapability("image.manage_library")) {
+      state.jigsawImages = [];
+      renderJigsawImages([]);
+      return;
+    }
+
     const selectedJigsawId = Number(elements.jigsawImageJigsawId?.value || "0");
     if (!selectedJigsawId) {
       state.jigsawImages = [];
@@ -3689,6 +3944,16 @@
     const shouldSkipBrowserReload = Boolean(options && options.skipBrowserReload);
 
     if (!state.user) {
+      state.imageLibraryImages = [];
+      state.jigsawThumbnailImages = [];
+      state.imageBrowserContentCacheByImageId = {};
+      state.imageBrowserSavingImageIds = {};
+      renderImageLibraryImages([]);
+      renderJigsaws(state.jigsaws);
+      return;
+    }
+
+    if (!currentUserHasCapability("image.manage_library")) {
       state.imageLibraryImages = [];
       state.jigsawThumbnailImages = [];
       state.imageBrowserContentCacheByImageId = {};
@@ -3737,6 +4002,14 @@
     const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
     const effectiveSelectedJigsawId = state.diarySelectionTouchedByUser ? selectedJigsawId : 0;
     if (!state.user) {
+      state.diaryEntries = [];
+      state.pagination.diary = 1;
+      setDiaryEntriesCaption(0);
+      renderDiaryEntries([], getDiaryEntriesEmptyMessage(0));
+      return;
+    }
+
+    if (!currentUserHasCapability("diary.read")) {
       state.diaryEntries = [];
       state.pagination.diary = 1;
       setDiaryEntriesCaption(0);
@@ -4092,7 +4365,7 @@
       state.csrfToken = payload.data.csrf_token;
       setSessionSummary();
       showFeedback("Signed in successfully.");
-      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadAiUsageDiagnostics(), loadImageLibraryImages()]);
+      await Promise.all([loadRoles(), loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadAiUsageDiagnostics(), loadImageLibraryImages()]);
       await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
     } catch (error) {
       showFeedback(error.message, true);
@@ -4113,6 +4386,7 @@
       state.csrfToken = null;
       setSessionSummary();
       state.users = [];
+      state.roleDefinitions = [];
       state.jigsaws = [];
       state.loans = [];
       state.auditEvents = [];
@@ -4138,6 +4412,7 @@
         audit: 1,
       };
       renderUsers([]);
+      renderUserRoleSelectors();
       closeUserEditor();
       renderJigsaws([]);
       closeJigsawEditor();
@@ -4208,6 +4483,10 @@
         }),
       });
       form.reset();
+      renderRoleCheckboxes(elements.userRolesCheckboxes, {
+        selectedRoleNames: getDefaultCreateRoleNames(),
+        idPrefix: "user-role",
+      });
       showFeedback("User created.");
       await Promise.all([loadUsers(), loadAuditEvents()]);
     } catch (error) {
@@ -4231,14 +4510,11 @@
     if (elements.editUserDisplayName) {
       elements.editUserDisplayName.value = selectedUser.display_name || "";
     }
-    if (elements.editUserRoleBorrower) {
-      const roles = Array.isArray(selectedUser.roles) ? selectedUser.roles : [];
-      elements.editUserRoleBorrower.checked = roles.includes("borrower");
-    }
-    if (elements.editUserRoleAdministrator) {
-      const roles = Array.isArray(selectedUser.roles) ? selectedUser.roles : [];
-      elements.editUserRoleAdministrator.checked = roles.includes("administrator");
-    }
+    const roles = Array.isArray(selectedUser.roles) ? selectedUser.roles : [];
+    renderRoleCheckboxes(elements.editUserRolesCheckboxes, {
+      selectedRoleNames: roles,
+      idPrefix: "edit-user-role",
+    });
     if (elements.editUserActive) {
       elements.editUserActive.checked = Boolean(selectedUser.is_active);
     }
@@ -4380,6 +4656,11 @@
     event.preventDefault();
     clearFeedback();
 
+    if (!currentUserHasCapability("jigsaw.create")) {
+      showFeedback("You do not have permission to create jigsaws.", true);
+      return;
+    }
+
     const form = event.currentTarget;
     const formData = new FormData(form);
     const payload = {
@@ -4405,6 +4686,11 @@
   async function handleCreateDiaryEntry(event) {
     event.preventDefault();
     clearFeedback();
+
+    if (!currentUserHasCapability("diary.create")) {
+      showFeedback("You do not have permission to create diary entries.", true);
+      return;
+    }
 
     const form = event.currentTarget;
     const formData = new FormData(form);
@@ -4460,6 +4746,11 @@
   async function handleCreateJigsawImage(event) {
     event.preventDefault();
     clearFeedback();
+
+    if (!currentUserHasCapability("image.upload")) {
+      showFeedback("You do not have permission to upload images.", true);
+      return;
+    }
 
     const form = event.currentTarget;
     const formData = new FormData(form);
@@ -4558,7 +4849,7 @@
   }
 
   function syncBulkCreateFromUploadVisibility() {
-    const shouldShow = shouldShowBulkCreateFromUploadOption();
+    const shouldShow = currentUserHasCapability("ai.manage") && shouldShowBulkCreateFromUploadOption();
     if (elements.imageLibraryBulkCreateWrap) {
       elements.imageLibraryBulkCreateWrap.hidden = !shouldShow;
     }
@@ -4753,6 +5044,11 @@
     event.preventDefault();
     clearFeedback();
 
+    if (!currentUserHasCapability("image.upload")) {
+      showFeedback("You do not have permission to upload image library items.", true);
+      return;
+    }
+
     if (!Array.isArray(state.bulkUploadFiles) || state.bulkUploadFiles.length === 0) {
       showFeedback("Choose one or more files before uploading to the image library.", true);
       return;
@@ -4824,6 +5120,11 @@
   async function handleBulkCreateAllUnassignedBoxImages() {
     clearFeedback();
     clearBulkCreateProgress();
+
+    if (!currentUserHasCapability("ai.manage")) {
+      showFeedback("You do not have permission to run bulk AI create.", true);
+      return;
+    }
 
     const shouldStart = window.confirm(
       "Queue AI create for all unassigned images tagged exactly as Box?",
@@ -4935,6 +5236,11 @@
   async function handleEditJigsaw(event) {
     event.preventDefault();
     clearFeedback();
+
+    if (!currentUserHasCapability("jigsaw.update")) {
+      showFeedback("You do not have permission to edit jigsaws.", true);
+      return;
+    }
 
     const formData = new FormData(event.currentTarget);
     const jigsawId = Number(formData.get("jigsaw_id") || "0");
@@ -5053,6 +5359,11 @@
       event.preventDefault();
       clearFeedback();
 
+      if (!currentUserHasCapability("jigsaw.update")) {
+        showFeedback("You do not have permission to edit jigsaws.", true);
+        return;
+      }
+
       const jigsawId = Number(editJigsawButton.getAttribute("data-jigsaw-edit"));
       openJigsawEditor(jigsawId);
       return;
@@ -5110,6 +5421,11 @@
       event.preventDefault();
       clearFeedback();
 
+      if (!Array.isArray(state.user?.roles) || !state.user.roles.includes("administrator")) {
+        showFeedback("You do not have permission to retire jigsaws.", true);
+        return;
+      }
+
       const jigsawId = Number(retireButton.getAttribute("data-jigsaw-retire"));
       try {
         await apiRequest(`/api/v1/jigsaws/${jigsawId}`, { method: "DELETE" });
@@ -5126,6 +5442,11 @@
       event.preventDefault();
       clearFeedback();
 
+      if (!currentUserHasCapability("ai.manage")) {
+        showFeedback("You do not have permission to enrich jigsaws.", true);
+        return;
+      }
+
       const jigsawId = Number(enrichButton.getAttribute("data-jigsaw-enrich"));
       await enrichJigsawById(jigsawId);
       return;
@@ -5135,6 +5456,11 @@
     if (deleteButton) {
       event.preventDefault();
       clearFeedback();
+
+      if (!Array.isArray(state.user?.roles) || !state.user.roles.includes("administrator")) {
+        showFeedback("You do not have permission to delete jigsaws.", true);
+        return;
+      }
 
       const jigsawId = Number(deleteButton.getAttribute("data-jigsaw-delete"));
       const shouldDelete = window.confirm(
@@ -5166,6 +5492,11 @@
       event.preventDefault();
       clearFeedback();
 
+      if (!currentUserHasCapability("diary.update_any") && !currentUserHasCapability("diary.update_own")) {
+        showFeedback("You do not have permission to edit diary entries.", true);
+        return;
+      }
+
       const entryId = Number(diaryEditButton.getAttribute("data-diary-edit"));
       beginDiaryEntryEdit(entryId);
       return;
@@ -5175,6 +5506,11 @@
     if (diaryDeleteButton) {
       event.preventDefault();
       clearFeedback();
+
+      if (!currentUserHasCapability("diary.delete_any")) {
+        showFeedback("You do not have permission to delete diary entries.", true);
+        return;
+      }
 
       const entryId = Number(diaryDeleteButton.getAttribute("data-diary-delete"));
       const shouldDelete = window.confirm("Delete this diary entry? This cannot be undone.");
@@ -5221,6 +5557,11 @@
       event.preventDefault();
       clearFeedback();
 
+      if (!currentUserHasCapability("ai.manage")) {
+        showFeedback("You do not have permission to access image suggestions.", true);
+        return;
+      }
+
       const imageId = Number(imageSuggestButton.getAttribute("data-image-suggest"));
       await handleImageLibrarySuggestMatch(imageId);
       return;
@@ -5230,6 +5571,11 @@
     if (imageSuggestAssignButton) {
       event.preventDefault();
       clearFeedback();
+
+      if (!currentUserHasCapability("image.assign")) {
+        showFeedback("You do not have permission to assign images.", true);
+        return;
+      }
 
       const imageId = Number(imageSuggestAssignButton.getAttribute("data-image-suggest-assign"));
       const jigsawId = Number(imageSuggestAssignButton.getAttribute("data-image-suggest-jigsaw-id") || "0");
@@ -5241,6 +5587,11 @@
     if (imageAssignButton) {
       event.preventDefault();
       clearFeedback();
+
+      if (!currentUserHasCapability("image.assign")) {
+        showFeedback("You do not have permission to assign images.", true);
+        return;
+      }
 
       const imageId = Number(imageAssignButton.getAttribute("data-image-assign"));
       const select = elements.imageLibraryTableBody?.querySelector(
@@ -5270,6 +5621,11 @@
     if (imageTagButton) {
       event.preventDefault();
       clearFeedback();
+
+      if (!currentUserHasCapability("image.tag")) {
+        showFeedback("You do not have permission to tag images.", true);
+        return;
+      }
 
       const imageId = Number(imageTagButton.getAttribute("data-image-tag-set"));
       const select = elements.imageLibraryTableBody?.querySelector(
@@ -5305,6 +5661,11 @@
       event.preventDefault();
       clearFeedback();
 
+      if (!currentUserHasCapability("image.assign")) {
+        showFeedback("You do not have permission to unassign images.", true);
+        return;
+      }
+
       const imageId = Number(imageUnassignButton.getAttribute("data-image-unassign"));
       try {
         await apiRequest(`/api/v1/image-library/images/${imageId}/assign`, {
@@ -5324,6 +5685,11 @@
       event.preventDefault();
       clearFeedback();
 
+      if (!currentUserHasCapability("ai.manage")) {
+        showFeedback("You do not have permission to create jigsaws from images.", true);
+        return;
+      }
+
       const imageId = Number(imageCreateButton.getAttribute("data-image-create"));
       try {
         const jobId = await startBulkCreateJobForImageIds([imageId]);
@@ -5342,6 +5708,11 @@
     if (imageDeleteButton) {
       event.preventDefault();
       clearFeedback();
+
+      if (!currentUserHasCapability("image.delete")) {
+        showFeedback("You do not have permission to delete images.", true);
+        return;
+      }
 
       const imageId = Number(imageDeleteButton.getAttribute("data-image-delete"));
       const image = Array.isArray(state.imageLibraryImages)
@@ -5907,6 +6278,7 @@
 
   async function init() {
     state.diarySelectionTouchedByUser = false;
+    renderUserRoleSelectors();
     setImageBrowserFilterInputsFromState();
     syncImageBrowserFilterStateFromInputs();
     attachEvents();
@@ -5917,12 +6289,13 @@
     if (isAuthenticated) {
       clearImageEmbeddingBackfillProgress();
       setImageEmbeddingBackfillStatus("");
-      await Promise.all([loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadAiUsageDiagnostics(), loadImageLibraryImages()]);
+      await Promise.all([loadRoles(), loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadAiUsageDiagnostics(), loadImageLibraryImages()]);
       await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
     } else {
       clearImageEmbeddingBackfillProgress();
       setImageEmbeddingBackfillStatus("");
       renderUsers([]);
+      renderUserRoleSelectors();
       renderJigsaws([]);
       renderLoans([]);
       renderJigsawImages([]);

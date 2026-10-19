@@ -43,14 +43,17 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 ## Functional Scope (v1)
 
 - Authentication and authorization.
-- Role management with at least `administrator` and `borrower`.
+- Role management with at least `administrator`, `member`, and legacy `borrower` support during transition.
 - Jigsaw management:
   - Add (quick-add: title + piece count), edit, archive/retire, restore.
   - Track condition, piece count, and status.
   - Search by title, piece count, availability, and tags.
 - Completion diary:
   - Log completions per jigsaw with optional 1-5 difficulty rating and notes.
-  - View, edit, and delete diary entries.
+  - View diary entries as any authenticated user.
+  - Add diary entries as a normal user.
+  - Edit own diary entries as a normal user; administrators can edit any entry.
+  - Delete diary entries as an administrator.
   - Surface unlinked `Completed` images alongside formal diary entries in merged completion history views.
   - Suggest visual matches for unlinked `Completed` images and support quick admin assignment.
   - Last-completed date derived from diary entries.
@@ -97,7 +100,8 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 - Admin can submit a mobile guided-capture upload with at least one slot populated.
 - Completed-only guided capture stores an unassigned `Completed` image without creating a jigsaw.
 - Guided capture that includes a box image creates a jigsaw, tags/uploads captured slot images, and runs enrich-from-images once.
-- Admin can log, view, and delete completion diary entries with difficulty ratings and notes per jigsaw.
+- Authenticated non-admin users can log and edit their own completion diary entries.
+- Admin can log, edit, and delete completion diary entries with difficulty ratings and notes per jigsaw.
 - Admin can create users and assign one of the supported roles.
 - Borrower cannot access admin-only API endpoints.
 - All create/update/delete actions write an audit event.

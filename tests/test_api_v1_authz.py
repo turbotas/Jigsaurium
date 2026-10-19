@@ -16,18 +16,22 @@ def seeded_identity_data(app):
 
         admin_role = db_session.query(Role).filter_by(name="administrator").one()
         borrower_role = db_session.query(Role).filter_by(name="borrower").one()
+        member_role = db_session.query(Role).filter_by(name="member").one()
 
         admin_user = User(email="admin@example.com", display_name="Admin User")
         borrower_user = User(email="borrower@example.com", display_name="Borrower User")
+        member_user = User(email="member@example.com", display_name="Member User")
         admin_user.set_password("AdminPassword123!")
         borrower_user.set_password("BorrowerPassword123!")
-        db_session.add_all([admin_user, borrower_user])
+        member_user.set_password("MemberPassword123!")
+        db_session.add_all([admin_user, borrower_user, member_user])
         db_session.flush()
 
         db_session.add_all(
             [
                 UserRole(user_id=admin_user.id, role_id=admin_role.id),
                 UserRole(user_id=borrower_user.id, role_id=borrower_role.id),
+                UserRole(user_id=member_user.id, role_id=member_role.id),
             ]
         )
 
@@ -53,6 +57,7 @@ def seeded_identity_data(app):
         seeded_ids = {
             "admin_user_id": admin_user.id,
             "borrower_user_id": borrower_user.id,
+            "member_user_id": member_user.id,
             "available_jigsaw_id": available_jigsaw.id,
             "retired_jigsaw_id": retired_jigsaw.id,
         }
@@ -154,7 +159,7 @@ def test_api_users_returns_data_for_administrator(client, seeded_identity_data):
 
     assert response.status_code == 200
     payload = response.get_json()
-    assert len(payload["data"]) == 2
+    assert len(payload["data"]) == 3
     assert payload["data"][0]["email"] == "admin@example.com"
     assert payload["data"][0]["roles"] == ["administrator"]
     assert payload["meta"]["request_id"].startswith("req_")
@@ -220,7 +225,7 @@ def test_api_roles_returns_seeded_roles_for_administrator(client, seeded_identit
     assert response.status_code == 200
     payload = response.get_json()
     role_names = [entry["name"] for entry in payload["data"]]
-    assert role_names == ["administrator", "borrower"]
+    assert role_names == ["administrator", "borrower", "member"]
 
 
 @pytest.mark.functional
@@ -1062,13 +1067,12 @@ def test_upload_jigsaw_image_rejects_tag_that_is_too_long(client, seeded_identit
 
 
 @pytest.mark.functional
-def test_borrower_cannot_list_jigsaw_images(client, seeded_identity_data):
+def test_borrower_can_list_jigsaw_images(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["borrower_user_id"])
 
     response = client.get(f"/api/v1/jigsaws/{seeded_identity_data['available_jigsaw_id']}/images")
 
-    assert response.status_code == 403
-    assert response.get_json()["error"]["code"] == "forbidden"
+    assert response.status_code == 200
 
 
 @pytest.mark.functional
@@ -1083,7 +1087,7 @@ def test_api_get_jigsaw_hides_retired_from_borrower(client, seeded_identity_data
 
 
 @pytest.mark.functional
-def test_api_create_jigsaw_requires_admin_role(client, seeded_identity_data):
+def test_borrower_can_create_jigsaw_via_legacy_capability(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["borrower_user_id"])
 
     response = client.post(
@@ -1092,8 +1096,77 @@ def test_api_create_jigsaw_requires_admin_role(client, seeded_identity_data):
         json={"title": "No Access", "piece_count": 100, "status": "available"},
     )
 
-    assert response.status_code == 403
-    assert response.get_json()["error"]["code"] == "forbidden"
+    assert response.status_code == 201
+    assert response.get_json()["data"]["title"] == "No Access"
+
+
+@pytest.mark.functional
+def test_member_can_create_jigsaw_but_cannot_retire_or_delete(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["member_user_id"])
+
+    create_response = client.post(
+        "/api/v1/jigsaws",
+        headers=_csrf_headers(),
+        json={"title": "Member Created", "piece_count": 300, "status": "available"},
+    )
+    assert create_response.status_code == 201
+    created_id = int(create_response.get_json()["data"]["id"])
+
+    retire_response = client.delete(f"/api/v1/jigsaws/{created_id}", headers=_csrf_headers())
+    assert retire_response.status_code == 403
+
+    delete_response = client.delete(f"/api/v1/jigsaws/{created_id}/permanent", headers=_csrf_headers())
+    assert delete_response.status_code == 403
+
+
+@pytest.mark.functional
+def test_member_cannot_access_users_loans_or_ai_diagnostics(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["member_user_id"])
+
+    users_response = client.get("/api/v1/users")
+    assert users_response.status_code == 403
+
+    loans_response = client.get("/api/v1/loans")
+    assert loans_response.status_code == 403
+
+    ai_response = client.get("/api/v1/ai-usage/diagnostics")
+    assert ai_response.status_code == 403
+
+
+@pytest.mark.functional
+def test_member_can_use_image_library_and_jigsaw_image_upload(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["member_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    upload_jigsaw_response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "completed",
+            "image": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"m" * 128), "member-upload.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_jigsaw_response.status_code == 201
+
+    list_jigsaw_images_response = client.get(f"/api/v1/jigsaws/{jigsaw_id}/images")
+    assert list_jigsaw_images_response.status_code == 200
+    assert len(list_jigsaw_images_response.get_json()["data"]) >= 1
+
+    upload_library_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "tag": "box",
+            "files": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"n" * 128), "member-library.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_library_response.status_code == 201
+
+    list_library_response = client.get("/api/v1/image-library/images?limit=50")
+    assert list_library_response.status_code == 200
+    assert len(list_library_response.get_json()["data"]) >= 1
 
 
 @pytest.mark.functional
@@ -1159,6 +1232,10 @@ def test_auth_me_returns_authenticated_user(client, seeded_identity_data):
     payload = me_response.get_json()
     assert payload["data"]["user"]["email"] == "borrower@example.com"
     assert payload["data"]["user"]["roles"] == ["borrower"]
+    capabilities = payload["data"]["user"].get("capabilities")
+    assert isinstance(capabilities, list)
+    assert "jigsaw.create" in capabilities
+    assert "loan.manage" not in capabilities
     assert isinstance(payload["data"]["csrf_token"], str)
     assert payload["data"]["csrf_token"]
 
@@ -1169,8 +1246,7 @@ def test_auth_me_returns_authenticated_user(client, seeded_identity_data):
         headers={"X-CSRF-Token": csrf_token},
         json={"title": "Try", "piece_count": 500, "status": "available"},
     )
-    assert protected_mutation.status_code == 403
-    assert protected_mutation.get_json()["error"]["code"] == "forbidden"
+    assert protected_mutation.status_code == 201
 
 
 @pytest.mark.functional
@@ -1286,13 +1362,45 @@ def test_auth_login_accepts_existing_user_email_without_dot_domain(app, client, 
 
 
 @pytest.mark.functional
-def test_audit_events_requires_admin_role(client, seeded_identity_data):
+def test_borrower_can_read_audit_events(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["borrower_user_id"])
 
     response = client.get("/api/v1/audit-events")
 
-    assert response.status_code == 403
-    assert response.get_json()["error"]["code"] == "forbidden"
+    assert response.status_code == 200
+
+
+@pytest.mark.functional
+def test_member_audit_events_are_scoped_to_current_actor(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    create_response = client.post(
+        "/api/v1/users",
+        headers=_csrf_headers(),
+        json={
+            "email": "audit.scope.target@example.com",
+            "password": "AuditScopePass123!",
+            "display_name": "Audit Scope Target",
+            "is_active": True,
+            "roles": ["borrower"],
+        },
+    )
+    assert create_response.status_code == 201
+
+    _set_user_session(client, seeded_identity_data["member_user_id"])
+    update_self_response = client.patch(
+        "/api/v1/auth/me",
+        headers=_csrf_headers(),
+        json={"display_name": "Member Self Update"},
+    )
+    assert update_self_response.status_code == 200
+
+    response = client.get("/api/v1/audit-events?limit=100")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload["data"]) >= 1
+    assert all(event["actor_user_id"] == seeded_identity_data["member_user_id"] for event in payload["data"])
 
 
 @pytest.mark.functional

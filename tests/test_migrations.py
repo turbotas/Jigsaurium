@@ -27,10 +27,10 @@ def test_alembic_upgrade_and_downgrade_smoke(tmp_path):
         role_names = [
             row[0]
             for row in connection.execute(
-                text("SELECT name FROM roles WHERE name IN ('administrator', 'borrower') ORDER BY name")
+                text("SELECT name FROM roles WHERE name IN ('administrator', 'borrower', 'member') ORDER BY name")
             )
         ]
-    assert role_names == ["administrator", "borrower"]
+    assert role_names == ["administrator", "borrower", "member"]
 
     command.downgrade(alembic_cfg, "base")
 

@@ -190,3 +190,16 @@
 - Why: range files preserve upgrade intent while known-good locks preserve reproducibility and rollback clarity.
 - Decision: promote Python updates through `scripts/update_python_dependencies.(bat|sh)` in full-profile mode by default (upgrade resolvable packages, run pytest for dev profile, then sync direct requirement lower bounds and refresh known-good lock).
 - Why: a small-team workflow needs one-command batch promotion with a single test gate rather than per-package manual selection.
+
+## 2026-10-19 - Shared-Household Attribution and Diary Capability Relaxation
+
+- Decision: keep jigsaw, image, and diary data globally visible/editable within household scope (no per-user collection ownership model yet).
+- Why: the current deployment is family/household based and intentionally shares one collection namespace.
+- Decision: add attribution fields to diary/image records (`jigsaw_diary_entries.created_by_user_id`, `jigsaw_diary_entries.updated_by_user_id`, `jigsaw_images.uploaded_by_user_id`).
+- Why: shared scope still needs accountability for user-contributed edits and uploads.
+- Decision: allow non-admin authenticated users to create diary entries and update only entries they created.
+- Why: diary contribution is core user functionality; limiting updates to self-authored entries keeps low-friction collaboration with basic guardrails.
+- Decision: include derived `capabilities` in auth payloads for SPA feature-gating.
+- Why: capability-driven UI/API evolution is less brittle than hardcoded role-name checks and supports future role changes.
+- Decision: seed a `member` role while retaining `borrower` as legacy compatibility.
+- Why: normal-user diary capability should be represented by a role name aligned to shared-household usage without breaking existing borrower assignments.

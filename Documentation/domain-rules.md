@@ -2,8 +2,9 @@
 
 ## Role Rules
 
-- `administrator` can manage users, roles, jigsaws, and lending records.
-- `borrower` can view catalog availability and own loan records.
+- `administrator` can manage users, roles, lending records, AI operations, and destructive lifecycle actions.
+- `member` can use shared household collection workflows: jigsaw create/read, diary create/read/update-own, image upload/library/tag/assign, and audit read.
+- `borrower` remains supported as a legacy compatibility role and currently maps to member-style capabilities.
 - Borrowers cannot mutate user/role data.
 
 ## Jigsaw Rules
@@ -27,14 +28,14 @@
 - Jigsaw images are stored in the database in v1.
 - Each image record includes a tag (for example `Completed`, `Box front`, `Box side`) and binary image content.
 - Each image record also stores derived variants (`thumbnail`, `preview`) for faster admin list rendering.
-- Image create/list endpoints are administrator-only in the initial rollout.
+- Jigsaw image list requires `image.manage_library`; jigsaw image upload requires `image.upload`.
 - A jigsaw image may be unassigned (`jigsaw_id = null`) while it sits in the image library.
 - Image library bulk upload accepts one or more image files and/or zip archives containing image files.
 - Zip extraction only imports image entries; non-image entries are skipped and reported in the upload response.
 - Bulk uploads default all imported images to tag `untagged` unless a tag override is provided.
 - Image-library uploads may optionally associate imported images to a jigsaw at upload time.
 - Each image can be associated to at most one jigsaw.
-- Admin assignment action can attach an unassigned image to a jigsaw and can unassign by setting `jigsaw_id = null`; reassigning an already-associated image to a different jigsaw is blocked.
+- Callers with `image.assign` can attach an unassigned image to a jigsaw and can unassign by setting `jigsaw_id = null`; reassigning an already-associated image to a different jigsaw is blocked.
 - Admins can permanently delete image-library records (assigned or unassigned) as cleanup actions.
 - Every image stores a SHA-256 content hash.
 - Duplicate uploads (same bytes, even with different filenames) are ignored using hash matching.
@@ -55,13 +56,19 @@
 
 - A diary entry records one completion of a jigsaw: `completed_at` timestamp, optional `difficulty` rating, optional free-text `notes`.
 - Multiple diary entries per jigsaw are allowed to support repeat completions.
+- Diary entries store attribution fields: `created_by_user_id` (required) and `updated_by_user_id` (optional).
 - `completed_at` defaults to the current UTC time when omitted.
 - `difficulty` is an integer from 1 (easy) to 5 (very hard); it may be omitted when unrated.
 - `notes` may be up to 4000 characters and must not contain control characters.
 - Tagging an assigned image as `Completed`, or assigning an image already tagged `Completed`, auto-creates one diary entry per image.
 - Auto-created diary entries use image `captured_at` when available; otherwise they use current UTC time.
 - Diary entries are hard-deleted; deleting a jigsaw cascades to its diary entries.
-- Diary entry lists are visible to any authenticated user for non-retired jigsaws; create, update, and delete are administrator-only.
+- Diary entry lists are visible to any authenticated user for non-retired jigsaws.
+- Diary create requires authenticated caller capability `diary.create`.
+- Diary update requires authenticated caller capability:
+  - `diary.update_any` for any entry (administrator behavior)
+  - `diary.update_own` for entries where `created_by_user_id` matches the caller
+- Diary delete remains administrator-only in v1.
 - A merged completion feed is available to authenticated users and includes both formal diary entries and unassigned `Completed` images.
 - In merged-feed views, unassigned completed images are represented as orphan completion rows until linked to a jigsaw.
 - `jigsaws.last_completed_at` is maintained from diary activity:
@@ -81,7 +88,7 @@
 
 - A jigsaw can have only one active loan at a time.
 - A borrower can hold multiple active loans in v1 (no policy cap enforced yet).
-- For administrative checkout workflows, users with `administrator` role are also eligible loan recipients.
+- Loan recipient eligibility includes active users with role `member`, `borrower` (legacy), or `administrator`.
 - Loan states in v1:
   - `active`
   - `returned`
@@ -95,6 +102,7 @@
 - Record audit events for create/update/delete and state transition actions.
 - Each event includes actor, action, entity type/id, timestamp, and request context.
 - Request context includes resolved client address details from trusted forwarded headers.
+- Audit read visibility is capability-based: administrators can read all events; non-admin callers with `audit.read` can read events where they are the actor.
 
 ## Policy Values (deferred for now)
 

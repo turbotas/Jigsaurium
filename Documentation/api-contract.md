@@ -14,8 +14,8 @@
   - `POST /api/v1/auth/login` (public, expects `email` + `password`)
   - `GET /api/v1/auth/me` (authenticated)
   - `POST /api/v1/auth/logout` (authenticated)
-- Role checks are enforced server-side for all protected routes.
-- Admin-only routes return `403` for authenticated non-admin callers.
+- Role/capability checks are enforced server-side for all protected routes.
+- Authorization is capability-driven in v1; route handlers validate required capabilities and return `403` for authenticated callers that lack them.
 - Operational health endpoint `GET /api/v1/health` is allowed without authentication.
 - Mutating authenticated endpoints (`POST`, `PATCH`, `DELETE`) require an `X-CSRF-Token` header that matches the session CSRF token.
 
@@ -144,7 +144,8 @@
       "email": "admin@example.com",
       "display_name": "Administrator",
       "is_active": true,
-      "roles": ["administrator"]
+      "roles": ["administrator"],
+      "capabilities": ["audit.read", "diary.create", "diary.update_any"]
     },
     "csrf_token": "generated-token"
   },
@@ -155,6 +156,11 @@
 ```
 
 - `GET /api/v1/auth/me` also returns `csrf_token` so SPA clients can recover CSRF state after page reload.
+- Auth payload user objects include a derived `capabilities` array to support SPA feature-gating without hardcoding role names.
+- Current role capability defaults:
+  - `administrator`: full administrative capabilities, including user/loan/AI management and destructive actions.
+  - `member`: shared-collection capabilities for jigsaw create/read, diary create/read/update-own, image upload/library/tag/assign, and audit read.
+  - `borrower`: legacy compatibility role that currently maps to the same capabilities as `member`.
 - `PATCH /api/v1/auth/me` allows users to update their own `display_name` (username) and change password with `current_password` + `new_password`.
 - `PATCH /api/v1/auth/me` rejects email changes.
 - Repeated failed login attempts for the same client/IP + email are rate-limited; blocked attempts return `429` and include `Retry-After`.
@@ -168,7 +174,8 @@
   - Administrators cannot deactivate their own account (`PATCH /api/v1/users/{id}` returns `409` for self-deactivation).
 
 - Audit endpoint notes:
-  - `GET /api/v1/audit-events` is admin-only.
+  - `GET /api/v1/audit-events` requires `audit.read` capability.
+  - Administrators receive unfiltered audit events; non-admin callers are scoped to events where `actor_user_id` matches the caller.
   - Optional pagination query params:
     - `page` (integer `>= 1`, default `1`)
     - `page_size` (integer `1..200`, default `25`)
@@ -194,7 +201,7 @@
   - `POST /api/v1/loans` request body requires:
     - `borrower_user_id` (positive integer)
     - `jigsaw_id` (positive integer)
-  - `borrower_user_id` may reference an active user with `borrower` or `administrator` role.
+  - `borrower_user_id` may reference an active user with `member`, `borrower` (legacy), or `administrator` role.
   - Loan checkout sets `checked_out_at` to current UTC time.
   - Loan checkout sets `due_at` to four weeks (28 days) after `checked_out_at`.
   - Loan checkout returns `409` when the target jigsaw is not currently available.
@@ -207,16 +214,17 @@
   - `GET /api/v1/jigsaws` supports optional pagination query params `page` and `page_size` (or legacy `limit` alias).
   - When pagination params are provided, response includes standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
   - `GET /api/v1/jigsaws/thumbnail-images` returns one preferred image per jigsaw for fast stock-list thumbnail rendering.
-  - `POST /api/v1/jigsaws` allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.
+  - `POST /api/v1/jigsaws` requires `jigsaw.create` capability and allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.
   - Duplicate `title` values are allowed.
   - Jigsaw payloads now support optional fields: `series_name`, `series_number`, `manufacturer`, `artist`, `dimensions_cm`, `description`, `last_completed_at`.
   - `last_completed_at` uses UTC ISO 8601 format.
-  - `DELETE /api/v1/jigsaws/{id}` retires the jigsaw (soft delete).
-  - `DELETE /api/v1/jigsaws/{id}/permanent` permanently removes the jigsaw and deletes linked images, diary entries, and loans.
+  - `DELETE /api/v1/jigsaws/{id}` is administrator-only and retires the jigsaw (soft delete).
+  - `DELETE /api/v1/jigsaws/{id}/permanent` is administrator-only and permanently removes the jigsaw and deletes linked images, diary entries, and loans.
 
 - Jigsaw image endpoint notes:
-  - `GET /api/v1/jigsaws/{id}/images` is admin-only.
-  - `POST /api/v1/jigsaws/{id}/images` is admin-only.
+  - `GET /api/v1/jigsaws/{id}/images` requires `image.manage_library` capability.
+  - `POST /api/v1/jigsaws/{id}/images` requires `image.upload` capability.
+  - Non-admin callers receive `404` for retired jigsaws on these routes.
   - `POST /api/v1/jigsaws/{id}/images` expects multipart form data:
     - `tag` (optional string, defaults to `untagged` when omitted)
     - `comment` (optional string up to 2000 chars; stored as user feedback on the image)
@@ -230,17 +238,17 @@
     - `preview_url` (`variant=preview`, optimized for hover/magnify preview)
   - Image content hash (`SHA-256`) is used for duplicate suppression; uploading identical bytes returns the existing image instead of creating a duplicate row.
   - Image payloads include optional capture metadata: `captured_at` (UTC ISO 8601) and `captured_at_source`.
-  - Image payloads include optional `user_comment` (admin-uploaded feedback/notes for that image).
+  - Image payloads include optional `user_comment` (caller-uploaded feedback/notes for that image).
   - `GET /api/v1/jigsaws/{id}/images/{image_id}/content` remains supported for jigsaw-associated images.
 
 - Image library endpoint notes:
-  - `GET /api/v1/image-library/images` is admin-only and returns recent images across the full library.
+  - `GET /api/v1/image-library/images` requires `image.manage_library` capability and returns recent images across the full library.
   - `GET /api/v1/image-library/images` supports optional pagination query params:
     - `page` (integer `>= 1`, default `1`)
     - `page_size` (integer `1..500`, default `25`)
   - Legacy query param `limit` is still accepted as an alias for `page_size`.
   - Response uses standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
-  - `POST /api/v1/image-library/uploads` is admin-only and expects multipart form data:
+  - `POST /api/v1/image-library/uploads` requires `image.upload` capability and expects multipart form data:
     - `files` (one or more uploads; each may be an image file or a `.zip` archive containing image files)
     - `jigsaw_id` (optional positive integer association)
     - `tag` (optional string, defaults to `untagged`)
@@ -251,12 +259,12 @@
   - `POST /api/v1/image-library/uploads` returns a summary: `created_count`, `skipped_count`, `metadata_backfilled_count`, and per-item `created` / `skipped` details.
   - Hash duplicate handling applies to bulk imports too: duplicate image bytes are skipped and reported in `skipped`.
   - Duplicate-image skips may still backfill missing capture metadata on the existing image record when newly uploaded bytes include EXIF capture time.
-  - `PATCH /api/v1/image-library/images/{image_id}/assign` is admin-only and requires JSON body with `jigsaw_id`:
+  - `PATCH /api/v1/image-library/images/{image_id}/assign` requires `image.assign` capability and JSON body with `jigsaw_id`:
     - positive integer to assign
     - `null` to unassign
   - `PATCH /api/v1/image-library/images/{image_id}/assign` assigns an image to one jigsaw; reassignment to a different jigsaw returns `409`.
-  - `DELETE /api/v1/image-library/images/{image_id}` is admin-only and permanently deletes the image record.
-  - `PATCH /api/v1/image-library/images/{image_id}/tag` is admin-only and updates image tag/classification (for example `Box`, `Completed`) even when image is unassigned.
+  - `DELETE /api/v1/image-library/images/{image_id}` is administrator-only and permanently deletes the image record.
+  - `PATCH /api/v1/image-library/images/{image_id}/tag` requires `image.tag` capability and updates image tag/classification (for example `Box`, `Completed`) even when image is unassigned.
   - Known built-in tag variants are normalized to canonical title-case values: `Box`, `Box front`, `Box side`, `Box back`, `Reference`, `Completed`, `In progress`.
   - `PUT /api/v1/image-library/images/{image_id}/content` is admin-only and overwrites the stored image bytes in-place (used by rotate/crop workflows).
   - Overwrite operations preserve the original dedupe hash so future uploads of the original source bytes still clash as duplicates.
@@ -294,20 +302,25 @@
   - Create-from-image writes `jigsaw.created_from_image` audit events.
 
 - Diary endpoint notes:
-  - `GET /api/v1/jigsaws/{id}/diary-entries` requires authentication; retired jigsaws return `404` for non-admin callers. Entries are ordered by `completed_at` descending.
-  - `GET /api/v1/diary-feed` requires authentication and returns a merged, newest-first feed of:
+  - `GET /api/v1/jigsaws/{id}/diary-entries` requires `diary.read` capability; retired jigsaws return `404` for non-admin callers. Entries are ordered by `completed_at` descending.
+  - `GET /api/v1/diary-feed` requires `diary.read` capability and returns a merged, newest-first feed of:
     - formal diary entries (`entry_type = diary_entry`)
     - unassigned completed images (`entry_type = orphan_completed_image`)
   - `GET /api/v1/diary-feed` supports optional query params:
     - `jigsaw_id` (positive integer): returns entries for one jigsaw; orphan rows are excluded in this mode
     - `limit` (integer `1..500`, default `200`)
   - Non-admin callers do not receive feed rows tied to retired jigsaws.
-  - `POST /api/v1/jigsaws/{id}/diary-entries` is admin-only. Request body fields are all optional:
+  - `POST /api/v1/jigsaws/{id}/diary-entries` requires authentication and `diary.create` capability. Non-admin callers cannot create entries on retired jigsaws.
+    - Created entries persist attribution in `created_by_user_id`.
+    - Request body fields are all optional:
     - `completed_at` (UTC ISO 8601 datetime; defaults to current UTC time)
     - `difficulty` (integer 1-5, or empty)
     - `notes` (string up to 4000 characters, no control characters)
   - Creating an entry moves the parent jigsaw's `last_completed_at` forward when the entry is newer.
-  - `PATCH /api/v1/diary-entries/{id}` is admin-only and updates one or more of `completed_at`, `difficulty`, `notes`.
+  - `PATCH /api/v1/diary-entries/{id}` requires authentication and updates one or more of `completed_at`, `difficulty`, `notes`.
+    - Administrators can update any entry.
+    - Non-admin callers require `diary.update_own` capability and may update only entries where `created_by_user_id` matches the caller.
+    - Updates persist attribution in `updated_by_user_id`.
     - At least one of those fields must be included.
     - `completed_at` must be a valid datetime when provided.
   - Updating an entry recomputes the parent jigsaw `last_completed_at` from the latest remaining diary entry timestamp.

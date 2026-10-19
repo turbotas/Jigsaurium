@@ -116,6 +116,52 @@ IMAGE_VARIANT_PREVIEW = "preview"
 THUMBNAIL_TARGET_WIDTH = 150
 PREVIEW_TARGET_WIDTH = 600
 
+ROLE_CAPABILITIES = {
+    "borrower": {
+        "diary.create",
+        "diary.read",
+        "diary.update_own",
+        "audit.read",
+        "image.assign",
+        "image.manage_library",
+        "image.tag",
+        "image.upload",
+        "jigsaw.create",
+        "jigsaw.read",
+    },
+    "member": {
+        "diary.create",
+        "diary.read",
+        "diary.update_own",
+        "audit.read",
+        "image.assign",
+        "image.manage_library",
+        "image.tag",
+        "image.upload",
+        "jigsaw.create",
+        "jigsaw.read",
+    },
+    "administrator": {
+        "ai.manage",
+        "audit.read",
+        "diary.create",
+        "diary.delete_any",
+        "diary.read",
+        "diary.update_any",
+        "diary.update_own",
+        "image.assign",
+        "image.delete",
+        "image.manage_library",
+        "image.tag",
+        "image.upload",
+        "jigsaw.create",
+        "jigsaw.read",
+        "jigsaw.update",
+        "loan.manage",
+        "user.manage",
+    },
+}
+
 BULK_AI_CREATE_STATUS_QUEUED = "queued"
 BULK_AI_CREATE_STATUS_RUNNING = "running"
 BULK_AI_CREATE_STATUS_COMPLETED = "completed"
@@ -844,12 +890,14 @@ def _parse_json_object():
 
 
 def _serialize_user(user, roles):
+    role_names = sorted(roles)
     return {
         "id": user.id,
         "email": user.email,
         "display_name": user.display_name,
         "is_active": user.is_active,
-        "roles": sorted(roles),
+        "roles": role_names,
+        "capabilities": _get_capabilities_for_roles(role_names),
     }
 
 
@@ -875,6 +923,7 @@ def _serialize_jigsaw_image(image):
     return {
         "id": image.id,
         "jigsaw_id": image.jigsaw_id,
+        "uploaded_by_user_id": image.uploaded_by_user_id,
         "tag": image.tag,
         "filename": image.filename,
         "mime_type": image.mime_type,
@@ -899,10 +948,12 @@ def _serialize_jigsaw_image_fields(
     captured_at_source,
     user_comment,
     created_at,
+    uploaded_by_user_id=None,
 ):
     return {
         "id": int(image_id),
         "jigsaw_id": jigsaw_id,
+        "uploaded_by_user_id": uploaded_by_user_id,
         "tag": tag,
         "filename": filename,
         "mime_type": mime_type,
@@ -929,6 +980,8 @@ def _serialize_diary_entry(entry):
     return {
         "id": entry.id,
         "jigsaw_id": entry.jigsaw_id,
+        "created_by_user_id": entry.created_by_user_id,
+        "updated_by_user_id": entry.updated_by_user_id,
         "source_image_id": entry.source_image_id,
         "completed_at": entry.completed_at.isoformat() if entry.completed_at else None,
         "difficulty": entry.difficulty,
@@ -1136,6 +1189,19 @@ def _get_role_names_for_user_id(user_id):
     return db_session.execute(
         select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user_id)
     ).scalars().all()
+
+
+def _get_capabilities_for_roles(role_names):
+    capabilities = set()
+    for role_name in role_names or []:
+        capabilities.update(ROLE_CAPABILITIES.get(str(role_name), set()))
+    return sorted(capabilities)
+
+
+def _current_user_has_capability(capability):
+    if not capability:
+        return False
+    return capability in _get_capabilities_for_roles(getattr(g, "current_user_roles", []))
 
 
 def _contains_control_characters(value):
@@ -1889,6 +1955,15 @@ def _backfill_image_user_comment(image, user_comment):
     return True
 
 
+def _backfill_image_uploaded_by(image, uploaded_by_user_id):
+    if uploaded_by_user_id is None:
+        return False
+    if image.uploaded_by_user_id is not None:
+        return False
+    image.uploaded_by_user_id = int(uploaded_by_user_id)
+    return True
+
+
 def _refresh_image_embedding_for_image_id(app, image_id):
     with app.app_context():
         if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
@@ -2032,7 +2107,7 @@ def _parse_embedding_vector(raw_vector_json):
     return values
 
 
-def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger):
+def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger, created_by_user_id):
     if jigsaw is None or image is None:
         return None
     if image.jigsaw_id != jigsaw.id:
@@ -2057,6 +2132,7 @@ def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger):
 
     entry = JigsawDiaryEntry(
         jigsaw_id=jigsaw.id,
+        created_by_user_id=int(created_by_user_id),
         source_image_id=image.id,
         completed_at=completed_at,
         difficulty=None,
@@ -2107,6 +2183,7 @@ def _create_jigsaw_image_record(
     captured_at_source=None,
     captured_at_raw=None,
     user_comment=None,
+    uploaded_by_user_id=None,
     variants=None,
 ):
     if variants is None:
@@ -2126,6 +2203,7 @@ def _create_jigsaw_image_record(
         captured_at_source=captured_at_source,
         captured_at_raw=captured_at_raw,
         user_comment=user_comment,
+        uploaded_by_user_id=uploaded_by_user_id,
     )
     db_session.add(image)
     db_session.flush()
@@ -3104,16 +3182,27 @@ def list_roles():
 
 
 @api_v1_bp.get("/audit-events")
-@require_role("administrator")
+@require_auth
 def list_audit_events():
+    if not _current_user_has_capability("audit.read"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     pagination, error = _parse_list_pagination_query(default_page_size=25, max_page_size=200, legacy_limit_max=200)
     if error is not None:
         return error
 
     db_session = get_session()
-    total_items = int(db_session.execute(select(func.count(AuditEvent.id))).scalar_one() or 0)
+    events_stmt = select(AuditEvent)
+    if "administrator" not in g.current_user_roles:
+        events_stmt = events_stmt.where(AuditEvent.actor_user_id == g.current_user.id)
+
+    total_items = int(db_session.execute(select(func.count()).select_from(events_stmt.subquery())).scalar_one() or 0)
     events = db_session.execute(
-        select(AuditEvent)
+        events_stmt
         .order_by(AuditEvent.id.desc())
         .offset(pagination["offset"])
         .limit(pagination["page_size"])
@@ -3502,12 +3591,12 @@ def create_loan():
         return _error_response("conflict", "Borrower account is inactive.", 409)
 
     borrower_roles = _get_role_names_for_user_id(borrower.id)
-    if "borrower" not in borrower_roles and "administrator" not in borrower_roles:
+    if "member" not in borrower_roles and "borrower" not in borrower_roles and "administrator" not in borrower_roles:
         return _error_response(
             "validation_error",
             "Invalid request payload.",
             422,
-            [{"field": "borrower_user_id", "issue": "must reference a borrower or administrator user"}],
+            [{"field": "borrower_user_id", "issue": "must reference a member, borrower, or administrator user"}],
         )
 
     jigsaw = db_session.get(Jigsaw, jigsaw_id)
@@ -3588,8 +3677,15 @@ def return_loan(loan_id):
 
 
 @api_v1_bp.post("/jigsaws")
-@require_role("administrator")
+@require_auth
 def create_jigsaw():
+    if not _current_user_has_capability("jigsaw.create"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     payload, error = _parse_json_object()
     if error is not None:
         return error
@@ -3871,11 +3967,20 @@ def update_jigsaw(jigsaw_id):
 
 
 @api_v1_bp.get("/jigsaws/<int:jigsaw_id>/images")
-@require_role("administrator")
+@require_auth
 def list_jigsaw_images(jigsaw_id):
+    if not _current_user_has_capability("image.manage_library"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     db_session = get_session()
     jigsaw = db_session.get(Jigsaw, jigsaw_id)
     if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+    if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
         return _error_response("not_found", "Jigsaw was not found.", 404)
 
     images = db_session.execute(select(JigsawImage).where(JigsawImage.jigsaw_id == jigsaw.id).order_by(JigsawImage.id.desc())).scalars().all()
@@ -3884,11 +3989,20 @@ def list_jigsaw_images(jigsaw_id):
 
 
 @api_v1_bp.post("/jigsaws/<int:jigsaw_id>/images")
-@require_role("administrator")
+@require_auth
 def create_jigsaw_image(jigsaw_id):
+    if not _current_user_has_capability("image.upload"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     db_session = get_session()
     jigsaw = db_session.get(Jigsaw, jigsaw_id)
     if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+    if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
         return _error_response("not_found", "Jigsaw was not found.", 404)
 
     tag, error = _validate_optional_text_field(
@@ -3968,6 +4082,7 @@ def create_jigsaw_image(jigsaw_id):
             captured_at_raw,
         )
         comment_backfilled = _backfill_image_user_comment(duplicate_image, user_comment)
+        uploaded_by_backfilled = _backfill_image_uploaded_by(duplicate_image, getattr(g.current_user, "id", None))
         _record_audit_event(
             action="jigsaw.image_duplicate_ignored",
             entity_type="jigsaw_image",
@@ -3978,6 +4093,7 @@ def create_jigsaw_image(jigsaw_id):
                 "duplicate_hash": image_sha256,
                 "metadata_backfilled": metadata_backfilled,
                 "comment_backfilled": comment_backfilled,
+                "uploaded_by_backfilled": uploaded_by_backfilled,
             },
         )
         db_session.commit()
@@ -4005,6 +4121,7 @@ def create_jigsaw_image(jigsaw_id):
             captured_at_source=captured_at_source,
             captured_at_raw=captured_at_raw,
             user_comment=user_comment,
+            uploaded_by_user_id=getattr(g.current_user, "id", None),
             variants=variants,
         )
 
@@ -4013,6 +4130,7 @@ def create_jigsaw_image(jigsaw_id):
             jigsaw=jigsaw,
             image=image,
             trigger="upload",
+            created_by_user_id=g.current_user.id,
         )
 
         _record_audit_event(
@@ -4043,8 +4161,15 @@ def create_jigsaw_image(jigsaw_id):
 
 
 @api_v1_bp.get("/image-library/images")
-@require_role("administrator")
+@require_auth
 def list_image_library_images():
+    if not _current_user_has_capability("image.manage_library"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     pagination, error = _parse_list_pagination_query(default_page_size=25, max_page_size=500, legacy_limit_max=500)
     if error is not None:
         return error
@@ -4378,8 +4503,15 @@ def list_bulk_create_jigsaws_job_items(job_id):
 
 
 @api_v1_bp.post("/image-library/uploads")
-@require_role("administrator")
+@require_auth
 def upload_image_library_items():
+    if not _current_user_has_capability("image.upload"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     db_session = get_session()
 
     jigsaw_id, associated_jigsaw, error = _resolve_optional_jigsaw_reference(db_session, request.form.get("jigsaw_id"))
@@ -4447,12 +4579,14 @@ def upload_image_library_items():
                     item.get("captured_at_raw"),
                 )
                 comment_backfilled = _backfill_image_user_comment(existing_image, user_comment)
+                uploaded_by_backfilled = _backfill_image_uploaded_by(existing_image, getattr(g.current_user, "id", None))
                 issues.append(
                     {
                         "filename": item["filename"] or "(unnamed)",
                         "issue": "duplicate image content already exists",
                         "metadata_backfilled": metadata_backfilled,
                         "comment_backfilled": comment_backfilled,
+                        "uploaded_by_backfilled": uploaded_by_backfilled,
                     }
                 )
                 continue
@@ -4478,6 +4612,7 @@ def upload_image_library_items():
                 captured_at_source=item.get("captured_at_source"),
                 captured_at_raw=item.get("captured_at_raw"),
                 user_comment=user_comment,
+                uploaded_by_user_id=getattr(g.current_user, "id", None),
             )
             created_images.append((image, item["source"]))
             if image_sha256:
@@ -4489,6 +4624,7 @@ def upload_image_library_items():
                     jigsaw=associated_jigsaw,
                     image=image,
                     trigger="bulk_upload",
+                    created_by_user_id=g.current_user.id,
                 )
 
         _record_audit_event(
@@ -4536,8 +4672,15 @@ def upload_image_library_items():
 
 
 @api_v1_bp.patch("/image-library/images/<int:image_id>/assign")
-@require_role("administrator")
+@require_auth
 def assign_image_library_item(image_id):
+    if not _current_user_has_capability("image.assign"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     payload, error = _parse_json_object()
     if error is not None:
         return error
@@ -4595,6 +4738,7 @@ def assign_image_library_item(image_id):
         jigsaw=jigsaw,
         image=image,
         trigger="assignment",
+        created_by_user_id=g.current_user.id,
     )
 
     _record_audit_event(
@@ -4612,8 +4756,15 @@ def assign_image_library_item(image_id):
 
 
 @api_v1_bp.patch("/image-library/images/<int:image_id>/tag")
-@require_role("administrator")
+@require_auth
 def set_image_library_item_tag(image_id):
+    if not _current_user_has_capability("image.tag"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     payload, error = _parse_json_object()
     if error is not None:
         return error
@@ -4640,6 +4791,7 @@ def set_image_library_item_tag(image_id):
                 jigsaw=jigsaw,
                 image=image,
                 trigger="tag_update",
+                created_by_user_id=g.current_user.id,
             )
 
     _record_audit_event(
@@ -5152,6 +5304,13 @@ def get_jigsaw_image_content(jigsaw_id, image_id):
 @api_v1_bp.get("/jigsaws/<int:jigsaw_id>/diary-entries")
 @require_auth
 def list_diary_entries(jigsaw_id):
+    if not _current_user_has_capability("diary.read"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     db_session = get_session()
     jigsaw = db_session.get(Jigsaw, jigsaw_id)
     if jigsaw is None:
@@ -5172,6 +5331,13 @@ def list_diary_entries(jigsaw_id):
 @api_v1_bp.get("/diary-feed")
 @require_auth
 def list_diary_feed_entries():
+    if not _current_user_has_capability("diary.read"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     raw_limit = request.args.get("limit", "200")
     try:
         limit = int(raw_limit)
@@ -5371,8 +5537,15 @@ def list_diary_feed_entries():
 
 
 @api_v1_bp.post("/jigsaws/<int:jigsaw_id>/diary-entries")
-@require_role("administrator")
+@require_auth
 def create_diary_entry(jigsaw_id):
+    if not _current_user_has_capability("diary.create"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     payload, error = _parse_json_object()
     if error is not None:
         return error
@@ -5380,6 +5553,8 @@ def create_diary_entry(jigsaw_id):
     db_session = get_session()
     jigsaw = db_session.get(Jigsaw, jigsaw_id)
     if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+    if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
         return _error_response("not_found", "Jigsaw was not found.", 404)
 
     completed_at, error = _parse_optional_iso_datetime(payload.get("completed_at"), "completed_at")
@@ -5401,6 +5576,7 @@ def create_diary_entry(jigsaw_id):
 
     entry = JigsawDiaryEntry(
         jigsaw_id=jigsaw.id,
+        created_by_user_id=g.current_user.id,
         completed_at=completed_at,
         difficulty=difficulty,
         notes=notes,
@@ -5434,8 +5610,9 @@ def delete_diary_entry(entry_id):
     entry = db_session.get(JigsawDiaryEntry, entry_id)
     if entry is None:
         return _error_response("not_found", "Diary entry was not found.", 404)
-
     jigsaw = db_session.get(Jigsaw, entry.jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
     serialized = _serialize_diary_entry(entry)
 
     db_session.delete(entry)
@@ -5455,7 +5632,7 @@ def delete_diary_entry(entry_id):
 
 
 @api_v1_bp.patch("/diary-entries/<int:entry_id>")
-@require_role("administrator")
+@require_auth
 def update_diary_entry(entry_id):
     payload, error = _parse_json_object()
     if error is not None:
@@ -5465,6 +5642,21 @@ def update_diary_entry(entry_id):
     entry = db_session.get(JigsawDiaryEntry, entry_id)
     if entry is None:
         return _error_response("not_found", "Diary entry was not found.", 404)
+    jigsaw = db_session.get(Jigsaw, entry.jigsaw_id)
+    if jigsaw is None:
+        return _error_response("not_found", "Jigsaw was not found.", 404)
+    if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
+        return _error_response("not_found", "Diary entry was not found.", 404)
+
+    can_update_any = _current_user_has_capability("diary.update_any")
+    can_update_own = _current_user_has_capability("diary.update_own")
+    if not can_update_any:
+        if not can_update_own or int(entry.created_by_user_id) != int(g.current_user.id):
+            return _error_response(
+                "forbidden",
+                "You do not have permission to access this resource.",
+                403,
+            )
 
     mutable_fields = {"completed_at", "difficulty", "notes"}
     if not any(field in payload for field in mutable_fields):
@@ -5508,9 +5700,9 @@ def update_diary_entry(entry_id):
     entry.completed_at = completed_at
     entry.difficulty = difficulty
     entry.notes = notes
+    entry.updated_by_user_id = g.current_user.id
     db_session.flush()
 
-    jigsaw = db_session.get(Jigsaw, entry.jigsaw_id)
     _recompute_jigsaw_last_completed_at(db_session, jigsaw)
 
     _record_audit_event(

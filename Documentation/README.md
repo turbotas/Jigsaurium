@@ -21,7 +21,7 @@ This folder defines the product, architecture, and delivery rules for Jigsaurium
 ## Current Implementation Snapshot (2026-06-22)
 
 - Admin SPA authentication is live (`/api/v1/auth/login`, `/api/v1/auth/me`, `/api/v1/auth/logout`) with CSRF enforcement.
-- User management is live with multi-role assignment (`administrator` and `borrower` can be combined).
+- User management is live with multi-role assignment (`administrator`, `member`, and legacy `borrower` can be combined).
 - Jigsaw inventory CRUD is live, with relaxed create input for image-assisted workflows (all create fields may be blank).
 - Loan checkout is live for administrators (`POST /api/v1/loans`) with default 28-day due date.
 - Jigsaw image upload/list/content endpoints are live (`/api/v1/jigsaws/{id}/images...`) with DB-backed storage.
