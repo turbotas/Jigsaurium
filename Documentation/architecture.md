@@ -63,6 +63,8 @@
   - borrower, jigsaw, checkout date, due date, return date, status
 - `audit_events`
   - actor, action, entity type/id, timestamp, payload
+- `blocked_ips`
+  - blocked client IPs (manual and auto 404-streak), expiry timestamp, source/reason, and hit counters
 
 ## Data and Migration Rules
 

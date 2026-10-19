@@ -33,6 +33,7 @@ class Config:
     CANONICAL_HOST = os.getenv("CANONICAL_HOST", "localhost")
     TRUSTED_PROXY_CIDRS = _parse_csv(os.getenv("TRUSTED_PROXY_CIDRS", ""))
     TRUSTED_PROXY_HOPS = _parse_optional_int(os.getenv("TRUSTED_PROXY_HOPS"))
+    TRUSTED_CLIENT_CIDRS = _parse_csv(os.getenv("TRUSTED_CLIENT_CIDRS", ""))
     AI_ENABLED = _parse_bool(os.getenv("AI_ENABLED"), default=False)
     AI_API_KEY = os.getenv("AI_API_KEY", "")
     AI_ENDPOINT_URL = os.getenv("AI_ENDPOINT_URL", "")

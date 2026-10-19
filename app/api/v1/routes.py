@@ -33,6 +33,7 @@ from app.image_embeddings import (
 from app.models import (
     AiUsageEvent,
     AuditEvent,
+    BlockedIp,
     BulkAiCreateJob,
     BulkAiCreateJobItem,
     ImageEmbedding,
@@ -47,6 +48,7 @@ from app.models import (
 )
 from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
+from app.request_security import MANUAL_BLOCK_SOURCE, normalize_ip_address, upsert_blocked_ip
 
 try:  # pragma: no cover - optional dependency fallback
     from PIL import Image, ImageOps, UnidentifiedImageError
@@ -115,6 +117,9 @@ IMAGE_VARIANT_THUMBNAIL = "thumbnail"
 IMAGE_VARIANT_PREVIEW = "preview"
 THUMBNAIL_TARGET_WIDTH = 150
 PREVIEW_TARGET_WIDTH = 600
+IP_BLOCK_REASON_MAX_LENGTH = 255
+IP_BLOCK_NOTES_MAX_LENGTH = 4000
+IP_BLOCK_MAX_DURATION_HOURS = 24 * 30
 
 ROLE_CAPABILITIES = {
     "borrower": {
@@ -1060,6 +1065,26 @@ def _serialize_audit_event(event):
         "host": event.host,
         "payload_json": event.payload_json,
         "created_at": event.created_at.isoformat() if event.created_at else None,
+    }
+
+
+def _serialize_blocked_ip(blocked_ip):
+    now = datetime.now(timezone.utc)
+    blocked_until = blocked_ip.blocked_until
+    if blocked_until is not None and blocked_until.tzinfo is None:
+        blocked_until = blocked_until.replace(tzinfo=timezone.utc)
+    return {
+        "id": blocked_ip.id,
+        "ip_address": blocked_ip.ip_address,
+        "blocked_until": blocked_until.isoformat() if blocked_until else None,
+        "is_active": bool(blocked_until and blocked_until > now),
+        "block_source": blocked_ip.block_source,
+        "block_reason": blocked_ip.block_reason,
+        "notes": blocked_ip.notes,
+        "created_by_user_id": blocked_ip.created_by_user_id,
+        "hit_count": int(blocked_ip.hit_count or 0),
+        "created_at": blocked_ip.created_at.isoformat() if blocked_ip.created_at else None,
+        "updated_at": blocked_ip.updated_at.isoformat() if blocked_ip.updated_at else None,
     }
 
 
@@ -3218,6 +3243,123 @@ def list_audit_events():
         page_size=pagination["page_size"],
         total_items=total_items,
     )
+
+
+@api_v1_bp.get("/security/blocked-ips")
+@require_role("administrator")
+def list_blocked_ips():
+    db_session = get_session()
+    include_expired = str(request.args.get("include_expired") or "").strip().lower() in {"1", "true", "yes", "on"}
+    now = datetime.now(timezone.utc)
+
+    stmt = select(BlockedIp)
+    if not include_expired:
+        stmt = stmt.where(BlockedIp.blocked_until > now)
+
+    blocked_ips = db_session.execute(stmt.order_by(BlockedIp.blocked_until.desc(), BlockedIp.id.desc())).scalars().all()
+    return _success_response([_serialize_blocked_ip(entry) for entry in blocked_ips])
+
+
+@api_v1_bp.post("/security/blocked-ips")
+@require_role("administrator")
+def create_or_extend_blocked_ip():
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    normalized_ip = normalize_ip_address(payload.get("ip_address"))
+    if not normalized_ip:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "ip_address", "issue": "must be a valid IPv4 or IPv6 address"}],
+        )
+
+    raw_duration_hours = payload.get("duration_hours", 24)
+    if not isinstance(raw_duration_hours, int) or isinstance(raw_duration_hours, bool):
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "duration_hours", "issue": "must be an integer between 1 and 720"}],
+        )
+
+    duration_hours = int(raw_duration_hours)
+    if duration_hours < 1 or duration_hours > IP_BLOCK_MAX_DURATION_HOURS:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "duration_hours", "issue": "must be between 1 and 720"}],
+        )
+
+    reason, reason_error = _validate_optional_text_field(
+        payload.get("reason"),
+        field_name="reason",
+        max_length=IP_BLOCK_REASON_MAX_LENGTH,
+    )
+    if reason_error is not None:
+        return reason_error
+
+    notes, notes_error = _validate_optional_text_field(
+        payload.get("notes"),
+        field_name="notes",
+        max_length=IP_BLOCK_NOTES_MAX_LENGTH,
+    )
+    if notes_error is not None:
+        return notes_error
+
+    blocked_until = datetime.now(timezone.utc) + timedelta(hours=duration_hours)
+    db_session = get_session()
+    try:
+        blocked_ip = upsert_blocked_ip(
+            db_session,
+            ip_address=normalized_ip,
+            blocked_until=blocked_until,
+            block_source=MANUAL_BLOCK_SOURCE,
+            block_reason=reason,
+            notes=notes,
+            created_by_user_id=g.current_user.id,
+            add_hit=False,
+            exempt_cidrs=current_app.config.get("TRUSTED_CLIENT_CIDRS", []),
+        )
+    except ValueError as error:
+        return _error_response("conflict", str(error), 409)
+
+    _record_audit_event(
+        action="security.blocked_ip_upserted",
+        entity_type="blocked_ip",
+        entity_id=blocked_ip.id,
+        payload={
+            "ip_address": blocked_ip.ip_address,
+            "duration_hours": duration_hours,
+            "block_source": blocked_ip.block_source,
+            "block_reason": blocked_ip.block_reason,
+        },
+    )
+    db_session.commit()
+    return _success_response(_serialize_blocked_ip(blocked_ip), status_code=201)
+
+
+@api_v1_bp.delete("/security/blocked-ips/<int:blocked_ip_id>")
+@require_role("administrator")
+def delete_blocked_ip(blocked_ip_id):
+    db_session = get_session()
+    blocked_ip = db_session.get(BlockedIp, blocked_ip_id)
+    if blocked_ip is None:
+        return _error_response("not_found", "Blocked IP entry was not found.", 404)
+
+    ip_address = blocked_ip.ip_address
+    db_session.delete(blocked_ip)
+    _record_audit_event(
+        action="security.blocked_ip_removed",
+        entity_type="blocked_ip",
+        entity_id=blocked_ip_id,
+        payload={"ip_address": ip_address},
+    )
+    db_session.commit()
+    return _success_response({"removed": True, "id": blocked_ip_id, "ip_address": ip_address})
 
 
 @api_v1_bp.get("/ai-usage/diagnostics")

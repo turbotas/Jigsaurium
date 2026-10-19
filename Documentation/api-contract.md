@@ -39,6 +39,9 @@
 - `PATCH /api/v1/users/{id}`
 - `GET /api/v1/roles`
 - `GET /api/v1/audit-events`
+- `GET /api/v1/security/blocked-ips`
+- `POST /api/v1/security/blocked-ips`
+- `DELETE /api/v1/security/blocked-ips/{id}`
 - `GET /api/v1/ai-usage/diagnostics`
 - `GET /api/v1/loans`
 - `POST /api/v1/loans`
@@ -165,6 +168,7 @@
 - `PATCH /api/v1/auth/me` rejects email changes.
 - Repeated failed login attempts for the same client/IP + email are rate-limited; blocked attempts return `429` and include `Retry-After`.
 - Repeated request probing that yields 5 consecutive `404` responses from the same client IP triggers a 24-hour temporary block; blocked requests return `429` and include `Retry-After`.
+- Active blocked IP entries are persisted in the `blocked_ips` table and can be managed by administrators.
 
 - User-field validation baseline:
   - `email` must be valid format and `<= 255` chars.
@@ -182,6 +186,16 @@
     - `page_size` (integer `1..200`, default `25`)
   - Legacy query param `limit` is still accepted as an alias for `page_size`.
   - Response uses standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
+
+- Blocked-IP admin endpoint notes:
+  - `GET /api/v1/security/blocked-ips` is administrator-only and returns active blocks by default.
+  - Optional query `include_expired=true` includes expired block rows for diagnostics.
+  - `POST /api/v1/security/blocked-ips` is administrator-only and accepts:
+    - `ip_address` (required IPv4/IPv6)
+    - `duration_hours` (optional integer, default `24`, range `1..720`)
+    - `reason` (optional string, max `255` chars)
+    - `notes` (optional string, max `4000` chars)
+  - `DELETE /api/v1/security/blocked-ips/{id}` removes a block row and unblocks that IP immediately.
 
 - AI diagnostics endpoint notes:
   - `GET /api/v1/ai-usage/diagnostics` is admin-only.

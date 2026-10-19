@@ -41,6 +41,7 @@
     jigsawSearchQuery: "",
     jigsawFilterWithoutDiaryEntries: false,
     loans: [],
+    blockedIps: [],
     auditEvents: [],
     auditEventsMeta: null,
     jigsawThumbnailImages: [],
@@ -111,6 +112,7 @@
     aiUsageSection: document.getElementById("ai-usage-section"),
     loansSection: document.getElementById("loans-section"),
     auditSection: document.getElementById("audit-section"),
+    ipBlocksSection: document.getElementById("ip-blocks-section"),
     logoutButton: document.getElementById("logout-button"),
     userCreateForm: document.getElementById("user-create-form"),
     userEditForm: document.getElementById("user-edit-form"),
@@ -212,6 +214,9 @@
     loanBorrowerUserId: document.getElementById("loan-borrower-user-id"),
     loanJigsawId: document.getElementById("loan-jigsaw-id"),
     loansTableBody: document.getElementById("loans-table-body"),
+    ipBlockCreateForm: document.getElementById("ip-block-create-form"),
+    ipBlockHours: document.getElementById("ip-block-hours"),
+    ipBlocksTableBody: document.getElementById("ip-blocks-table-body"),
     auditTableBody: document.getElementById("audit-table-body"),
     aiUsageTodayCost: document.getElementById("ai-usage-today-cost"),
     aiUsageTodayCalls: document.getElementById("ai-usage-today-calls"),
@@ -1701,7 +1706,8 @@
     const canUploadImages = currentUserHasCapability("image.upload");
     const canManageAi = currentUserHasCapability("ai.manage");
     const canReadAudit = currentUserHasCapability("audit.read");
-    const canSeeMainWorkspace = canReadJigsaw || canReadDiary || canManageUsers || canManageLoans || canManageImages || canManageAi || canReadAudit;
+    const canManageSecurity = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
+    const canSeeMainWorkspace = canReadJigsaw || canReadDiary || canManageUsers || canManageLoans || canManageImages || canManageAi || canReadAudit || canManageSecurity;
 
     if (elements.adminSections) {
       elements.adminSections.hidden = !canSeeMainWorkspace;
@@ -1720,6 +1726,9 @@
     }
     if (elements.auditSection) {
       elements.auditSection.hidden = !canReadAudit;
+    }
+    if (elements.ipBlocksSection) {
+      elements.ipBlocksSection.hidden = !canManageSecurity;
     }
     if (elements.signInControls) {
       elements.signInControls.hidden = true;
@@ -2131,6 +2140,41 @@
     });
 
     renderPagination(elements.auditPagination, "audit", pageResult);
+  }
+
+  function renderBlockedIps(blockedIps) {
+    const tableBody = elements.ipBlocksTableBody;
+    clearTableBody(tableBody);
+
+    if (!Array.isArray(blockedIps) || blockedIps.length === 0) {
+      appendEmptyRow(tableBody, 6, "No blocked IPs found.");
+      return;
+    }
+
+    blockedIps.forEach((entry) => {
+      const row = document.createElement("tr");
+      row.className = "govuk-table__row";
+
+      row.appendChild(buildCell(String(entry.ip_address || "-")));
+      row.appendChild(buildCell(entry.blocked_until ? new Date(entry.blocked_until).toLocaleString() : "-"));
+      row.appendChild(buildCell(String(entry.block_source || "-")));
+      row.appendChild(buildCell(String(entry.block_reason || "-")));
+      row.appendChild(buildCell(toIntegerLabel(entry.hit_count)));
+
+      const actionCell = document.createElement("td");
+      actionCell.className = "govuk-table__cell";
+
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "govuk-button govuk-button--warning govuk-!-margin-bottom-0";
+      removeButton.setAttribute("data-module", "govuk-button");
+      removeButton.setAttribute("data-ip-block-remove", String(entry.id));
+      removeButton.textContent = "Unblock";
+      actionCell.appendChild(removeButton);
+
+      row.appendChild(actionCell);
+      tableBody.appendChild(row);
+    });
   }
 
   function renderAiUsageDiagnostics(diagnostics) {
@@ -3745,6 +3789,7 @@
       const canUpdateDiaryOwn = currentUserHasCapability("diary.update_own");
       const canDeleteDiaryAny = currentUserHasCapability("diary.delete_any");
       const canAssignImages = currentUserHasCapability("image.assign");
+      const canDeleteImages = currentUserHasCapability("image.delete");
       const canEditThisEntry =
         isFormalDiaryEntry && (
           canUpdateDiaryAny ||
@@ -3772,7 +3817,7 @@
         if (canDeleteDiaryAny) {
           actionCell.appendChild(deleteButton);
         }
-      } else if (!isFormalDiaryEntry && canAssignImages) {
+      } else if (!isFormalDiaryEntry && (canAssignImages || canDeleteImages)) {
         const suggestImageId = Number(entry?.source_image_id || entry?.id || 0);
         if (suggestImageId <= 0) {
           actionCell.textContent = "-";
@@ -3781,19 +3826,31 @@
           return;
         }
 
-        const suggestButton = document.createElement("button");
-        suggestButton.type = "button";
-        suggestButton.className = "govuk-button govuk-button--secondary app-inline-button";
-        suggestButton.setAttribute("data-module", "govuk-button");
-        suggestButton.dataset.diarySuggestImage = String(suggestImageId);
-        suggestButton.textContent = "Find similar";
+        if (canAssignImages) {
+          const suggestButton = document.createElement("button");
+          suggestButton.type = "button";
+          suggestButton.className = "govuk-button govuk-button--secondary app-inline-button";
+          suggestButton.setAttribute("data-module", "govuk-button");
+          suggestButton.dataset.diarySuggestImage = String(suggestImageId);
+          suggestButton.textContent = "Find similar";
 
-        const assignWrap = document.createElement("div");
-        assignWrap.className = "app-inline-controls app-image-actions__row govuk-!-margin-top-2";
-        assignWrap.dataset.diarySuggestWrap = String(suggestImageId);
+          const assignWrap = document.createElement("div");
+          assignWrap.className = "app-inline-controls app-image-actions__row govuk-!-margin-top-2";
+          assignWrap.dataset.diarySuggestWrap = String(suggestImageId);
 
-        actionCell.appendChild(suggestButton);
-        actionCell.appendChild(assignWrap);
+          actionCell.appendChild(suggestButton);
+          actionCell.appendChild(assignWrap);
+        }
+
+        if (canDeleteImages) {
+          const deleteOrphanButton = document.createElement("button");
+          deleteOrphanButton.type = "button";
+          deleteOrphanButton.className = "govuk-button govuk-button--warning app-inline-button";
+          deleteOrphanButton.setAttribute("data-module", "govuk-button");
+          deleteOrphanButton.dataset.diaryDeleteImage = String(suggestImageId);
+          deleteOrphanButton.textContent = "Delete image";
+          actionCell.appendChild(deleteOrphanButton);
+        }
       } else {
         actionCell.textContent = "-";
       }
@@ -4336,6 +4393,34 @@
     }
   }
 
+  async function loadBlockedIps() {
+    if (!state.user) {
+      state.blockedIps = [];
+      renderBlockedIps([]);
+      return;
+    }
+
+    const isAdministrator = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
+    if (!isAdministrator) {
+      state.blockedIps = [];
+      renderBlockedIps([]);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest("/api/v1/security/blocked-ips");
+      state.blockedIps = Array.isArray(payload.data) ? payload.data : [];
+      renderBlockedIps(state.blockedIps);
+    } catch (error) {
+      if (error.status === 403) {
+        state.blockedIps = [];
+        renderBlockedIps([]);
+        return;
+      }
+      showFeedback(error.message, true);
+    }
+  }
+
   async function loadAiUsageDiagnostics() {
     if (!state.user) {
       state.aiUsageDiagnostics = null;
@@ -4383,7 +4468,16 @@
       state.csrfToken = payload.data.csrf_token;
       setSessionSummary();
       showFeedback("Signed in successfully.");
-      await Promise.all([loadRoles(), loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadAiUsageDiagnostics(), loadImageLibraryImages()]);
+      await Promise.all([
+        loadRoles(),
+        loadUsers(),
+        loadJigsaws(),
+        loadLoans(),
+        loadAuditEvents(),
+        loadBlockedIps(),
+        loadAiUsageDiagnostics(),
+        loadImageLibraryImages(),
+      ]);
       await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
     } catch (error) {
       showFeedback(error.message, true);
@@ -4407,6 +4501,7 @@
       state.roleDefinitions = [];
       state.jigsaws = [];
       state.loans = [];
+      state.blockedIps = [];
       state.auditEvents = [];
       state.auditEventsMeta = null;
       state.jigsawThumbnailImages = [];
@@ -4435,6 +4530,7 @@
       renderJigsaws([]);
       closeJigsawEditor();
       renderLoans([]);
+      renderBlockedIps([]);
       renderJigsawImages([]);
       renderImageLibraryImages([]);
       renderDiaryEntries([]);
@@ -5203,6 +5299,44 @@
     }
   }
 
+  async function handleCreateBlockedIp(event) {
+    event.preventDefault();
+    clearFeedback();
+
+    const formData = new FormData(event.currentTarget);
+    const ipAddress = String(formData.get("ip_address") || "").trim();
+    const durationHours = Number(formData.get("duration_hours") || "0");
+    const reason = String(formData.get("reason") || "").trim();
+
+    if (!ipAddress) {
+      showFeedback("IP address is required.", true);
+      return;
+    }
+    if (!Number.isFinite(durationHours) || durationHours < 1 || durationHours > 720) {
+      showFeedback("Duration must be between 1 and 720 hours.", true);
+      return;
+    }
+
+    try {
+      await apiRequest("/api/v1/security/blocked-ips", {
+        method: "POST",
+        body: JSON.stringify({
+          ip_address: ipAddress,
+          duration_hours: Math.trunc(durationHours),
+          reason: reason || null,
+        }),
+      });
+      showFeedback(`Blocked ${ipAddress}.`);
+      event.currentTarget.reset();
+      if (elements.ipBlockHours) {
+        elements.ipBlockHours.value = "24";
+      }
+      await Promise.all([loadBlockedIps(), loadAuditEvents()]);
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
   function openJigsawEditor(jigsawId) {
     const selectedJigsaw = state.jigsaws.find((entry) => Number(entry.id) === Number(jigsawId));
     if (!selectedJigsaw || !elements.jigsawEditForm) {
@@ -5439,6 +5573,27 @@
       return;
     }
 
+    const blockedIpRemoveButton = event.target.closest("[data-ip-block-remove]");
+    if (blockedIpRemoveButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const blockedIpId = Number(blockedIpRemoveButton.getAttribute("data-ip-block-remove") || "0");
+      if (!blockedIpId) {
+        showFeedback("Invalid blocked IP selection.", true);
+        return;
+      }
+
+      try {
+        await apiRequest(`/api/v1/security/blocked-ips/${blockedIpId}`, { method: "DELETE" });
+        showFeedback("IP block removed.");
+        await Promise.all([loadBlockedIps(), loadAuditEvents()]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
     const retireButton = event.target.closest("[data-jigsaw-retire]");
     if (retireButton) {
       event.preventDefault();
@@ -5572,6 +5727,32 @@
       const imageId = Number(diarySuggestAssignButton.getAttribute("data-diary-suggest-assign"));
       const jigsawId = Number(diarySuggestAssignButton.getAttribute("data-diary-suggest-jigsaw-id") || "0");
       await handleDiaryAssignSuggested(imageId, jigsawId);
+      return;
+    }
+
+    const diaryDeleteImageButton = event.target.closest("[data-diary-delete-image]");
+    if (diaryDeleteImageButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      if (!currentUserHasCapability("image.delete")) {
+        showFeedback("You do not have permission to delete images.", true);
+        return;
+      }
+
+      const imageId = Number(diaryDeleteImageButton.getAttribute("data-diary-delete-image"));
+      const shouldDelete = window.confirm("Delete this unlinked completion image? This cannot be undone.");
+      if (!shouldDelete) {
+        return;
+      }
+
+      try {
+        await apiRequest(`/api/v1/image-library/images/${imageId}`, { method: "DELETE" });
+        showFeedback("Unlinked completion image deleted.");
+        await Promise.all([loadDiaryEntriesForSelected(), loadImageLibraryImages(), loadAuditEvents()]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
       return;
     }
 
@@ -5997,6 +6178,10 @@
       elements.loanCreateForm.addEventListener("submit", handleCreateLoan);
     }
 
+    if (elements.ipBlockCreateForm) {
+      elements.ipBlockCreateForm.addEventListener("submit", handleCreateBlockedIp);
+    }
+
     if (elements.jigsawImageForm) {
       elements.jigsawImageForm.addEventListener("submit", handleCreateJigsawImage);
     }
@@ -6246,6 +6431,10 @@
       elements.loansTableBody.addEventListener("click", handleTableActions);
     }
 
+    if (elements.ipBlocksTableBody) {
+      elements.ipBlocksTableBody.addEventListener("click", handleTableActions);
+    }
+
     if (elements.jigsawEditForm) {
       elements.jigsawEditForm.addEventListener("submit", handleEditJigsaw);
     }
@@ -6312,7 +6501,16 @@
     if (isAuthenticated) {
       clearImageEmbeddingBackfillProgress();
       setImageEmbeddingBackfillStatus("");
-      await Promise.all([loadRoles(), loadUsers(), loadJigsaws(), loadLoans(), loadAuditEvents(), loadAiUsageDiagnostics(), loadImageLibraryImages()]);
+      await Promise.all([
+        loadRoles(),
+        loadUsers(),
+        loadJigsaws(),
+        loadLoans(),
+        loadAuditEvents(),
+        loadBlockedIps(),
+        loadAiUsageDiagnostics(),
+        loadImageLibraryImages(),
+      ]);
       await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
     } else {
       clearImageEmbeddingBackfillProgress();
@@ -6321,6 +6519,7 @@
       renderUserRoleSelectors();
       renderJigsaws([]);
       renderLoans([]);
+      renderBlockedIps([]);
       renderJigsawImages([]);
       renderImageLibraryImages([]);
       renderDiaryEntries([]);

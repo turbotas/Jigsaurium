@@ -27,6 +27,7 @@
 - `MAX_CONTENT_LENGTH_BYTES`: optional hard cap for inbound request payload size (defaults to `33554432` / 32 MiB).
 - `TRUSTED_PROXY_CIDRS`: comma-separated proxy CIDRs for header trust.
 - `TRUSTED_PROXY_HOPS`: optional fixed proxy depth if CIDR is not used.
+- `TRUSTED_CLIENT_CIDRS`: comma-separated client CIDRs exempt from automatic 404-streak IP blocking.
 - `AI_ENABLED`: enable/disable AI create-from-image endpoint.
 - `AI_API_KEY`: provider API key for vision metadata extraction.
 - `AI_ENDPOINT_URL`: AI provider chat/completions-compatible endpoint URL.
@@ -95,6 +96,8 @@
 - Security response headers are applied to all responses (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and `Cross-Origin-Resource-Policy`).
 - Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` outside dev.
 - Login endpoint enforces basic anti-brute-force throttling per client IP and email (15-minute block after repeated failures in the same window).
+- Runtime request shielding enforces a temporary client-IP ban when a caller produces 5 consecutive `404` responses; ban duration is 24 hours and uses resolved client IP from trusted proxy headers.
+- Blocked-IP entries are persisted in `blocked_ips` and can be listed/added/removed by administrators via API/UI.
 - Image upload endpoints accept raster image MIME types only (`image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`); SVG and other active/image-document formats are rejected.
 
 ## Release Checks (manual now, automated later)

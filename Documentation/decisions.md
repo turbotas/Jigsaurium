@@ -203,3 +203,12 @@
 - Why: capability-driven UI/API evolution is less brittle than hardcoded role-name checks and supports future role changes.
 - Decision: seed a `member` role while retaining `borrower` as legacy compatibility.
 - Why: normal-user diary capability should be represented by a role name aligned to shared-household usage without breaking existing borrower assignments.
+
+## 2026-10-19 - Application-Layer 404 Streak Ban
+
+- Decision: add an application-layer request shield that temporarily blocks a client IP for 24 hours after 5 consecutive `404` responses.
+- Why: production runs behind an appliance proxy with limited configurability, so scanner suppression must be enforced in Flask rather than at the proxy edge.
+- Decision: key ban and login-throttle identity on resolved client IP from trusted proxy headers (`Forwarded` preferred, `X-Forwarded-For` fallback) and ignore forwarded headers from untrusted peers.
+- Why: request socket addresses reflect local proxy hops in deployment; security controls must use the original caller address while resisting header spoofing.
+- Decision: persist blocked-IP entries in a dedicated `blocked_ips` table and expose administrator endpoints/UI for manual add/remove and visibility.
+- Why: operators need durable state and manual remediation controls that survive app restarts and support appliance-proxy environments.

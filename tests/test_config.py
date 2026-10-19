@@ -42,12 +42,15 @@ def test_config_reads_database_url(monkeypatch):
 def test_config_parses_proxy_settings(monkeypatch):
     monkeypatch.setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 192.168.0.0/16")
     monkeypatch.setenv("TRUSTED_PROXY_HOPS", "2")
+    monkeypatch.setenv("TRUSTED_CLIENT_CIDRS", "192.168.51.0/24, 10.10.0.0/16")
 
     importlib.reload(config)
 
     assert config.Config.TRUSTED_PROXY_CIDRS == ["10.0.0.0/8", "192.168.0.0/16"]
     assert config.Config.TRUSTED_PROXY_HOPS == 2
+    assert config.Config.TRUSTED_CLIENT_CIDRS == ["192.168.51.0/24", "10.10.0.0/16"]
 
     monkeypatch.delenv("TRUSTED_PROXY_CIDRS", raising=False)
     monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+    monkeypatch.delenv("TRUSTED_CLIENT_CIDRS", raising=False)
     importlib.reload(config)

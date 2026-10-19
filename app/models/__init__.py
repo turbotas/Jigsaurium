@@ -2,6 +2,7 @@ from app.models.ai_usage_event import AiUsageEvent
 from app.models.audit_event import AuditEvent
 from app.models.bulk_ai_create_job import BulkAiCreateJob
 from app.models.bulk_ai_create_job_item import BulkAiCreateJobItem
+from app.models.blocked_ip import BlockedIp
 from app.models.jigsaw import Jigsaw
 from app.models.jigsaw_diary_entry import JigsawDiaryEntry
 from app.models.image_embedding import ImageEmbedding
@@ -17,6 +18,7 @@ __all__ = [
     "AuditEvent",
     "BulkAiCreateJob",
     "BulkAiCreateJobItem",
+    "BlockedIp",
     "Jigsaw",
     "JigsawDiaryEntry",
     "ImageEmbedding",
