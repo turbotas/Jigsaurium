@@ -50,6 +50,8 @@ def test_home_route_renders_expected_content(client):
     assert b"id=\"login-form\"" in response.data
     assert b"id=\"workspace-tabs\"" in response.data
     assert b"data-workspace-tab=\"collection\"" in response.data
+    assert b"Filter jigsaws" in response.data
+    assert b"id=\"jigsaws-pagination-top\"" in response.data
     assert b"id=\"admin-sections\" hidden" in response.data
     assert b"/static/js/app.js" in response.data
     assert b"/mobile-capture" in response.data

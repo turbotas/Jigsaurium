@@ -40,16 +40,29 @@
       account: false,
       collection: false,
       admin: false,
+      "activity-log": false,
+      loans: false,
+    },
+    activeCollectionTab: null,
+    collectionTabVisibility: {
+      "quick-create": false,
+      jigsaws: false,
+      images: false,
+      "image-browser": false,
+      diary: false,
+    },
+    activeAdminTab: null,
+    adminTabVisibility: {
+      users: false,
+      ai: false,
+      "ip-blocks": false,
     },
     workspaceSectionAccess: {
       account: false,
-      adminSections: false,
-      users: false,
-      jigsaws: false,
-      aiUsage: false,
+      collection: false,
+      admin: false,
+      activityLog: false,
       loans: false,
-      audit: false,
-      ipBlocks: false,
     },
     roleDefinitions: [],
     users: [],
@@ -79,6 +92,11 @@
     imageEmbeddingBackfillJobId: null,
     imageEmbeddingBackfillPollTimer: null,
     jigsawExpandedImageRowsById: {},
+    editorScrollPositions: {
+      user: null,
+      jigsaw: null,
+      diary: null,
+    },
     tableSorts: createDefaultTableSortState(),
     pagination: {
       jigsaws: 1,
@@ -117,8 +135,13 @@
     authCredentialsWrap: document.getElementById("auth-credentials-wrap"),
     signInControls: document.getElementById("sign-in-controls"),
     signOutControls: document.getElementById("sign-out-controls"),
+    accountNavButton: document.getElementById("account-nav-button"),
     workspaceTabs: document.getElementById("workspace-tabs"),
     workspaceTabButtons: Array.from(document.querySelectorAll("[data-workspace-tab]")),
+    collectionSubtabs: document.getElementById("collection-subtabs"),
+    collectionTabButtons: Array.from(document.querySelectorAll("[data-collection-tab]")),
+    adminSubtabs: document.getElementById("admin-subtabs"),
+    adminTabButtons: Array.from(document.querySelectorAll("[data-admin-tab]")),
     accountSection: document.getElementById("account-section"),
     accountForm: document.getElementById("account-form"),
     accountUsername: document.getElementById("account-username"),
@@ -128,6 +151,11 @@
     adminSections: document.getElementById("admin-sections"),
     usersSection: document.getElementById("users-section"),
     jigsawsSection: document.getElementById("jigsaws-section"),
+    collectionQuickCreatePanel: document.getElementById("collection-quick-create-panel"),
+    collectionJigsawsPanel: document.getElementById("collection-jigsaws-panel"),
+    collectionImagesPanel: document.getElementById("collection-images-panel"),
+    collectionImageBrowserPanel: document.getElementById("collection-image-browser-panel"),
+    collectionDiaryPanel: document.getElementById("collection-diary-panel"),
     aiUsageSection: document.getElementById("ai-usage-section"),
     loansSection: document.getElementById("loans-section"),
     auditSection: document.getElementById("audit-section"),
@@ -166,6 +194,7 @@
     jigsawSearchInput: document.getElementById("jigsaw-search-input"),
     jigsawFilterNoDiary: document.getElementById("jigsaw-filter-no-diary"),
     jigsawsTableBody: document.getElementById("jigsaws-table-body"),
+    jigsawsPaginationTop: document.getElementById("jigsaws-pagination-top"),
     jigsawsPagination: document.getElementById("jigsaws-pagination"),
     jigsawImageForm: document.getElementById("jigsaw-image-form"),
     jigsawImageJigsawId: document.getElementById("jigsaw-image-jigsaw-id"),
@@ -187,6 +216,7 @@
     imageLibraryFilterUnassigned: document.getElementById("image-library-filter-unassigned"),
     imageLibraryTagFilters: document.getElementById("image-library-tag-filters"),
     imageLibraryTableBody: document.getElementById("image-library-table-body"),
+    imageLibraryPaginationTop: document.getElementById("image-library-pagination-top"),
     imageLibraryPagination: document.getElementById("image-library-pagination"),
     imageLibraryBulkCreateUnassignedBoxButton: document.getElementById("image-library-bulk-create-unassigned-box"),
     imageEmbeddingBackfillStart: document.getElementById("image-embedding-backfill-start"),
@@ -228,6 +258,7 @@
     diaryNotes: document.getElementById("diary-notes"),
     diaryEntriesCaption: document.getElementById("diary-entries-caption"),
     diaryEntriesTableBody: document.getElementById("diary-entries-table-body"),
+    diaryPaginationTop: document.getElementById("diary-pagination-top"),
     diaryPagination: document.getElementById("diary-pagination"),
     loanCreateForm: document.getElementById("loan-create-form"),
     loanBorrowerUserId: document.getElementById("loan-borrower-user-id"),
@@ -255,11 +286,13 @@
     aiUsageOperationBody: document.getElementById("ai-usage-operation-body"),
     aiUsageModelBody: document.getElementById("ai-usage-model-body"),
     aiUsageRecentBody: document.getElementById("ai-usage-recent-body"),
+    aiUsageRecentPaginationTop: document.getElementById("ai-usage-recent-pagination-top"),
     aiUsageRecentPagination: document.getElementById("ai-usage-recent-pagination"),
     aiUsageDetailModal: document.getElementById("ai-usage-detail-modal"),
     aiUsageDetailSummary: document.getElementById("ai-usage-detail-summary"),
     aiUsageDetailPayload: document.getElementById("ai-usage-detail-payload"),
     aiUsageDetailCloseButton: document.getElementById("ai-usage-detail-close"),
+    auditPaginationTop: document.getElementById("audit-pagination-top"),
     auditPagination: document.getElementById("audit-pagination"),
   };
 
@@ -463,6 +496,42 @@
     controls.appendChild(nextButton);
 
     container.appendChild(controls);
+  }
+
+  function renderPaginationPair(topContainer, bottomContainer, paginationKey, pageResult) {
+    renderPagination(topContainer, paginationKey, pageResult);
+    renderPagination(bottomContainer, paginationKey, pageResult);
+  }
+
+  function rememberEditorScrollPosition(editorKey) {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(state.editorScrollPositions, editorKey)) {
+      return;
+    }
+    if (state.editorScrollPositions[editorKey] === null) {
+      state.editorScrollPositions[editorKey] = window.scrollY;
+    }
+  }
+
+  function scrollToEditor(editorElement) {
+    if (!editorElement || typeof editorElement.scrollIntoView !== "function") {
+      return;
+    }
+    editorElement.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function restoreEditorScrollPosition(editorKey) {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const rememberedPosition = state.editorScrollPositions[editorKey];
+    if (rememberedPosition === null || !Number.isFinite(rememberedPosition)) {
+      return;
+    }
+    state.editorScrollPositions[editorKey] = null;
+    window.scrollTo({ top: rememberedPosition, behavior: "smooth" });
   }
 
   const TABLE_SORT_CONFIG = {
@@ -1591,6 +1660,7 @@
     }
 
     state.diaryEditingEntryId = resolvedEntryId;
+    rememberEditorScrollPosition("diary");
     if (elements.diaryJigsawId) {
       elements.diaryJigsawId.value = String(entry.jigsaw_id || "");
       elements.diaryJigsawId.disabled = true;
@@ -1609,6 +1679,9 @@
     }
     if (elements.diaryEntryCancelButton) {
       elements.diaryEntryCancelButton.hidden = false;
+    }
+    if (elements.diaryEntryForm) {
+      scrollToEditor(elements.diaryEntryForm);
     }
   }
 
@@ -1672,8 +1745,18 @@
   }
 
   function getFirstVisibleWorkspaceTab() {
-    const tabOrder = ["collection", "account", "admin"];
+    const tabOrder = ["collection", "account", "admin", "activity-log", "loans"];
     return tabOrder.find((tabName) => state.workspaceTabVisibility[tabName]) || null;
+  }
+
+  function getFirstVisibleCollectionTab() {
+    const tabOrder = ["jigsaws", "quick-create", "images", "image-browser", "diary"];
+    return tabOrder.find((tabName) => state.collectionTabVisibility[tabName]) || null;
+  }
+
+  function getFirstVisibleAdminTab() {
+    const tabOrder = ["users", "ai", "ip-blocks"];
+    return tabOrder.find((tabName) => state.adminTabVisibility[tabName]) || null;
   }
 
   function normalizeWorkspaceTab(tabName) {
@@ -1682,6 +1765,22 @@
     }
     const normalized = tabName.trim().toLowerCase();
     return state.workspaceTabVisibility[normalized] ? normalized : null;
+  }
+
+  function normalizeCollectionTab(tabName) {
+    if (typeof tabName !== "string") {
+      return null;
+    }
+    const normalized = tabName.trim().toLowerCase();
+    return state.collectionTabVisibility[normalized] ? normalized : null;
+  }
+
+  function normalizeAdminTab(tabName) {
+    if (typeof tabName !== "string") {
+      return null;
+    }
+    const normalized = tabName.trim().toLowerCase();
+    return state.adminTabVisibility[normalized] ? normalized : null;
   }
 
   function setActiveWorkspaceTab(tabName, { updateHash = true } = {}) {
@@ -1698,6 +1797,14 @@
         }
       }
     }
+  }
+
+  function setActiveCollectionTab(tabName) {
+    state.activeCollectionTab = normalizeCollectionTab(tabName) || getFirstVisibleCollectionTab();
+  }
+
+  function setActiveAdminTab(tabName) {
+    state.activeAdminTab = normalizeAdminTab(tabName) || getFirstVisibleAdminTab();
   }
 
   function updateWorkspaceTabsUi() {
@@ -1717,34 +1824,110 @@
     });
   }
 
+  function updateCollectionTabsUi() {
+    const hasVisibleTabs = Boolean(getFirstVisibleCollectionTab());
+    if (elements.collectionSubtabs) {
+      elements.collectionSubtabs.hidden = !state.workspaceSectionAccess.collection || state.activeWorkspaceTab !== "collection" || !hasVisibleTabs;
+    }
+
+    elements.collectionTabButtons.forEach((button) => {
+      const tabName = String(button.dataset.collectionTab || "").trim().toLowerCase();
+      const isVisible = state.collectionTabVisibility[tabName] === true;
+      const isSelected = isVisible && state.activeCollectionTab === tabName;
+      button.hidden = !isVisible;
+      button.setAttribute("aria-selected", isSelected ? "true" : "false");
+      button.setAttribute("tabindex", isSelected ? "0" : "-1");
+      button.classList.toggle("is-active", isSelected);
+    });
+  }
+
+  function updateAdminTabsUi() {
+    const hasVisibleTabs = Boolean(getFirstVisibleAdminTab());
+    if (elements.adminSubtabs) {
+      elements.adminSubtabs.hidden = !state.workspaceSectionAccess.admin || state.activeWorkspaceTab !== "admin" || !hasVisibleTabs;
+    }
+
+    elements.adminTabButtons.forEach((button) => {
+      const tabName = String(button.dataset.adminTab || "").trim().toLowerCase();
+      const isVisible = state.adminTabVisibility[tabName] === true;
+      const isSelected = isVisible && state.activeAdminTab === tabName;
+      button.hidden = !isVisible;
+      button.setAttribute("aria-selected", isSelected ? "true" : "false");
+      button.setAttribute("tabindex", isSelected ? "0" : "-1");
+      button.classList.toggle("is-active", isSelected);
+    });
+  }
+
+  function applyCollectionPanelVisibility() {
+    const activeCollectionTab = state.activeCollectionTab;
+
+    if (elements.collectionQuickCreatePanel) {
+      elements.collectionQuickCreatePanel.hidden = !(state.collectionTabVisibility["quick-create"] && activeCollectionTab === "quick-create");
+    }
+    if (elements.collectionJigsawsPanel) {
+      elements.collectionJigsawsPanel.hidden = !(state.collectionTabVisibility.jigsaws && activeCollectionTab === "jigsaws");
+    }
+    if (elements.collectionImagesPanel) {
+      elements.collectionImagesPanel.hidden = !(state.collectionTabVisibility.images && activeCollectionTab === "images");
+    }
+    if (elements.collectionImageBrowserPanel) {
+      elements.collectionImageBrowserPanel.hidden = !(state.collectionTabVisibility["image-browser"] && activeCollectionTab === "image-browser");
+    }
+    if (elements.collectionDiaryPanel) {
+      elements.collectionDiaryPanel.hidden = !(state.collectionTabVisibility.diary && activeCollectionTab === "diary");
+    }
+  }
+
+  function applyAdminPanelVisibility() {
+    if (state.activeWorkspaceTab !== "admin") {
+      if (elements.usersSection) {
+        elements.usersSection.hidden = true;
+      }
+      if (elements.aiUsageSection) {
+        elements.aiUsageSection.hidden = true;
+      }
+      if (elements.ipBlocksSection) {
+        elements.ipBlocksSection.hidden = true;
+      }
+      return;
+    }
+
+    const activeAdminTab = state.activeAdminTab;
+
+    if (elements.usersSection) {
+      elements.usersSection.hidden = !(state.adminTabVisibility.users && activeAdminTab === "users");
+    }
+    if (elements.aiUsageSection) {
+      elements.aiUsageSection.hidden = !(state.adminTabVisibility.ai && activeAdminTab === "ai");
+    }
+    if (elements.ipBlocksSection) {
+      elements.ipBlocksSection.hidden = !(state.adminTabVisibility["ip-blocks"] && activeAdminTab === "ip-blocks");
+    }
+  }
+
   function applyWorkspaceSectionVisibility() {
     const activeTab = state.activeWorkspaceTab;
-    const showingWorkspacePanels = activeTab === "collection" || activeTab === "admin";
+    const showCollectionWorkspace = state.workspaceSectionAccess.collection && activeTab === "collection";
+    const showAdminWorkspace = state.workspaceSectionAccess.admin && activeTab === "admin";
 
     if (elements.accountSection) {
       elements.accountSection.hidden = !(state.workspaceSectionAccess.account && activeTab === "account");
     }
-    if (elements.adminSections) {
-      elements.adminSections.hidden = !(state.workspaceSectionAccess.adminSections && showingWorkspacePanels);
-    }
-    if (elements.usersSection) {
-      elements.usersSection.hidden = !(state.workspaceSectionAccess.users && activeTab === "admin");
-    }
     if (elements.jigsawsSection) {
-      elements.jigsawsSection.hidden = !(state.workspaceSectionAccess.jigsaws && activeTab === "collection");
+      elements.jigsawsSection.hidden = !showCollectionWorkspace;
     }
-    if (elements.aiUsageSection) {
-      elements.aiUsageSection.hidden = !(state.workspaceSectionAccess.aiUsage && activeTab === "admin");
+    if (elements.adminSections) {
+      elements.adminSections.hidden = !(showCollectionWorkspace || showAdminWorkspace);
     }
     if (elements.loansSection) {
-      elements.loansSection.hidden = !(state.workspaceSectionAccess.loans && activeTab === "admin");
+      elements.loansSection.hidden = !(state.workspaceSectionAccess.loans && activeTab === "loans");
     }
     if (elements.auditSection) {
-      elements.auditSection.hidden = !(state.workspaceSectionAccess.audit && activeTab === "admin");
+      elements.auditSection.hidden = !(state.workspaceSectionAccess.activityLog && activeTab === "activity-log");
     }
-    if (elements.ipBlocksSection) {
-      elements.ipBlocksSection.hidden = !(state.workspaceSectionAccess.ipBlocks && activeTab === "admin");
-    }
+
+    applyCollectionPanelVisibility();
+    applyAdminPanelVisibility();
   }
 
   function setWorkspaceSectionAccess(sectionName, isVisible) {
@@ -1763,7 +1946,51 @@
     }
     setActiveWorkspaceTab(tabName);
     updateWorkspaceTabsUi();
+    updateCollectionTabsUi();
+    updateAdminTabsUi();
     applyWorkspaceSectionVisibility();
+  }
+
+  function handleCollectionTabClick(event) {
+    const button = event.target?.closest("[data-collection-tab]");
+    if (!button) {
+      return;
+    }
+    event.preventDefault();
+    const tabName = String(button.dataset.collectionTab || "").trim().toLowerCase();
+    if (!state.collectionTabVisibility[tabName]) {
+      return;
+    }
+    setActiveCollectionTab(tabName);
+    updateCollectionTabsUi();
+    applyCollectionPanelVisibility();
+    if (tabName === "image-browser") {
+      openImageBrowser();
+    }
+  }
+
+  function handleAccountNavClick(event) {
+    event.preventDefault();
+    setActiveWorkspaceTab("account");
+    updateWorkspaceTabsUi();
+    updateCollectionTabsUi();
+    updateAdminTabsUi();
+    applyWorkspaceSectionVisibility();
+  }
+
+  function handleAdminTabClick(event) {
+    const button = event.target?.closest("[data-admin-tab]");
+    if (!button) {
+      return;
+    }
+    event.preventDefault();
+    const tabName = String(button.dataset.adminTab || "").trim().toLowerCase();
+    if (!state.adminTabVisibility[tabName]) {
+      return;
+    }
+    setActiveAdminTab(tabName);
+    updateAdminTabsUi();
+    applyAdminPanelVisibility();
   }
 
   function handleWorkspaceHashChange() {
@@ -1774,6 +2001,8 @@
     }
     state.activeWorkspaceTab = normalizedHashTab;
     updateWorkspaceTabsUi();
+    updateCollectionTabsUi();
+    updateAdminTabsUi();
     applyWorkspaceSectionVisibility();
   }
 
@@ -1786,18 +2015,32 @@
       resetDiaryEntryFormEditingState({ keepJigsawSelection: false });
       elements.sessionSummary.textContent = "Not signed in.";
       setWorkspaceSectionAccess("account", false);
-      setWorkspaceSectionAccess("adminSections", false);
-      setWorkspaceSectionAccess("users", false);
-      setWorkspaceSectionAccess("jigsaws", false);
-      setWorkspaceSectionAccess("aiUsage", false);
+      setWorkspaceSectionAccess("collection", false);
+      setWorkspaceSectionAccess("admin", false);
+      setWorkspaceSectionAccess("activityLog", false);
       setWorkspaceSectionAccess("loans", false);
-      setWorkspaceSectionAccess("audit", false);
-      setWorkspaceSectionAccess("ipBlocks", false);
       state.workspaceTabVisibility.account = false;
       state.workspaceTabVisibility.collection = false;
       state.workspaceTabVisibility.admin = false;
+      state.workspaceTabVisibility["activity-log"] = false;
+      state.workspaceTabVisibility.loans = false;
+      state.collectionTabVisibility["quick-create"] = false;
+      state.collectionTabVisibility.jigsaws = false;
+      state.collectionTabVisibility.images = false;
+      state.collectionTabVisibility["image-browser"] = false;
+      state.collectionTabVisibility.diary = false;
+      state.adminTabVisibility.users = false;
+      state.adminTabVisibility.ai = false;
+      state.adminTabVisibility["ip-blocks"] = false;
+      state.editorScrollPositions.user = null;
+      state.editorScrollPositions.jigsaw = null;
+      state.editorScrollPositions.diary = null;
+      setActiveCollectionTab(null);
+      setActiveAdminTab(null);
       setActiveWorkspaceTab(null);
       updateWorkspaceTabsUi();
+      updateCollectionTabsUi();
+      updateAdminTabsUi();
       applyWorkspaceSectionVisibility();
       if (elements.userEditForm) {
         elements.userEditForm.hidden = true;
@@ -1843,26 +2086,45 @@
     const canManageAi = currentUserHasCapability("ai.manage");
     const canReadAudit = currentUserHasCapability("audit.read");
     const canManageSecurity = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
-    const canSeeMainWorkspace = canReadJigsaw || canReadDiary || canManageUsers || canManageLoans || canManageImages || canManageAi || canReadAudit || canManageSecurity;
+    const canAccessCollection = canReadJigsaw || canReadDiary || canManageImages || canCreateJigsaw;
+    const canAccessAdminUsers = canManageUsers;
+    const canAccessAdminAi = canManageAi;
+    const canAccessAdminIpBlocks = canManageSecurity;
+    const canAccessAdmin = canAccessAdminUsers || canAccessAdminAi || canAccessAdminIpBlocks;
+    const canAccessActivityLog = canReadAudit;
+    const canAccessLoans = Boolean(isAdministrator && canManageLoans);
 
     setWorkspaceSectionAccess("account", true);
-    setWorkspaceSectionAccess("adminSections", canSeeMainWorkspace);
-    setWorkspaceSectionAccess("users", canManageUsers);
-    setWorkspaceSectionAccess("jigsaws", canReadJigsaw || canReadDiary);
-    setWorkspaceSectionAccess("aiUsage", canManageAi);
-    setWorkspaceSectionAccess("loans", canManageLoans);
-    setWorkspaceSectionAccess("audit", canReadAudit);
-    setWorkspaceSectionAccess("ipBlocks", canManageSecurity);
+    setWorkspaceSectionAccess("collection", canAccessCollection);
+    setWorkspaceSectionAccess("admin", canAccessAdmin);
+    setWorkspaceSectionAccess("activityLog", canAccessActivityLog);
+    setWorkspaceSectionAccess("loans", canAccessLoans);
 
-    const hasAdminTabContent = canManageUsers || canManageLoans || canManageAi || canReadAudit || canManageSecurity;
     state.workspaceTabVisibility.account = true;
-    state.workspaceTabVisibility.collection = Boolean(canReadJigsaw || canReadDiary);
-    state.workspaceTabVisibility.admin = Boolean(hasAdminTabContent);
+    state.workspaceTabVisibility.collection = canAccessCollection;
+    state.workspaceTabVisibility.admin = canAccessAdmin;
+    state.workspaceTabVisibility["activity-log"] = canAccessActivityLog;
+    state.workspaceTabVisibility.loans = canAccessLoans;
+
+    state.collectionTabVisibility["quick-create"] = canCreateJigsaw;
+    state.collectionTabVisibility.jigsaws = canReadJigsaw || canReadDiary;
+    state.collectionTabVisibility.images = canReadJigsaw || canReadDiary || canManageImages;
+    state.collectionTabVisibility["image-browser"] = canReadJigsaw || canReadDiary || canManageImages;
+    state.collectionTabVisibility.diary = canReadDiary;
+
+    state.adminTabVisibility.users = canAccessAdminUsers;
+    state.adminTabVisibility.ai = canAccessAdminAi;
+    state.adminTabVisibility["ip-blocks"] = canAccessAdminIpBlocks;
+
+    setActiveCollectionTab(state.activeCollectionTab);
+    setActiveAdminTab(state.activeAdminTab);
 
     const requestedTab = typeof window !== "undefined" ? String(window.location.hash || "").replace(/^#/, "") : "";
     const preferredTab = normalizeWorkspaceTab(requestedTab) || state.activeWorkspaceTab;
     setActiveWorkspaceTab(preferredTab);
     updateWorkspaceTabsUi();
+    updateCollectionTabsUi();
+    updateAdminTabsUi();
     applyWorkspaceSectionVisibility();
     if (elements.signInControls) {
       elements.signInControls.hidden = true;
@@ -2225,7 +2487,7 @@
       }
     });
 
-    renderPagination(elements.jigsawsPagination, "jigsaws", pageResult);
+    renderPaginationPair(elements.jigsawsPaginationTop, elements.jigsawsPagination, "jigsaws", pageResult);
   }
 
   function renderAuditEvents(events) {
@@ -2273,7 +2535,7 @@
       tableBody.appendChild(row);
     });
 
-    renderPagination(elements.auditPagination, "audit", pageResult);
+    renderPaginationPair(elements.auditPaginationTop, elements.auditPagination, "audit", pageResult);
   }
 
   function renderBlockedIps(blockedIps) {
@@ -2498,7 +2760,7 @@
       recentTableBody.appendChild(row);
     });
 
-    renderPagination(elements.aiUsageRecentPagination, "aiRecent", pageResult);
+    renderPaginationPair(elements.aiUsageRecentPaginationTop, elements.aiUsageRecentPagination, "aiRecent", pageResult);
   }
 
   function renderLoans(loans) {
@@ -2798,7 +3060,7 @@
       tableBody.appendChild(row);
     });
 
-    renderPagination(elements.imageLibraryPagination, "imageLibrary", pageResult);
+    renderPaginationPair(elements.imageLibraryPaginationTop, elements.imageLibraryPagination, "imageLibrary", pageResult);
   }
 
   function renderBulkUploadFiles() {
@@ -3993,7 +4255,7 @@
       tableBody.appendChild(row);
     });
 
-    renderPagination(elements.diaryPagination, "diary", pageResult);
+    renderPaginationPair(elements.diaryPaginationTop, elements.diaryPagination, "diary", pageResult);
   }
   async function refreshSession() {
     try {
@@ -4755,12 +5017,15 @@
     }
   }
 
-  function openUserEditor(userId) {
+  function openUserEditor(userId, { scrollToForm = true } = {}) {
     const selectedUser = state.users.find((entry) => Number(entry.id) === Number(userId));
     if (!selectedUser || !elements.userEditForm) {
       return;
     }
 
+    if (scrollToForm) {
+      rememberEditorScrollPosition("user");
+    }
     elements.userEditForm.hidden = false;
     if (elements.editUserId) {
       elements.editUserId.value = String(selectedUser.id);
@@ -4781,6 +5046,9 @@
     }
     if (elements.editUserPassword) {
       elements.editUserPassword.value = "";
+    }
+    if (scrollToForm) {
+      scrollToEditor(elements.userEditForm);
     }
   }
 
@@ -4827,7 +5095,8 @@
       });
       showFeedback("User updated.");
       await Promise.all([loadUsers(), loadAuditEvents()]);
-      openUserEditor(userId);
+      openUserEditor(userId, { scrollToForm: false });
+      restoreEditorScrollPosition("user");
     } catch (error) {
       showFeedback(error.message, true);
     } finally {
@@ -4840,6 +5109,7 @@
   function handleCancelUserEdit() {
     clearFeedback();
     closeUserEditor();
+    restoreEditorScrollPosition("user");
   }
 
   async function handleAccountUpdate(event) {
@@ -4982,6 +5252,7 @@
         });
         showFeedback("Diary entry updated.");
         resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
+        restoreEditorScrollPosition("diary");
       } else {
         await apiRequest(`/api/v1/jigsaws/${jigsawId}/diary-entries`, {
           method: "POST",
@@ -5484,12 +5755,15 @@
     }
   }
 
-  function openJigsawEditor(jigsawId) {
+  function openJigsawEditor(jigsawId, { scrollToForm = true } = {}) {
     const selectedJigsaw = state.jigsaws.find((entry) => Number(entry.id) === Number(jigsawId));
     if (!selectedJigsaw || !elements.jigsawEditForm) {
       return;
     }
 
+    if (scrollToForm) {
+      rememberEditorScrollPosition("jigsaw");
+    }
     elements.jigsawEditForm.hidden = false;
     if (elements.editJigsawId) {
       elements.editJigsawId.value = String(selectedJigsaw.id);
@@ -5529,6 +5803,9 @@
     }
     if (elements.editJigsawTags) {
       elements.editJigsawTags.value = selectedJigsaw.tags || "";
+    }
+    if (scrollToForm) {
+      scrollToEditor(elements.jigsawEditForm);
     }
   }
 
@@ -5574,7 +5851,8 @@
       });
       showFeedback("Jigsaw updated.");
       await Promise.all([loadJigsaws(), loadJigsawImagesForSelected(), loadLoans(), loadAuditEvents()]);
-      openJigsawEditor(jigsawId);
+      openJigsawEditor(jigsawId, { scrollToForm: false });
+      restoreEditorScrollPosition("jigsaw");
     } catch (error) {
       showFeedback(error.message, true);
     } finally {
@@ -5636,6 +5914,7 @@
   function handleCancelJigsawEdit() {
     clearFeedback();
     closeJigsawEditor();
+    restoreEditorScrollPosition("jigsaw");
   }
 
   async function handleTableActions(event) {
@@ -6100,6 +6379,7 @@
   function handleDiaryEntryCancelEdit() {
     clearFeedback();
     resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
+    restoreEditorScrollPosition("diary");
   }
 
   function handleJigsawImageSelectionChange() {
@@ -6309,8 +6589,20 @@
       elements.logoutButton.addEventListener("click", handleLogout);
     }
 
+    if (elements.accountNavButton) {
+      elements.accountNavButton.addEventListener("click", handleAccountNavClick);
+    }
+
     if (elements.workspaceTabs) {
       elements.workspaceTabs.addEventListener("click", handleWorkspaceTabClick);
+    }
+
+    if (elements.collectionSubtabs) {
+      elements.collectionSubtabs.addEventListener("click", handleCollectionTabClick);
+    }
+
+    if (elements.adminSubtabs) {
+      elements.adminSubtabs.addEventListener("click", handleAdminTabClick);
     }
 
     window.addEventListener("hashchange", handleWorkspaceHashChange);
@@ -6385,21 +6677,36 @@
     if (elements.jigsawsPagination) {
       elements.jigsawsPagination.addEventListener("click", handlePaginationClick);
     }
+    if (elements.jigsawsPaginationTop) {
+      elements.jigsawsPaginationTop.addEventListener("click", handlePaginationClick);
+    }
 
     if (elements.imageLibraryPagination) {
       elements.imageLibraryPagination.addEventListener("click", handlePaginationClick);
+    }
+    if (elements.imageLibraryPaginationTop) {
+      elements.imageLibraryPaginationTop.addEventListener("click", handlePaginationClick);
     }
 
     if (elements.diaryPagination) {
       elements.diaryPagination.addEventListener("click", handlePaginationClick);
     }
+    if (elements.diaryPaginationTop) {
+      elements.diaryPaginationTop.addEventListener("click", handlePaginationClick);
+    }
 
     if (elements.aiUsageRecentPagination) {
       elements.aiUsageRecentPagination.addEventListener("click", handlePaginationClick);
     }
+    if (elements.aiUsageRecentPaginationTop) {
+      elements.aiUsageRecentPaginationTop.addEventListener("click", handlePaginationClick);
+    }
 
     if (elements.auditPagination) {
       elements.auditPagination.addEventListener("click", handlePaginationClick);
+    }
+    if (elements.auditPaginationTop) {
+      elements.auditPaginationTop.addEventListener("click", handlePaginationClick);
     }
 
     if (elements.adminSections) {
