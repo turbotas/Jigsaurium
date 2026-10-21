@@ -38,6 +38,10 @@
   const state = {
     csrfToken: null,
     user: null,
+    authProvider: null,
+    stfdAuthEnabled: false,
+    stfdAllowLocalLogin: true,
+    stfdLoginUrl: null,
     activeWorkspaceTab: null,
     workspaceTabVisibility: {
       account: false,
@@ -138,6 +142,10 @@
     sessionSummary: document.getElementById("session-summary"),
     authSection: document.getElementById("auth-section"),
     loginForm: document.getElementById("login-form"),
+    loginSubmitButton: document.querySelector("#login-form button[type='submit']"),
+    stfdLoginButton: document.getElementById("stfd-login-button"),
+    loginEmail: document.getElementById("login-email"),
+    loginPassword: document.getElementById("login-password"),
     authCredentialsWrap: document.getElementById("auth-credentials-wrap"),
     signInControls: document.getElementById("sign-in-controls"),
     signOutControls: document.getElementById("sign-out-controls"),
@@ -322,6 +330,60 @@
     elements.feedback.hidden = true;
     elements.feedback.classList.remove("is-error");
     elements.feedbackText.textContent = "";
+  }
+
+  function syncLoginUiForAuthMode() {
+    if (!elements.authCredentialsWrap || !elements.loginSubmitButton) {
+      return;
+    }
+
+    const stfdOnlyMode = state.stfdAuthEnabled && !state.stfdAllowLocalLogin;
+
+    if (stfdOnlyMode) {
+      elements.authCredentialsWrap.hidden = true;
+      elements.loginSubmitButton.textContent = "Sign in with STFD";
+      if (elements.loginEmail) {
+        elements.loginEmail.required = false;
+        elements.loginEmail.disabled = true;
+      }
+      if (elements.loginPassword) {
+        elements.loginPassword.required = false;
+        elements.loginPassword.disabled = true;
+      }
+      if (elements.stfdLoginButton) {
+        elements.stfdLoginButton.hidden = true;
+      }
+      return;
+    }
+
+    elements.authCredentialsWrap.hidden = false;
+    elements.loginSubmitButton.textContent = "Sign in";
+    if (elements.loginEmail) {
+      elements.loginEmail.disabled = false;
+      elements.loginEmail.required = true;
+    }
+    if (elements.loginPassword) {
+      elements.loginPassword.disabled = false;
+      elements.loginPassword.required = true;
+    }
+    if (elements.stfdLoginButton) {
+      elements.stfdLoginButton.hidden = !state.stfdAuthEnabled;
+    }
+  }
+
+  function syncHeaderAuthControls() {
+    const isSignedIn = Boolean(state.user);
+    const isStfdSession = String(state.authProvider || "").toLowerCase() === "stfd";
+
+    if (elements.signOutControls) {
+      elements.signOutControls.hidden = !isSignedIn;
+    }
+    if (elements.logoutButton) {
+      elements.logoutButton.hidden = !isSignedIn;
+    }
+    if (elements.accountNavButton) {
+      elements.accountNavButton.hidden = !isSignedIn || isStfdSession;
+    }
   }
 
   function setImageLibraryLoadSummary(message) {
@@ -2028,6 +2090,7 @@
 
     if (!state.user) {
       resetDiaryEntryFormEditingState({ keepJigsawSelection: false });
+      state.authProvider = null;
       elements.sessionSummary.textContent = "Not signed in.";
       setWorkspaceSectionAccess("account", false);
       setWorkspaceSectionAccess("collection", false);
@@ -2069,12 +2132,17 @@
       if (elements.signOutControls) {
         elements.signOutControls.hidden = true;
       }
+      if (elements.accountNavButton) {
+        elements.accountNavButton.hidden = true;
+      }
+      if (elements.logoutButton) {
+        elements.logoutButton.hidden = true;
+      }
       if (elements.authSection) {
         elements.authSection.hidden = false;
       }
-      if (elements.authCredentialsWrap) {
-        elements.authCredentialsWrap.hidden = false;
-      }
+      syncLoginUiForAuthMode();
+      syncHeaderAuthControls();
       populateLoanFormOptions();
       populateJigsawImageOptions();
       populateDiaryJigsawOptions();
@@ -2084,6 +2152,7 @@
 
     const roleText = Array.isArray(state.user.roles) ? state.user.roles.join(", ") : "none";
     elements.sessionSummary.textContent = `Signed in as ${state.user.email} (${roleText}).`;
+    const isStfdSession = String(state.authProvider || "").toLowerCase() === "stfd";
 
     const isAdministrator = Array.isArray(state.user.roles) && state.user.roles.includes("administrator");
     const canReadJigsaw = currentUserHasCapability("jigsaw.read");
@@ -2109,13 +2178,13 @@
     const canAccessActivityLog = canReadAudit;
     const canAccessLoans = Boolean(isAdministrator && canManageLoans);
 
-    setWorkspaceSectionAccess("account", true);
+    setWorkspaceSectionAccess("account", !isStfdSession);
     setWorkspaceSectionAccess("collection", canAccessCollection);
     setWorkspaceSectionAccess("admin", canAccessAdmin);
     setWorkspaceSectionAccess("activityLog", canAccessActivityLog);
     setWorkspaceSectionAccess("loans", canAccessLoans);
 
-    state.workspaceTabVisibility.account = true;
+    state.workspaceTabVisibility.account = !isStfdSession;
     state.workspaceTabVisibility.collection = canAccessCollection;
     state.workspaceTabVisibility.admin = canAccessAdmin;
     state.workspaceTabVisibility["activity-log"] = canAccessActivityLog;
@@ -2144,9 +2213,7 @@
     if (elements.signInControls) {
       elements.signInControls.hidden = true;
     }
-    if (elements.signOutControls) {
-      elements.signOutControls.hidden = false;
-    }
+    syncHeaderAuthControls();
     if (elements.authSection) {
       elements.authSection.hidden = true;
     }
@@ -4267,17 +4334,69 @@
       const payload = await apiRequest("/api/v1/auth/me");
       state.user = payload.data.user;
       state.csrfToken = payload.data.csrf_token || null;
+      state.authProvider = String(payload.data.auth_provider || "local").toLowerCase();
       setSessionSummary();
       return true;
     } catch (error) {
       state.user = null;
       state.csrfToken = null;
+      state.authProvider = null;
       state.roleDefinitions = [];
       renderUserRoleSelectors();
       setSessionSummary();
       if (error.status !== 401) {
         showFeedback(error.message, true);
       }
+      return false;
+    }
+  }
+
+  async function fetchStfdLoginInfo() {
+    try {
+      const payload = await apiRequest("/api/v1/auth/stfd/login-url");
+      state.stfdAuthEnabled = Boolean(payload?.data?.enabled);
+      state.stfdAllowLocalLogin = Boolean(payload?.data?.allow_local_login ?? true);
+      state.stfdLoginUrl =
+        state.stfdAuthEnabled && typeof payload?.data?.login_url === "string" && payload.data.login_url
+          ? payload.data.login_url
+          : null;
+    } catch (_error) {
+      state.stfdAuthEnabled = false;
+      state.stfdAllowLocalLogin = true;
+      state.stfdLoginUrl = null;
+    }
+    syncLoginUiForAuthMode();
+  }
+
+  async function consumeStfdTokenFromUrl() {
+    if (!state.stfdAuthEnabled) {
+      return false;
+    }
+
+    const url = new URL(window.location.href);
+    const token = String(url.searchParams.get("token") || "").trim();
+    if (!token) {
+      return false;
+    }
+
+    try {
+      const payload = await apiRequest("/api/v1/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      });
+      state.user = payload.data.user;
+      state.csrfToken = payload.data.csrf_token;
+      state.authProvider = String(payload.data.auth_provider || "stfd").toLowerCase();
+      setSessionSummary();
+
+      url.searchParams.delete("token");
+      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+      showFeedback("Signed in successfully.");
+      return true;
+    } catch (error) {
+      url.searchParams.delete("token");
+      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+      showFeedback(error.message, true);
       return false;
     }
   }
@@ -4887,6 +5006,15 @@
     event.preventDefault();
     clearFeedback();
 
+    if (state.stfdAuthEnabled && !state.stfdAllowLocalLogin) {
+      if (!state.stfdLoginUrl) {
+        showFeedback("STFD sign-in is enabled but not configured correctly.", true);
+        return;
+      }
+      window.location.assign(state.stfdLoginUrl);
+      return;
+    }
+
     const form = event.currentTarget;
     const formData = new FormData(form);
     const email = String(formData.get("email") || "").trim().toLowerCase();
@@ -4905,6 +5033,7 @@
 
       state.user = payload.data.user;
       state.csrfToken = payload.data.csrf_token;
+      state.authProvider = String(payload.data.auth_provider || "local").toLowerCase();
       setSessionSummary();
       showFeedback("Signed in successfully.");
       await Promise.all([
@@ -4923,6 +5052,18 @@
     }
   }
 
+  function handleStfdLoginClick() {
+    clearFeedback();
+    if (!state.stfdAuthEnabled) {
+      return;
+    }
+    if (!state.stfdLoginUrl) {
+      showFeedback("STFD sign-in is enabled but not configured correctly.", true);
+      return;
+    }
+    window.location.assign(state.stfdLoginUrl);
+  }
+
   async function handleLogout() {
     clearFeedback();
 
@@ -4935,6 +5076,7 @@
       await apiRequest("/api/v1/auth/logout", { method: "POST" });
       state.user = null;
       state.csrfToken = null;
+      state.authProvider = null;
       setSessionSummary();
       state.users = [];
       state.roleDefinitions = [];
@@ -5151,6 +5293,11 @@
       return;
     }
 
+    if (String(state.authProvider || "").toLowerCase() === "stfd") {
+      showFeedback("Account profile updates are managed by STFD for this session.", true);
+      return;
+    }
+
     const form = event.currentTarget;
     const formData = new FormData(form);
     const displayName = String(formData.get("display_name") || "").trim();
@@ -5190,6 +5337,7 @@
       });
 
       state.user = response.data.user;
+      state.authProvider = String(response.data.auth_provider || state.authProvider || "local").toLowerCase();
       if (response.data.csrf_token) {
         state.csrfToken = response.data.csrf_token;
       }
@@ -6697,6 +6845,10 @@
       elements.loginForm.addEventListener("submit", handleLoginSubmit);
     }
 
+    if (elements.stfdLoginButton) {
+      elements.stfdLoginButton.addEventListener("click", handleStfdLoginClick);
+    }
+
     if (elements.logoutButton) {
       elements.logoutButton.addEventListener("click", handleLogout);
     }
@@ -7065,15 +7217,18 @@
   }
 
   async function init() {
+    syncHeaderAuthControls();
     state.diarySelectionTouchedByUser = false;
     renderUserRoleSelectors();
     setImageBrowserFilterInputsFromState();
     syncImageBrowserFilterStateFromInputs();
     attachEvents();
+    await fetchStfdLoginInfo();
+    const consumedToken = await consumeStfdTokenFromUrl();
     updateSortableTableHeaders();
     renderBulkUploadFiles();
     syncBulkCreateFromUploadVisibility();
-    const isAuthenticated = await refreshSession();
+    const isAuthenticated = consumedToken ? true : await refreshSession();
     if (isAuthenticated) {
       clearImageEmbeddingBackfillProgress();
       setImageEmbeddingBackfillStatus("");

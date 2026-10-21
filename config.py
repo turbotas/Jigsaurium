@@ -58,3 +58,12 @@ class Config:
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
     PREFERRED_URL_SCHEME = "https" if APP_ENV != "dev" else "http"
+    STFD_ENABLED = _parse_bool(os.getenv("STFD_ENABLED"), default=False)
+    STFD_ALLOW_LOCAL_LOGIN = _parse_bool(os.getenv("STFD_ALLOW_LOCAL_LOGIN"), default=False)
+    STFD_APP_UNI = os.getenv("STFD_APP_UNI", "")
+    STFD_SHARED_KEY = os.getenv("STFD_SHARED_KEY", "")
+    STFD_ASSERT_BASE_URL = os.getenv("STFD_ASSERT_BASE_URL", "")
+    STFD_REDIRECT_URI = os.getenv("STFD_REDIRECT_URI", "")
+    STFD_ROLE_UNI_ADMINISTRATOR = os.getenv("STFD_ROLE_UNI_ADMINISTRATOR", "")
+    STFD_ROLE_UNI_MEMBER = os.getenv("STFD_ROLE_UNI_MEMBER", "")
+    STFD_ROLE_UNI_BORROWER = os.getenv("STFD_ROLE_UNI_BORROWER", "")

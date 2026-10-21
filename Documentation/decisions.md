@@ -212,3 +212,12 @@
 - Why: request socket addresses reflect local proxy hops in deployment; security controls must use the original caller address while resisting header spoofing.
 - Decision: persist blocked-IP entries in a dedicated `blocked_ips` table and expose administrator endpoints/UI for manual add/remove and visibility.
 - Why: operators need durable state and manual remediation controls that survive app restarts and support appliance-proxy environments.
+
+## 2026-10-21 - STFD-Backed JIT Authentication and UNI Mapping
+
+- Decision: integrate authentication with STFD JWT assertions using JIT user provisioning/synchronization on each successful login.
+- Why: STFD is the cross-environment identity provider; JIT avoids manual pre-provisioning and keeps local identity data current.
+- Decision: treat `users.auth_subject` as the canonical external identity key (STFD user UNI) and add role-level UNI mapping via `roles.uni`.
+- Why: token `sub` and role UNI claims must map deterministically into local authorization state.
+- Decision: emit explicit audit events for `user.provisioned_from_stfd`, `user.synced_from_stfd`, and `auth.login`.
+- Why: operators need a clear trail for first-seen identities, subsequent UNI-linked profile updates, and access events.

@@ -28,6 +28,15 @@
 - `TRUSTED_PROXY_CIDRS`: comma-separated proxy CIDRs for header trust.
 - `TRUSTED_PROXY_HOPS`: optional fixed proxy depth if CIDR is not used.
 - `TRUSTED_CLIENT_CIDRS`: comma-separated client CIDRs exempt from automatic 404-streak IP blocking.
+- `STFD_ENABLED`: enable/disable STFD-backed authentication mode.
+- `STFD_ALLOW_LOCAL_LOGIN`: optional breakglass/fallback toggle; when `1`, local email/password login remains available while STFD is enabled.
+- `STFD_APP_UNI`: STFD application UNI for this environment.
+- `STFD_SHARED_KEY`: STFD shared key used to verify incoming JWT assertions.
+- `STFD_ASSERT_BASE_URL`: STFD assertion base URL (for example `https://.../stfd/assert`).
+- `STFD_REDIRECT_URI`: absolute redirect URI registered with STFD for this environment.
+- `STFD_ROLE_UNI_ADMINISTRATOR`: STFD role UNI that maps to local `administrator`.
+- `STFD_ROLE_UNI_MEMBER`: STFD role UNI that maps to local `member`.
+- `STFD_ROLE_UNI_BORROWER`: STFD role UNI that maps to local `borrower`.
 - `AI_ENABLED`: enable/disable AI create-from-image endpoint.
 - `AI_API_KEY`: provider API key for vision metadata extraction.
 - `AI_ENDPOINT_URL`: AI provider chat/completions-compatible endpoint URL.

@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 import pytest
+import jwt
 
 from app.db import get_session
 from app.models import AuditEvent, Jigsaw, Loan, Role, User, UserRole
@@ -82,6 +83,32 @@ def _count_audit_events(app):
     with app.app_context():
         db_session = get_session()
         return db_session.query(AuditEvent).count()
+
+
+def _configure_stfd_for_tests(app, *, allow_local_login=False):
+    app.config["STFD_ENABLED"] = True
+    app.config["STFD_ALLOW_LOCAL_LOGIN"] = bool(allow_local_login)
+    app.config["STFD_APP_UNI"] = "jigsaurium-test-app-uni"
+    app.config["STFD_SHARED_KEY"] = "test-shared-key-0123456789abcdef0123456789abcdef"
+    app.config["STFD_ASSERT_BASE_URL"] = "https://stfd.example.test/stfd/assert"
+    app.config["STFD_REDIRECT_URI"] = "https://jigsaurium.example.test/"
+    app.config["STFD_ROLE_UNI_ADMINISTRATOR"] = "role-uni-admin"
+    app.config["STFD_ROLE_UNI_MEMBER"] = "role-uni-member"
+    app.config["STFD_ROLE_UNI_BORROWER"] = "role-uni-borrower"
+
+
+def _build_stfd_token(*, sub, email, role_unis, app_uni="jigsaurium-test-app-uni"):
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": sub,
+        "email": email,
+        "friendly_name": "STFD Synced User",
+        "app": app_uni,
+        "roles": role_unis,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=60)).timestamp()),
+    }
+    return jwt.encode(payload, "test-shared-key-0123456789abcdef0123456789abcdef", algorithm="HS256")
 
 
 def _assert_authentication_required(response):
@@ -1787,3 +1814,211 @@ def test_auth_me_patch_rejects_new_password_shorter_than_minimum(client, seeded_
     assert payload["error"]["code"] == "validation_error"
     assert payload["error"]["details"][0]["field"] == "password"
     assert "at least 12 characters" in payload["error"]["details"][0]["issue"]
+
+
+@pytest.mark.functional
+def test_stfd_login_jit_provisions_user_and_records_audit(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+
+    with app.app_context():
+        db_session = get_session()
+        db_session.query(Role).filter_by(name="administrator").one().uni = "role-uni-admin"
+        db_session.query(Role).filter_by(name="member").one().uni = "role-uni-member"
+        db_session.query(Role).filter_by(name="borrower").one().uni = "role-uni-borrower"
+        db_session.commit()
+
+    token = _build_stfd_token(
+        sub="stfd-user-uni-001",
+        email="jit-provisioned@example.com",
+        role_unis=["role-uni-member"],
+    )
+
+    response = client.post("/api/v1/auth/login", json={"token": token})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["data"]["user"]["email"] == "jit-provisioned@example.com"
+    assert payload["data"]["user"]["roles"] == ["member"]
+
+    with app.app_context():
+        db_session = get_session()
+        user = db_session.query(User).filter_by(email="jit-provisioned@example.com").one()
+        assert user.auth_subject == "stfd-user-uni-001"
+        assert user.is_active is True
+
+        actions = [
+            row[0]
+            for row in db_session.query(AuditEvent.action)
+            .filter(AuditEvent.actor_user_id == user.id)
+            .order_by(AuditEvent.id.asc())
+            .all()
+        ]
+        assert "user.provisioned_from_stfd" in actions
+        assert "auth.login" in actions
+
+
+@pytest.mark.functional
+def test_stfd_login_syncs_missing_role_unis_before_mapping(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+
+    token = _build_stfd_token(
+        sub="stfd-user-uni-004",
+        email="jit-role-sync@example.com",
+        role_unis=["role-uni-admin", "role-uni-member"],
+    )
+
+    response = client.post("/api/v1/auth/login", json={"token": token})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["data"]["user"]["roles"] == ["administrator", "member"]
+
+    with app.app_context():
+        db_session = get_session()
+        role_pairs = {
+            role.name: role.uni
+            for role in db_session.query(Role).filter(Role.name.in_(["administrator", "borrower", "member"])).all()
+        }
+        assert role_pairs["administrator"] == "role-uni-admin"
+        assert role_pairs["borrower"] == "role-uni-borrower"
+        assert role_pairs["member"] == "role-uni-member"
+
+
+@pytest.mark.functional
+def test_stfd_login_updates_changed_identity_data_and_records_sync_audit(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+
+    with app.app_context():
+        db_session = get_session()
+        admin_role = db_session.query(Role).filter_by(name="administrator").one()
+        member_role = db_session.query(Role).filter_by(name="member").one()
+        borrower_role = db_session.query(Role).filter_by(name="borrower").one()
+        admin_role.uni = "role-uni-admin"
+        member_role.uni = "role-uni-member"
+        borrower_role.uni = "role-uni-borrower"
+
+        user = User(
+            email="before-sync@example.com",
+            display_name="Before Sync",
+            auth_subject="stfd-user-uni-002",
+            is_active=False,
+        )
+        db_session.add(user)
+        db_session.flush()
+        db_session.add(UserRole(user_id=user.id, role_id=borrower_role.id))
+        db_session.commit()
+
+    token = _build_stfd_token(
+        sub="stfd-user-uni-002",
+        email="after-sync@example.com",
+        role_unis=["role-uni-admin", "role-uni-member"],
+    )
+
+    response = client.post("/api/v1/auth/login", json={"token": token})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["data"]["user"]["email"] == "after-sync@example.com"
+    assert payload["data"]["user"]["roles"] == ["administrator", "member"]
+
+    with app.app_context():
+        db_session = get_session()
+        user = db_session.query(User).filter_by(auth_subject="stfd-user-uni-002").one()
+        assert user.email == "after-sync@example.com"
+        assert user.is_active is True
+
+        role_names = [
+            row[0]
+            for row in db_session.query(Role.name)
+            .join(UserRole, UserRole.role_id == Role.id)
+            .filter(UserRole.user_id == user.id)
+            .order_by(Role.name.asc())
+            .all()
+        ]
+        assert role_names == ["administrator", "member"]
+
+        sync_event = (
+            db_session.query(AuditEvent)
+            .filter(AuditEvent.actor_user_id == user.id, AuditEvent.action == "user.synced_from_stfd")
+            .order_by(AuditEvent.id.desc())
+            .first()
+        )
+        assert sync_event is not None
+        sync_payload = sync_event.payload_json or ""
+        assert "email" in sync_payload
+        assert "is_active" in sync_payload
+
+
+@pytest.mark.functional
+def test_auth_me_patch_is_forbidden_when_stfd_enabled(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+
+    with app.app_context():
+        db_session = get_session()
+        db_session.query(Role).filter_by(name="administrator").one().uni = "role-uni-admin"
+        db_session.query(Role).filter_by(name="member").one().uni = "role-uni-member"
+        db_session.query(Role).filter_by(name="borrower").one().uni = "role-uni-borrower"
+        db_session.commit()
+
+    token = _build_stfd_token(
+        sub="stfd-user-uni-003",
+        email="stfd-profile@example.com",
+        role_unis=["role-uni-member"],
+    )
+    login_response = client.post("/api/v1/auth/login", json={"token": token})
+    assert login_response.status_code == 200
+    csrf_token = login_response.get_json()["data"]["csrf_token"]
+
+    response = client.patch(
+        "/api/v1/auth/me",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"display_name": "Should Fail"},
+    )
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "forbidden"
+
+
+@pytest.mark.functional
+def test_stfd_enabled_rejects_local_login_when_breakglass_disabled(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app, allow_local_login=False)
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@example.com", "password": "AdminPassword123!"},
+    )
+
+    assert response.status_code == 422
+    assert response.get_json()["error"]["code"] == "validation_error"
+
+
+@pytest.mark.functional
+def test_stfd_enabled_allows_local_login_when_breakglass_enabled(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app, allow_local_login=True)
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@example.com", "password": "AdminPassword123!"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["data"]["user"]["email"] == "admin@example.com"
+    assert payload["data"]["auth_provider"] == "local"
+
+
+@pytest.mark.functional
+def test_stfd_login_url_reports_disabled_mode(client, seeded_identity_data):
+    response = client.get("/api/v1/auth/stfd/login-url")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["data"]["enabled"] is False
+    assert payload["data"]["allow_local_login"] is True
+    assert payload["data"]["login_url"] is None
+
+
+@pytest.mark.functional
+def test_stfd_login_url_reports_breakglass_flag(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app, allow_local_login=True)
+    response = client.get("/api/v1/auth/stfd/login-url")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["data"]["enabled"] is True
+    assert payload["data"]["allow_local_login"] is True
+    assert "/stfd/assert/" in payload["data"]["login_url"]

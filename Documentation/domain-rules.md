@@ -7,6 +7,13 @@
 - `borrower` remains supported as a legacy compatibility role and currently maps to member-style capabilities.
 - Borrowers cannot mutate user/role data.
 
+## Identity Rules
+
+- STFD UNI (`sub`) is persisted in `users.auth_subject` and is the primary identity link for JIT sign-in.
+- STFD role UNI values are mapped to local role rows via `roles.uni`.
+- In STFD mode, successful sign-in performs JIT user provisioning/sync and refreshes local role assignments from token role UNI claims.
+- In STFD mode, profile/password edits are managed externally and `PATCH /api/v1/auth/me` is disabled.
+
 ## Jigsaw Rules
 
 - Jigsaw create accepts empty values for all user-entered fields in v1 (to support future image-driven creation workflows).

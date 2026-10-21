@@ -49,6 +49,7 @@ def test_home_route_renders_expected_content(client):
     assert b"Jigsaurium Main Page" in response.data
     assert b"id=\"login-form\"" in response.data
     assert b"id=\"workspace-tabs\"" in response.data
+    assert b"id=\"mobile-upload-nav-button\"" in response.data
     assert b"data-workspace-tab=\"collection\"" in response.data
     assert b"Filter jigsaws" in response.data
     assert b"id=\"jigsaws-pagination-top\"" in response.data
@@ -64,7 +65,11 @@ def test_mobile_capture_route_renders_expected_content(client):
 
     assert response.status_code == 200
     assert b"Mobile jigsaw capture" in response.data
+    assert b"id=\"mobile-capture-sign-out-controls\"" in response.data
+    assert b"id=\"mobile-capture-auth-card\"" in response.data
     assert b"id=\"mobile-capture-login-form\"" in response.data
+    assert b"id=\"mobile-capture-stfd-login-button\"" in response.data
+    assert b"id=\"mobile-capture-auth-mode-hint\"" in response.data
     assert b"id=\"mobile-intake-form\"" in response.data
     assert b"id=\"mobile-intake-comment\"" in response.data
     assert b"/static/js/mobile-intake.js" in response.data

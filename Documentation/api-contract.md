@@ -11,7 +11,8 @@
 
 - API access requires authenticated user context.
 - Session authentication endpoints:
-  - `POST /api/v1/auth/login` (public, expects `email` + `password`)
+  - `GET /api/v1/auth/stfd/login-url` (public, returns STFD sign-in URL when STFD mode is enabled)
+  - `POST /api/v1/auth/login` (public, expects `token` when STFD mode is enabled; otherwise expects `email` + `password`)
   - `GET /api/v1/auth/me` (authenticated)
   - `POST /api/v1/auth/logout` (authenticated)
 - Role/capability checks are enforced server-side for all protected routes.
@@ -23,6 +24,7 @@
 
 - `GET /api/v1/jigsaws`
 - `GET /api/v1/health`
+- `GET /api/v1/auth/stfd/login-url`
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
 - `PATCH /api/v1/auth/me`
@@ -128,7 +130,7 @@
 
 ## Authentication Payload Notes
 
-- Login request body:
+- Login request body (local mode):
 
 ```json
 {
@@ -150,7 +152,8 @@
       "roles": ["administrator"],
       "capabilities": ["audit.read", "diary.create", "diary.update_any"]
     },
-    "csrf_token": "generated-token"
+    "csrf_token": "generated-token",
+    "auth_provider": "local"
   },
   "meta": {
     "request_id": "req_abc123"
@@ -159,6 +162,21 @@
 ```
 
 - `GET /api/v1/auth/me` also returns `csrf_token` so SPA clients can recover CSRF state after page reload.
+- Auth responses (`POST /api/v1/auth/login`, `GET /api/v1/auth/me`, `PATCH /api/v1/auth/me`) include `auth_provider` (`local` or `stfd`).
+- STFD mode login request body:
+
+```json
+{
+  "token": "jwt-from-stfd"
+}
+```
+
+- `GET /api/v1/auth/stfd/login-url` returns:
+  - `enabled: false`, `allow_local_login: true`, and `login_url: null` when STFD mode is disabled.
+  - `enabled: true`, `allow_local_login`, and absolute `login_url` when STFD mode is enabled.
+- In STFD mode with `STFD_ALLOW_LOCAL_LOGIN=0`, login requests must include `token`.
+- In STFD mode with `STFD_ALLOW_LOCAL_LOGIN=1`, login requests may use either STFD token or local email/password.
+- In STFD mode, local account edits via `PATCH /api/v1/auth/me` are rejected with `403`; profile/password are managed by STFD.
 - Auth payload user objects include a derived `capabilities` array to support SPA feature-gating without hardcoding role names.
 - Current role capability defaults:
   - `administrator`: full administrative capabilities, including user/loan/AI management and destructive actions.

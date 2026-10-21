@@ -20,10 +20,14 @@
   const statusText = document.getElementById("mobile-intake-status-text");
   const slotInputs = Array.from(form.querySelectorAll("[data-slot-file]"));
 
+  const authCard = document.getElementById("mobile-capture-auth-card");
   const loginForm = document.getElementById("mobile-capture-login-form");
   const loginEmailInput = document.getElementById("mobile-capture-login-email");
   const loginPasswordInput = document.getElementById("mobile-capture-login-password");
+  const stfdLoginButton = document.getElementById("mobile-capture-stfd-login-button");
+  const authModeHint = document.getElementById("mobile-capture-auth-mode-hint");
   const logoutButton = document.getElementById("mobile-capture-logout-button");
+  const signOutControls = document.getElementById("mobile-capture-sign-out-controls");
   const sessionSummary = document.getElementById("mobile-capture-session-summary");
   const workflowSection = document.getElementById("mobile-capture-workflow");
 
@@ -32,6 +36,9 @@
     csrfToken: null,
     isSubmitting: false,
     isAdmin: false,
+    stfdAuthEnabled: false,
+    stfdAllowLocalLogin: true,
+    stfdLoginUrl: null,
   };
 
   function setStatus(message, isError = false) {
@@ -61,12 +68,88 @@
   }
 
   function setAuthUiSignedIn(isSignedIn) {
-    if (loginForm) {
-      loginForm.hidden = isSignedIn;
+    if (authCard) {
+      authCard.hidden = isSignedIn;
+    }
+    if (signOutControls) {
+      signOutControls.hidden = !isSignedIn;
     }
     if (logoutButton) {
       logoutButton.hidden = !isSignedIn;
     }
+  }
+
+  function syncLoginUiForAuthMode() {
+    if (!loginForm) {
+      return;
+    }
+
+    const submitButton = loginForm.querySelector("button[type='submit']");
+    const credentialGroups = Array.from(loginForm.querySelectorAll(".govuk-form-group"));
+    const stfdOnlyMode = state.stfdAuthEnabled && !state.stfdAllowLocalLogin;
+
+    if (stfdOnlyMode) {
+      credentialGroups.forEach((group) => {
+        group.hidden = true;
+      });
+      if (loginEmailInput) {
+        loginEmailInput.required = false;
+        loginEmailInput.disabled = true;
+      }
+      if (loginPasswordInput) {
+        loginPasswordInput.required = false;
+        loginPasswordInput.disabled = true;
+      }
+      if (submitButton) {
+        submitButton.textContent = "Sign in with STFD";
+      }
+      if (stfdLoginButton) {
+        stfdLoginButton.hidden = true;
+      }
+      if (authModeHint) {
+        authModeHint.hidden = false;
+        authModeHint.textContent = "Sign-in is handled by STFD for this environment.";
+      }
+      return;
+    }
+
+    credentialGroups.forEach((group) => {
+      group.hidden = false;
+    });
+    if (loginEmailInput) {
+      loginEmailInput.required = true;
+      loginEmailInput.disabled = false;
+    }
+    if (loginPasswordInput) {
+      loginPasswordInput.required = true;
+      loginPasswordInput.disabled = false;
+    }
+    if (submitButton) {
+      submitButton.textContent = "Sign in";
+    }
+    if (stfdLoginButton) {
+      stfdLoginButton.hidden = !state.stfdAuthEnabled;
+    }
+    if (authModeHint) {
+      if (state.stfdAuthEnabled) {
+        authModeHint.hidden = false;
+        authModeHint.textContent = "Use either local credentials or Sign in with STFD.";
+      } else {
+        authModeHint.hidden = true;
+        authModeHint.textContent = "";
+      }
+    }
+  }
+
+  function redirectToStfdLogin() {
+    if (!state.stfdAuthEnabled) {
+      return;
+    }
+    if (!state.stfdLoginUrl) {
+      setStatus("STFD sign-in is enabled but not configured correctly.", true);
+      return;
+    }
+    window.location.assign(state.stfdLoginUrl);
   }
 
   function getFileFromSlot(slotKey) {
@@ -172,6 +255,61 @@
     state.csrfToken = payload?.data?.csrf_token || null;
     state.isAdmin = roles.includes("administrator");
     return user;
+  }
+
+  async function fetchStfdLoginInfo() {
+    const response = await fetch("/api/v1/auth/stfd/login-url", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    const payload = await parseJsonSafe(response);
+    if (!response.ok) {
+      state.stfdAuthEnabled = false;
+      state.stfdLoginUrl = null;
+      syncLoginUiForAuthMode();
+      return;
+    }
+
+    state.stfdAuthEnabled = Boolean(payload?.data?.enabled);
+    state.stfdAllowLocalLogin = Boolean(payload?.data?.allow_local_login ?? true);
+    state.stfdLoginUrl =
+      state.stfdAuthEnabled && typeof payload?.data?.login_url === "string" && payload.data.login_url
+        ? payload.data.login_url
+        : null;
+    syncLoginUiForAuthMode();
+  }
+
+  async function consumeStfdTokenFromUrl() {
+    if (!state.stfdAuthEnabled) {
+      return null;
+    }
+
+    const url = new URL(window.location.href);
+    const token = String(url.searchParams.get("token") || "").trim();
+    if (!token) {
+      return null;
+    }
+
+    const response = await fetch("/api/v1/auth/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ token }),
+    });
+    const payload = await parseJsonSafe(response);
+    url.searchParams.delete("token");
+    window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+    if (!response.ok) {
+      const message = payload?.error?.message || "Sign in failed.";
+      throw new Error(message);
+    }
+
+    state.csrfToken = payload?.data?.csrf_token || null;
+    return payload?.data?.user || null;
   }
 
   function syncAuthUi(user) {
@@ -379,6 +517,12 @@
 
   async function handleLoginSubmit(event) {
     event.preventDefault();
+
+    if (state.stfdAuthEnabled && !state.stfdAllowLocalLogin) {
+      redirectToStfdLogin();
+      return;
+    }
+
     const email = String(loginEmailInput?.value || "").trim();
     const password = String(loginPasswordInput?.value || "");
 
@@ -444,6 +588,9 @@
   if (loginForm) {
     loginForm.addEventListener("submit", handleLoginSubmit);
   }
+  if (stfdLoginButton) {
+    stfdLoginButton.addEventListener("click", redirectToStfdLogin);
+  }
   if (logoutButton) {
     logoutButton.addEventListener("click", handleLogoutClick);
   }
@@ -453,14 +600,31 @@
     renderSlotPreview(slotKey);
   });
 
-  fetchAuthState()
+  fetchStfdLoginInfo()
+    .then(() => consumeStfdTokenFromUrl())
+    .then((tokenUser) => {
+      if (tokenUser) {
+        syncAuthUi(tokenUser);
+        if (state.isAdmin) {
+          setStatus("Ready to capture images.");
+        }
+        return null;
+      }
+      return fetchAuthState();
+    })
     .then((user) => {
+      if (user === null) {
+        return;
+      }
       syncAuthUi(user);
       if (user && state.isAdmin) {
         setStatus("Ready to capture images.");
       }
     })
-    .catch(() => {
+    .catch((error) => {
       syncAuthUi(null);
+      if (error?.message) {
+        setStatus(error.message, true);
+      }
     });
 })();

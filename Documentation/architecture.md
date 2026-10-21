@@ -41,7 +41,7 @@
   - identity and authentication linkage
   - active/inactive status
 - `roles`
-  - role name and permissions mapping
+  - role name, UNI mapping, and permissions mapping
 - `user_roles`
   - many-to-many assignment
 - `jigsaws`

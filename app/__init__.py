@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from uuid import uuid4
+import urllib.parse
 
 from flask import Flask, g, request
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -15,6 +16,49 @@ from app.request_security import (
     reset_request_security_state,
     upsert_blocked_ip,
 )
+
+
+def _is_valid_absolute_http_url(value):
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text:
+        return False
+    parsed = urllib.parse.urlparse(text)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _validate_stfd_config_on_startup(app):
+    if not bool(app.config.get("STFD_ENABLED", False)):
+        return
+
+    required_keys = [
+        "STFD_APP_UNI",
+        "STFD_SHARED_KEY",
+        "STFD_ASSERT_BASE_URL",
+        "STFD_REDIRECT_URI",
+        "STFD_ROLE_UNI_ADMINISTRATOR",
+        "STFD_ROLE_UNI_MEMBER",
+        "STFD_ROLE_UNI_BORROWER",
+    ]
+    missing = [key for key in required_keys if not str(app.config.get(key, "") or "").strip()]
+    if missing:
+        app.logger.warning(
+            "STFD is enabled but required settings are missing: %s",
+            ", ".join(sorted(missing)),
+        )
+
+    assert_base_url = str(app.config.get("STFD_ASSERT_BASE_URL", "") or "").strip()
+    if assert_base_url and not _is_valid_absolute_http_url(assert_base_url):
+        app.logger.warning("STFD_ASSERT_BASE_URL is not a valid absolute http(s) URL: %s", assert_base_url)
+
+    redirect_uri = str(app.config.get("STFD_REDIRECT_URI", "") or "").strip()
+    if redirect_uri and not _is_valid_absolute_http_url(redirect_uri):
+        app.logger.warning("STFD_REDIRECT_URI is not a valid absolute http(s) URL: %s", redirect_uri)
+
+    shared_key = str(app.config.get("STFD_SHARED_KEY", "") or "")
+    if shared_key and len(shared_key) < 32:
+        app.logger.warning("STFD_SHARED_KEY is shorter than recommended (32+ chars).")
 
 
 def create_app(config_class="config.Config"):
@@ -45,6 +89,15 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("MAX_CONTENT_LENGTH", 32 * 1024 * 1024)
     app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
     app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
+    app.config.setdefault("STFD_ENABLED", False)
+    app.config.setdefault("STFD_ALLOW_LOCAL_LOGIN", False)
+    app.config.setdefault("STFD_APP_UNI", "")
+    app.config.setdefault("STFD_SHARED_KEY", "")
+    app.config.setdefault("STFD_ASSERT_BASE_URL", "")
+    app.config.setdefault("STFD_REDIRECT_URI", "")
+    app.config.setdefault("STFD_ROLE_UNI_ADMINISTRATOR", "")
+    app.config.setdefault("STFD_ROLE_UNI_MEMBER", "")
+    app.config.setdefault("STFD_ROLE_UNI_BORROWER", "")
 
     @app.before_request
     def set_request_id():
@@ -152,4 +205,5 @@ def create_app(config_class="config.Config"):
     reset_runtime_security_state()
     reset_request_security_state()
     start_bulk_ai_create_worker(app)
+    _validate_stfd_config_on_startup(app)
     return app

@@ -6,6 +6,7 @@ import threading
 import time
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -49,6 +50,8 @@ from app.models import (
 from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
 from app.request_security import MANUAL_BLOCK_SOURCE, normalize_ip_address, upsert_blocked_ip
+
+import jwt
 
 try:  # pragma: no cover - optional dependency fallback
     from PIL import Image, ImageOps, UnidentifiedImageError
@@ -120,6 +123,7 @@ PREVIEW_TARGET_WIDTH = 600
 IP_BLOCK_REASON_MAX_LENGTH = 255
 IP_BLOCK_NOTES_MAX_LENGTH = 4000
 IP_BLOCK_MAX_DURATION_HOURS = 24 * 30
+STFD_JWT_ALGORITHM = "HS256"
 
 ROLE_CAPABILITIES = {
     "borrower": {
@@ -1194,11 +1198,11 @@ def _serialize_loan(loan):
     }
 
 
-def _record_audit_event(action, entity_type, entity_id, payload=None):
+def _record_audit_event(action, entity_type, entity_id, payload=None, actor_user_id=None):
     db_session = get_session()
 
     audit_event = AuditEvent(
-        actor_user_id=getattr(g.current_user, "id", None),
+        actor_user_id=actor_user_id if actor_user_id is not None else getattr(g.current_user, "id", None),
         action=action,
         entity_type=entity_type,
         entity_id=str(entity_id),
@@ -1454,14 +1458,327 @@ def _validate_password(value, *, require_min_length=False):
     return value, None
 
 
+def _is_stfd_enabled():
+    return bool(current_app.config.get("STFD_ENABLED", False))
+
+
+def _normalize_stfd_uni(value):
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip().strip('"').strip("'").strip().lower()
+    if normalized.startswith("{") and normalized.endswith("}"):
+        normalized = normalized[1:-1].strip().lower()
+    return normalized
+
+
+def _is_valid_absolute_http_url(value):
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text:
+        return False
+    parsed = urllib.parse.urlparse(text)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _get_stfd_role_uni_by_name():
+    return {
+        "administrator": _normalize_stfd_uni(current_app.config.get("STFD_ROLE_UNI_ADMINISTRATOR", "") or ""),
+        "member": _normalize_stfd_uni(current_app.config.get("STFD_ROLE_UNI_MEMBER", "") or ""),
+        "borrower": _normalize_stfd_uni(current_app.config.get("STFD_ROLE_UNI_BORROWER", "") or ""),
+    }
+
+
+def _get_stfd_role_name_by_uni():
+    role_uni_by_name = _get_stfd_role_uni_by_name()
+    role_name_by_uni = {}
+    for role_name, role_uni in role_uni_by_name.items():
+        if role_uni:
+            role_name_by_uni[role_uni] = role_name
+    return role_name_by_uni
+
+
+def _validate_stfd_runtime_config():
+    app_uni = _normalize_stfd_uni(str(current_app.config.get("STFD_APP_UNI", "") or ""))
+    shared_key = str(current_app.config.get("STFD_SHARED_KEY", "") or "").strip()
+    assert_base_url = str(current_app.config.get("STFD_ASSERT_BASE_URL", "") or "").strip()
+    redirect_uri = str(current_app.config.get("STFD_REDIRECT_URI", "") or "").strip()
+    role_uni_by_name = _get_stfd_role_uni_by_name()
+
+    if not app_uni:
+        return None, _error_response("configuration_error", "STFD_APP_UNI is not configured.", 500)
+    if not shared_key:
+        return None, _error_response("configuration_error", "STFD_SHARED_KEY is not configured.", 500)
+    if not assert_base_url:
+        return None, _error_response("configuration_error", "STFD_ASSERT_BASE_URL is not configured.", 500)
+    if not redirect_uri:
+        return None, _error_response("configuration_error", "STFD_REDIRECT_URI is not configured.", 500)
+    if not _is_valid_absolute_http_url(assert_base_url):
+        return None, _error_response("configuration_error", "STFD_ASSERT_BASE_URL is invalid.", 500)
+    if not _is_valid_absolute_http_url(redirect_uri):
+        return None, _error_response("configuration_error", "STFD_REDIRECT_URI is invalid.", 500)
+
+    missing_role_mappings = sorted([role_name for role_name, role_uni in role_uni_by_name.items() if not role_uni])
+    if missing_role_mappings:
+        return None, _error_response(
+            "configuration_error",
+            "STFD role UNI mapping is incomplete.",
+            500,
+            [{"field": "roles", "issue": f"missing UNI mapping for: {', '.join(missing_role_mappings)}"}],
+        )
+
+    return {
+        "app_uni": app_uni,
+        "shared_key": shared_key,
+        "assert_base_url": assert_base_url,
+        "redirect_uri": redirect_uri,
+        "role_uni_by_name": role_uni_by_name,
+        "role_name_by_uni": _get_stfd_role_name_by_uni(),
+    }, None
+
+
+def _sync_stfd_role_unis_from_config(db_session, role_uni_by_name):
+    if not isinstance(role_uni_by_name, dict):
+        return _error_response("configuration_error", "STFD role UNI mapping is invalid.", 500)
+
+    role_names = list(role_uni_by_name.keys())
+    roles = db_session.execute(select(Role).where(Role.name.in_(role_names))).scalars().all()
+    roles_by_name = {role.name: role for role in roles}
+    missing_roles = sorted([role_name for role_name in role_names if role_name not in roles_by_name])
+    if missing_roles:
+        return _error_response(
+            "configuration_error",
+            "One or more STFD-mapped roles do not exist in the local roles table.",
+            500,
+            [{"field": "roles", "issue": f"missing roles: {', '.join(missing_roles)}"}],
+        )
+
+    for role_name, expected_uni in role_uni_by_name.items():
+        role = roles_by_name[role_name]
+        current_uni = _normalize_stfd_uni(str(role.uni or ""))
+        if not current_uni:
+            role.uni = expected_uni
+            continue
+        if current_uni != expected_uni:
+            return _error_response(
+                "configuration_error",
+                "Configured STFD role UNI does not match stored role UNI.",
+                500,
+                [{"field": "roles", "issue": f"role '{role_name}' has UNI '{role.uni}', expected '{expected_uni}'"}],
+            )
+        if role.uni != current_uni:
+            role.uni = current_uni
+
+    db_session.flush()
+
+    return None
+
+
+def _normalize_stfd_subject(raw_subject):
+    if not isinstance(raw_subject, str) or not raw_subject.strip():
+        return None
+    subject = raw_subject.strip()
+    if len(subject) > 255 or _contains_control_characters(subject):
+        return None
+    return subject
+
+
+def _normalize_stfd_display_name(raw_display_name):
+    if raw_display_name is None:
+        return None
+    if not isinstance(raw_display_name, str):
+        return None
+    display_name = raw_display_name.strip()
+    if not display_name:
+        return None
+    if len(display_name) > DISPLAY_NAME_MAX_LENGTH:
+        return None
+    if _contains_control_characters(display_name) or "<" in display_name or ">" in display_name:
+        return None
+    return display_name
+
+
+def _build_stfd_login_url(stfd_config):
+    redirect_uri = urllib.parse.quote(stfd_config["redirect_uri"], safe="")
+    app_uni = urllib.parse.quote(stfd_config["app_uni"], safe="")
+    assert_base_url = stfd_config["assert_base_url"].rstrip("/")
+    return f"{assert_base_url}/{app_uni}?redirect_uri={redirect_uri}"
+
+
+def _auth_login_via_stfd_token(token):
+    stfd_config, config_error = _validate_stfd_runtime_config()
+    if config_error is not None:
+        return config_error
+
+    db_session = get_session()
+    sync_error = _sync_stfd_role_unis_from_config(db_session, stfd_config["role_uni_by_name"])
+    if sync_error is not None:
+        db_session.rollback()
+        return sync_error
+
+    try:
+        decoded = jwt.decode(
+            token,
+            stfd_config["shared_key"],
+            algorithms=[STFD_JWT_ALGORITHM],
+            options={"require": ["sub", "email", "app", "roles", "exp", "iat"]},
+        )
+    except jwt.InvalidTokenError:
+        return _error_response("authentication_failed", "Invalid or expired STFD token.", 401)
+
+    token_app_uni = str(decoded.get("app") or "").strip()
+    if token_app_uni != stfd_config["app_uni"]:
+        return _error_response("authentication_failed", "STFD token app UNI mismatch.", 401)
+
+    auth_subject = _normalize_stfd_subject(decoded.get("sub"))
+    if not auth_subject:
+        return _error_response("authentication_failed", "STFD token subject is missing or invalid.", 401)
+
+    email, email_error = _validate_email(decoded.get("email"), field_name="email")
+    if email_error is not None:
+        return _error_response("authentication_failed", "STFD token email is invalid.", 401)
+
+    display_name = _normalize_stfd_display_name(decoded.get("friendly_name"))
+
+    token_role_unis_raw = decoded.get("roles")
+    if not isinstance(token_role_unis_raw, list) or len(token_role_unis_raw) == 0:
+        return _error_response("forbidden", "No STFD roles were supplied for this application.", 403)
+
+    token_role_unis = []
+    for raw_role_uni in token_role_unis_raw:
+        if not isinstance(raw_role_uni, str) or not raw_role_uni.strip():
+            return _error_response("authentication_failed", "STFD token roles payload is invalid.", 401)
+        normalized_role_uni = _normalize_stfd_uni(raw_role_uni)
+        if not normalized_role_uni:
+            return _error_response("authentication_failed", "STFD token roles payload is invalid.", 401)
+        token_role_unis.append(normalized_role_uni)
+
+    unique_role_unis = sorted(set(token_role_unis))
+    roles = db_session.execute(select(Role).where(Role.uni.in_(unique_role_unis))).scalars().all()
+    roles_by_uni = {str(role.uni): role for role in roles if role.uni}
+    unknown_role_unis = sorted([role_uni for role_uni in unique_role_unis if role_uni not in roles_by_uni])
+    if unknown_role_unis:
+        return _error_response(
+            "forbidden",
+            "STFD token contains roles that are not mapped in this environment.",
+            403,
+            [{"field": "roles", "issue": f"unknown role UNI(s): {', '.join(unknown_role_unis)}"}],
+        )
+
+    target_roles = [roles_by_uni[role_uni] for role_uni in unique_role_unis]
+    target_role_names = sorted([role.name for role in target_roles])
+
+    user = db_session.execute(select(User).where(User.auth_subject == auth_subject)).scalar_one_or_none()
+    was_created = False
+    linked_by_email = False
+
+    if user is None:
+        existing_by_email = db_session.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        if existing_by_email is not None:
+            if existing_by_email.auth_subject and existing_by_email.auth_subject != auth_subject:
+                return _error_response(
+                    "conflict",
+                    "This email is already linked to a different identity.",
+                    409,
+                )
+            user = existing_by_email
+            linked_by_email = True
+        else:
+            user = User(email=email, display_name=display_name, auth_subject=auth_subject, is_active=True)
+            db_session.add(user)
+            db_session.flush()
+            was_created = True
+
+    changed_fields = []
+    if user.auth_subject != auth_subject:
+        user.auth_subject = auth_subject
+        changed_fields.append("auth_subject")
+    if user.email != email:
+        user.email = email
+        changed_fields.append("email")
+    if user.display_name != display_name:
+        user.display_name = display_name
+        changed_fields.append("display_name")
+    if user.is_active is False:
+        user.is_active = True
+        changed_fields.append("is_active")
+
+    current_role_rows = db_session.execute(select(UserRole.role_id).where(UserRole.user_id == user.id)).all()
+    current_role_ids = {int(role_id) for (role_id,) in current_role_rows}
+    target_role_ids = {int(role.id) for role in target_roles}
+    roles_changed = current_role_ids != target_role_ids
+    if roles_changed:
+        db_session.execute(sa_delete(UserRole).where(UserRole.user_id == user.id))
+        for role in target_roles:
+            db_session.add(UserRole(user_id=user.id, role_id=role.id))
+
+    csrf_token = token_urlsafe(24)
+    session.clear()
+    session["user_id"] = user.id
+    session["csrf_token"] = csrf_token
+    session["auth_provider"] = "stfd"
+    g.current_user = user
+    g.current_user_roles = target_role_names
+    g.current_user_auth_provider = "stfd"
+
+    if was_created:
+        _record_audit_event(
+            action="user.provisioned_from_stfd",
+            entity_type="user",
+            entity_id=user.id,
+            payload={
+                "auth_subject": auth_subject,
+                "email": email,
+                "roles": target_role_names,
+            },
+            actor_user_id=user.id,
+        )
+    elif changed_fields or roles_changed or linked_by_email:
+        _record_audit_event(
+            action="user.synced_from_stfd",
+            entity_type="user",
+            entity_id=user.id,
+            payload={
+                "changed_fields": sorted(changed_fields),
+                "roles_changed": roles_changed,
+                "roles": target_role_names,
+                "linked_by_email": linked_by_email,
+            },
+            actor_user_id=user.id,
+        )
+
+    _record_audit_event(
+        action="auth.login",
+        entity_type="user",
+        entity_id=user.id,
+        payload={
+            "auth_provider": "stfd",
+            "auth_subject": auth_subject,
+            "roles": target_role_names,
+        },
+        actor_user_id=user.id,
+    )
+    db_session.commit()
+
+    return _success_response(
+        {
+            "user": _serialize_user(user, target_role_names),
+            "csrf_token": csrf_token,
+            "auth_provider": "stfd",
+        }
+    )
+
+
 def _load_current_user():
     if hasattr(g, "current_user"):
         return g.current_user
 
     user_id = session.get("user_id")
+    auth_provider = str(session.get("auth_provider") or "local").strip().lower() or "local"
     if user_id is None:
         g.current_user = None
         g.current_user_roles = []
+        g.current_user_auth_provider = auth_provider
         return None
 
     db_session = get_session()
@@ -1469,12 +1786,14 @@ def _load_current_user():
     if user is None or not user.is_active:
         g.current_user = None
         g.current_user_roles = []
+        g.current_user_auth_provider = auth_provider
         return None
 
     role_names = _get_role_names_for_user_id(user.id)
 
     g.current_user = user
     g.current_user_roles = role_names
+    g.current_user_auth_provider = auth_provider
     return user
 
 
@@ -3036,11 +3355,48 @@ def health_check():
     return _success_response(payload)
 
 
+@api_v1_bp.get("/auth/stfd/login-url")
+def stfd_login_url():
+    if not _is_stfd_enabled():
+        return _success_response({"enabled": False, "allow_local_login": True, "login_url": None})
+
+    stfd_config, config_error = _validate_stfd_runtime_config()
+    if config_error is not None:
+        return config_error
+
+    return _success_response(
+        {
+            "enabled": True,
+            "allow_local_login": bool(current_app.config.get("STFD_ALLOW_LOCAL_LOGIN", False)),
+            "login_url": _build_stfd_login_url(stfd_config),
+        }
+    )
+
+
 @api_v1_bp.post("/auth/login")
 def auth_login():
     payload, error = _parse_json_object()
     if error is not None:
         return error
+
+    if _is_stfd_enabled():
+        token = payload.get("token")
+        if isinstance(token, str) and token.strip():
+            return _auth_login_via_stfd_token(token.strip())
+
+        allow_local_login = bool(current_app.config.get("STFD_ALLOW_LOCAL_LOGIN", False))
+        if not allow_local_login:
+            return _error_response(
+                "validation_error",
+                "Invalid request payload.",
+                422,
+                [
+                    {
+                        "field": "token",
+                        "issue": "must be a non-empty string when STFD authentication is enabled and local login fallback is disabled",
+                    }
+                ],
+            )
 
     email, error = _validate_login_email(payload.get("email"))
     if error is not None:
@@ -3074,8 +3430,10 @@ def auth_login():
     session.clear()
     session["user_id"] = user.id
     session["csrf_token"] = csrf_token
+    session["auth_provider"] = "local"
     g.current_user = user
     g.current_user_roles = role_names
+    g.current_user_auth_provider = "local"
 
     _record_audit_event(
         action="auth.login",
@@ -3089,6 +3447,7 @@ def auth_login():
         {
             "user": _serialize_user(user, role_names),
             "csrf_token": csrf_token,
+            "auth_provider": "local",
         }
     )
 
@@ -3105,6 +3464,7 @@ def auth_me():
         {
             "user": _serialize_user(g.current_user, g.current_user_roles),
             "csrf_token": csrf_token,
+            "auth_provider": getattr(g, "current_user_auth_provider", "local"),
         }
     )
 
@@ -3112,6 +3472,13 @@ def auth_me():
 @api_v1_bp.patch("/auth/me")
 @require_auth
 def update_auth_me():
+    if _is_stfd_enabled():
+        return _error_response(
+            "forbidden",
+            "Account profile and password changes are managed by STFD.",
+            403,
+        )
+
     payload, error = _parse_json_object()
     if error is not None:
         return error
@@ -3179,6 +3546,7 @@ def update_auth_me():
         {
             "user": _serialize_user(g.current_user, g.current_user_roles),
             "csrf_token": csrf_token,
+            "auth_provider": getattr(g, "current_user_auth_provider", "local"),
         }
     )
 
@@ -3206,7 +3574,7 @@ def auth_logout():
 def list_roles():
     db_session = get_session()
     roles = db_session.execute(select(Role).order_by(Role.name)).scalars().all()
-    payload = [{"id": role.id, "name": role.name, "description": role.description} for role in roles]
+    payload = [{"id": role.id, "name": role.name, "uni": role.uni, "description": role.description} for role in roles]
     return _success_response(payload)
 
 
