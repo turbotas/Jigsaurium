@@ -18,6 +18,9 @@
   ];
   const THUMBNAIL_DISPLAY_WIDTH_PX = 150;
   const ADMIN_LIST_PAGE_SIZE = 25;
+  const BROWSER_FILTER_MODE_IGNORE = "ignore";
+  const BROWSER_FILTER_MODE_INCLUDE = "include";
+  const BROWSER_FILTER_MODE_EXCLUDE = "exclude";
 
   function createDefaultTableSortState() {
     return {
@@ -108,11 +111,14 @@
     imageBrowser: {
       isOpen: false,
       index: 0,
-      filterUnassigned: true,
-      filterBox: false,
-      filterReference: false,
-      filterCompleted: false,
-      filterInProgress: false,
+      filterShowAll: false,
+      filterModes: {
+        unassigned: BROWSER_FILTER_MODE_INCLUDE,
+        box: BROWSER_FILTER_MODE_IGNORE,
+        reference: BROWSER_FILTER_MODE_IGNORE,
+        completed: BROWSER_FILTER_MODE_IGNORE,
+        inProgress: BROWSER_FILTER_MODE_IGNORE,
+      },
       sourceDataUrl: null,
       workingDataUrl: null,
       workingImage: null,
@@ -156,6 +162,7 @@
     collectionImagesPanel: document.getElementById("collection-images-panel"),
     collectionImageBrowserPanel: document.getElementById("collection-image-browser-panel"),
     collectionDiaryPanel: document.getElementById("collection-diary-panel"),
+    imageLibraryLoadSummary: document.getElementById("image-library-load-summary"),
     aiUsageSection: document.getElementById("ai-usage-section"),
     loansSection: document.getElementById("loans-section"),
     auditSection: document.getElementById("audit-section"),
@@ -224,6 +231,7 @@
     imageBrowserOpen: document.getElementById("image-browser-open"),
     imageBrowserModal: document.getElementById("image-browser-modal"),
     imageBrowserStatus: document.getElementById("image-browser-status"),
+    imageBrowserFilterShowAll: document.getElementById("image-browser-filter-all"),
     imageBrowserFilterUnassigned: document.getElementById("image-browser-filter-unassigned"),
     imageBrowserFilterBox: document.getElementById("image-browser-filter-box"),
     imageBrowserFilterReference: document.getElementById("image-browser-filter-reference"),
@@ -314,6 +322,13 @@
     elements.feedback.hidden = true;
     elements.feedback.classList.remove("is-error");
     elements.feedbackText.textContent = "";
+  }
+
+  function setImageLibraryLoadSummary(message) {
+    if (!elements.imageLibraryLoadSummary) {
+      return;
+    }
+    elements.imageLibraryLoadSummary.textContent = String(message || "");
   }
 
   async function apiRequest(path, options = {}) {
@@ -3098,31 +3113,11 @@
   }
 
   function imageMatchesBrowserFilters(image) {
-    const selected = [];
-    if (state.imageBrowser.filterUnassigned) {
-      selected.push("unassigned");
-    }
-    if (state.imageBrowser.filterBox) {
-      selected.push("box");
-    }
-    if (state.imageBrowser.filterReference) {
-      selected.push("reference");
-    }
-    if (state.imageBrowser.filterCompleted) {
-      selected.push("completed");
-    }
-    if (state.imageBrowser.filterInProgress) {
-      selected.push("in-progress");
-    }
-    if (selected.length === 0) {
+    if (state.imageBrowser.filterShowAll) {
       return true;
     }
 
     const isUnassigned = !image?.jigsaw_id;
-    if (isUnassigned && state.imageBrowser.filterUnassigned) {
-      return true;
-    }
-
     const tagKey = toImageTagKey(image?.tag);
     const isBoxFamilyTag = [
       IMAGE_BROWSER_TAG_BOX,
@@ -3130,19 +3125,31 @@
       IMAGE_BROWSER_TAG_BOX_SIDE,
       IMAGE_BROWSER_TAG_BOX_BACK,
     ].some((value) => tagKey === toImageTagKey(value));
-    if (state.imageBrowser.filterBox && isBoxFamilyTag) {
+
+    const predicates = {
+      unassigned: isUnassigned,
+      box: isBoxFamilyTag,
+      reference: tagKey === toImageTagKey(IMAGE_BROWSER_TAG_REFERENCE),
+      completed: tagKey === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED),
+      inProgress: tagKey === toImageTagKey(IMAGE_BROWSER_TAG_IN_PROGRESS),
+    };
+
+    const filterModes = state.imageBrowser.filterModes || {};
+    const activeModes = Object.values(filterModes).filter((mode) => mode !== BROWSER_FILTER_MODE_IGNORE);
+    if (activeModes.length === 0) {
       return true;
     }
-    if (state.imageBrowser.filterReference && tagKey === toImageTagKey(IMAGE_BROWSER_TAG_REFERENCE)) {
+
+    return Object.entries(predicates).every(([filterKey, predicateValue]) => {
+      const mode = String(filterModes[filterKey] || BROWSER_FILTER_MODE_IGNORE);
+      if (mode === BROWSER_FILTER_MODE_INCLUDE) {
+        return Boolean(predicateValue);
+      }
+      if (mode === BROWSER_FILTER_MODE_EXCLUDE) {
+        return !Boolean(predicateValue);
+      }
       return true;
-    }
-    if (state.imageBrowser.filterCompleted && tagKey === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED)) {
-      return true;
-    }
-    if (state.imageBrowser.filterInProgress && tagKey === toImageTagKey(IMAGE_BROWSER_TAG_IN_PROGRESS)) {
-      return true;
-    }
-    return false;
+    });
   }
 
   function getImageBrowserTagSortRank(tag) {
@@ -3521,11 +3528,8 @@
     if (filtered.length === 0) {
       const hasAnyImages = Array.isArray(state.imageLibraryImages) && state.imageLibraryImages.length > 0;
       const hasActiveBrowserFilter =
-        state.imageBrowser.filterUnassigned ||
-        state.imageBrowser.filterBox ||
-        state.imageBrowser.filterReference ||
-        state.imageBrowser.filterCompleted ||
-        state.imageBrowser.filterInProgress;
+        state.imageBrowser.filterShowAll ||
+        Object.values(state.imageBrowser.filterModes || {}).some((mode) => mode !== BROWSER_FILTER_MODE_IGNORE);
 
       if (!hasAnyImages) {
         showFeedback("No images are available in the image library yet.", true);
@@ -3533,11 +3537,12 @@
       }
 
       if (hasActiveBrowserFilter) {
-        state.imageBrowser.filterUnassigned = false;
-        state.imageBrowser.filterBox = false;
-        state.imageBrowser.filterReference = false;
-        state.imageBrowser.filterCompleted = false;
-        state.imageBrowser.filterInProgress = false;
+        state.imageBrowser.filterShowAll = false;
+        state.imageBrowser.filterModes.unassigned = BROWSER_FILTER_MODE_IGNORE;
+        state.imageBrowser.filterModes.box = BROWSER_FILTER_MODE_IGNORE;
+        state.imageBrowser.filterModes.reference = BROWSER_FILTER_MODE_IGNORE;
+        state.imageBrowser.filterModes.completed = BROWSER_FILTER_MODE_IGNORE;
+        state.imageBrowser.filterModes.inProgress = BROWSER_FILTER_MODE_IGNORE;
         setImageBrowserFilterInputsFromState();
         filtered = getImageBrowserFilteredImages();
 
@@ -4413,6 +4418,7 @@
       state.jigsawThumbnailImages = [];
       state.imageBrowserContentCacheByImageId = {};
       state.imageBrowserSavingImageIds = {};
+      setImageLibraryLoadSummary("Sign in to load images for the browser.");
       renderImageLibraryImages([]);
       renderJigsaws(state.jigsaws);
       return;
@@ -4423,14 +4429,36 @@
       state.jigsawThumbnailImages = [];
       state.imageBrowserContentCacheByImageId = {};
       state.imageBrowserSavingImageIds = {};
+      setImageLibraryLoadSummary("You do not have access to image library data.");
       renderImageLibraryImages([]);
       renderJigsaws(state.jigsaws);
       return;
     }
 
     try {
-      const payload = await apiRequest("/api/v1/image-library/images?limit=200");
-      state.imageLibraryImages = Array.isArray(payload.data) ? payload.data : [];
+      const pageSize = 500;
+      const maxPageRequests = 200;
+      const allImages = [];
+      let page = 1;
+      let totalPages = 1;
+
+      while (page <= totalPages && page <= maxPageRequests) {
+        const payload = await apiRequest(`/api/v1/image-library/images?page=${page}&page_size=${pageSize}`);
+        const pageImages = Array.isArray(payload?.data) ? payload.data : [];
+        allImages.push(...pageImages);
+
+        const metaTotalPages = Number(payload?.meta?.pagination?.total_pages || 0);
+        if (Number.isFinite(metaTotalPages) && metaTotalPages > 0) {
+          totalPages = metaTotalPages;
+        } else if (pageImages.length < pageSize) {
+          totalPages = page;
+        }
+
+        page += 1;
+      }
+
+      state.imageLibraryImages = allImages;
+      setImageLibraryLoadSummary(`Loaded ${allImages.length.toLocaleString()} images for the browser.`);
       pruneImageBrowserContentCache(state.imageLibraryImages);
       renderImageLibraryImages(state.imageLibraryImages);
       await loadJigsawThumbnailImages();
@@ -4443,6 +4471,7 @@
         state.jigsawThumbnailImages = [];
         state.imageBrowserContentCacheByImageId = {};
         state.imageBrowserSavingImageIds = {};
+        setImageLibraryLoadSummary("You do not have access to image library data.");
         renderImageLibraryImages([]);
         renderJigsaws(state.jigsaws);
         if (state.imageBrowser.isOpen && !shouldSkipBrowserReload) {
@@ -4454,6 +4483,7 @@
       state.jigsawThumbnailImages = [];
       state.imageBrowserContentCacheByImageId = {};
       state.imageBrowserSavingImageIds = {};
+      setImageLibraryLoadSummary("Could not load image library data.");
       renderImageLibraryImages([]);
       renderJigsaws(state.jigsaws);
       if (state.imageBrowser.isOpen && !shouldSkipBrowserReload) {
@@ -6508,54 +6538,92 @@
   }
 
   function setImageBrowserFilterInputsFromState() {
-    if (elements.imageBrowserFilterUnassigned) {
-      elements.imageBrowserFilterUnassigned.checked = Boolean(state.imageBrowser.filterUnassigned);
+    if (elements.imageBrowserFilterShowAll) {
+      elements.imageBrowserFilterShowAll.checked = Boolean(state.imageBrowser.filterShowAll);
     }
-    if (elements.imageBrowserFilterBox) {
-      elements.imageBrowserFilterBox.checked = Boolean(state.imageBrowser.filterBox);
+
+    setTriStateFilterInputMode(elements.imageBrowserFilterUnassigned, state.imageBrowser.filterModes.unassigned);
+    setTriStateFilterInputMode(elements.imageBrowserFilterBox, state.imageBrowser.filterModes.box);
+    setTriStateFilterInputMode(elements.imageBrowserFilterReference, state.imageBrowser.filterModes.reference);
+    setTriStateFilterInputMode(elements.imageBrowserFilterCompleted, state.imageBrowser.filterModes.completed);
+    setTriStateFilterInputMode(elements.imageBrowserFilterInProgress, state.imageBrowser.filterModes.inProgress);
+
+    updateImageBrowserFilterInputsDisabledState();
+  }
+
+  function setTriStateFilterInputMode(input, mode) {
+    if (!input) {
+      return;
     }
-    if (elements.imageBrowserFilterReference) {
-      elements.imageBrowserFilterReference.checked = Boolean(state.imageBrowser.filterReference);
+    const resolvedMode = normalizeBrowserFilterMode(mode);
+    input.indeterminate = resolvedMode === BROWSER_FILTER_MODE_EXCLUDE;
+    input.checked = resolvedMode === BROWSER_FILTER_MODE_INCLUDE;
+    input.dataset.filterMode = resolvedMode;
+    input.setAttribute("aria-checked", resolvedMode === BROWSER_FILTER_MODE_EXCLUDE ? "mixed" : (input.checked ? "true" : "false"));
+    const item = input.closest(".govuk-checkboxes__item");
+    if (item) {
+      item.classList.toggle("app-filter-tristate--exclude", resolvedMode === BROWSER_FILTER_MODE_EXCLUDE);
     }
-    if (elements.imageBrowserFilterCompleted) {
-      elements.imageBrowserFilterCompleted.checked = Boolean(state.imageBrowser.filterCompleted);
+  }
+
+  function normalizeBrowserFilterMode(mode) {
+    const resolvedMode = String(mode || "").trim().toLowerCase();
+    if (resolvedMode === BROWSER_FILTER_MODE_INCLUDE || resolvedMode === BROWSER_FILTER_MODE_EXCLUDE) {
+      return resolvedMode;
     }
-    if (elements.imageBrowserFilterInProgress) {
-      elements.imageBrowserFilterInProgress.checked = Boolean(state.imageBrowser.filterInProgress);
+    return BROWSER_FILTER_MODE_IGNORE;
+  }
+
+  function getNextBrowserFilterMode(mode) {
+    const resolvedMode = normalizeBrowserFilterMode(mode);
+    if (resolvedMode === BROWSER_FILTER_MODE_IGNORE) {
+      return BROWSER_FILTER_MODE_INCLUDE;
     }
+    if (resolvedMode === BROWSER_FILTER_MODE_INCLUDE) {
+      return BROWSER_FILTER_MODE_EXCLUDE;
+    }
+    return BROWSER_FILTER_MODE_IGNORE;
+  }
+
+  function updateImageBrowserFilterInputsDisabledState() {
+    const useShowAll = Boolean(state.imageBrowser.filterShowAll);
+    [
+      elements.imageBrowserFilterUnassigned,
+      elements.imageBrowserFilterBox,
+      elements.imageBrowserFilterReference,
+      elements.imageBrowserFilterCompleted,
+      elements.imageBrowserFilterInProgress,
+    ].forEach((checkbox) => {
+      if (checkbox) {
+        checkbox.disabled = useShowAll;
+      }
+    });
   }
 
   function syncImageBrowserFilterStateFromInputs() {
-    state.imageBrowser.filterUnassigned = Boolean(elements.imageBrowserFilterUnassigned?.checked);
-    state.imageBrowser.filterBox = Boolean(elements.imageBrowserFilterBox?.checked);
-    state.imageBrowser.filterReference = Boolean(elements.imageBrowserFilterReference?.checked);
-    state.imageBrowser.filterCompleted = Boolean(elements.imageBrowserFilterCompleted?.checked);
-    state.imageBrowser.filterInProgress = Boolean(elements.imageBrowserFilterInProgress?.checked);
+    state.imageBrowser.filterShowAll = Boolean(elements.imageBrowserFilterShowAll?.checked);
+
+    state.imageBrowser.filterModes.unassigned = normalizeBrowserFilterMode(elements.imageBrowserFilterUnassigned?.dataset?.filterMode);
+    state.imageBrowser.filterModes.box = normalizeBrowserFilterMode(elements.imageBrowserFilterBox?.dataset?.filterMode);
+    state.imageBrowser.filterModes.reference = normalizeBrowserFilterMode(elements.imageBrowserFilterReference?.dataset?.filterMode);
+    state.imageBrowser.filterModes.completed = normalizeBrowserFilterMode(elements.imageBrowserFilterCompleted?.dataset?.filterMode);
+    state.imageBrowser.filterModes.inProgress = normalizeBrowserFilterMode(elements.imageBrowserFilterInProgress?.dataset?.filterMode);
+
+    updateImageBrowserFilterInputsDisabledState();
   }
 
-  async function handleImageBrowserFilterChange() {
-    const previousItemId = getCurrentImageBrowserItem()?.id || null;
-    const previousIndex = state.imageBrowser.index;
-    const hadPendingEdits = browserHasPendingEdits();
-    const previousFilters = {
-      unassigned: state.imageBrowser.filterUnassigned,
-      box: state.imageBrowser.filterBox,
-      reference: state.imageBrowser.filterReference,
-      completed: state.imageBrowser.filterCompleted,
-      inProgress: state.imageBrowser.filterInProgress,
-    };
-    syncImageBrowserFilterStateFromInputs();
-
+  async function applyImageBrowserFilterChange(previousItemId, previousIndex, hadPendingEdits, previousFilters) {
     if (state.imageBrowser.isOpen && hadPendingEdits) {
       const willKeepCurrent = previousItemId ? setImageBrowserIndexByImageId(previousItemId) : false;
       if (!willKeepCurrent) {
         const shouldDiscard = window.confirm("Discard unsaved image edits and apply browser filters?");
         if (!shouldDiscard) {
-          state.imageBrowser.filterUnassigned = previousFilters.unassigned;
-          state.imageBrowser.filterBox = previousFilters.box;
-          state.imageBrowser.filterReference = previousFilters.reference;
-          state.imageBrowser.filterCompleted = previousFilters.completed;
-          state.imageBrowser.filterInProgress = previousFilters.inProgress;
+          state.imageBrowser.filterShowAll = previousFilters.showAll;
+          state.imageBrowser.filterModes.unassigned = previousFilters.modes.unassigned;
+          state.imageBrowser.filterModes.box = previousFilters.modes.box;
+          state.imageBrowser.filterModes.reference = previousFilters.modes.reference;
+          state.imageBrowser.filterModes.completed = previousFilters.modes.completed;
+          state.imageBrowser.filterModes.inProgress = previousFilters.modes.inProgress;
           state.imageBrowser.index = previousIndex;
           setImageBrowserFilterInputsFromState();
           return;
@@ -6578,6 +6646,50 @@
     } catch (error) {
       showFeedback(error.message, true);
     }
+  }
+
+  async function handleImageBrowserFilterChange() {
+    const previousItemId = getCurrentImageBrowserItem()?.id || null;
+    const previousIndex = state.imageBrowser.index;
+    const hadPendingEdits = browserHasPendingEdits();
+    const previousFilters = {
+      showAll: state.imageBrowser.filterShowAll,
+      modes: {
+        unassigned: state.imageBrowser.filterModes.unassigned,
+        box: state.imageBrowser.filterModes.box,
+        reference: state.imageBrowser.filterModes.reference,
+        completed: state.imageBrowser.filterModes.completed,
+        inProgress: state.imageBrowser.filterModes.inProgress,
+      },
+    };
+    syncImageBrowserFilterStateFromInputs();
+    await applyImageBrowserFilterChange(previousItemId, previousIndex, hadPendingEdits, previousFilters);
+  }
+
+  async function handleImageBrowserTriStateToggle(event) {
+    const input = event.currentTarget;
+    const filterKey = String(input?.dataset?.imageBrowserFilterKey || "").trim();
+    if (!filterKey) {
+      return;
+    }
+
+    const previousItemId = getCurrentImageBrowserItem()?.id || null;
+    const previousIndex = state.imageBrowser.index;
+    const hadPendingEdits = browserHasPendingEdits();
+    const previousFilters = {
+      showAll: state.imageBrowser.filterShowAll,
+      modes: {
+        unassigned: state.imageBrowser.filterModes.unassigned,
+        box: state.imageBrowser.filterModes.box,
+        reference: state.imageBrowser.filterModes.reference,
+        completed: state.imageBrowser.filterModes.completed,
+        inProgress: state.imageBrowser.filterModes.inProgress,
+      },
+    };
+
+    state.imageBrowser.filterModes[filterKey] = getNextBrowserFilterMode(input.dataset.filterMode);
+    setImageBrowserFilterInputsFromState();
+    await applyImageBrowserFilterChange(previousItemId, previousIndex, hadPendingEdits, previousFilters);
   }
 
   function attachEvents() {
@@ -6728,24 +6840,28 @@
       elements.imageEmbeddingBackfillStart.addEventListener("click", handleImageEmbeddingBackfillStart);
     }
 
-    if (elements.imageBrowserFilterUnassigned) {
-      elements.imageBrowserFilterUnassigned.addEventListener("change", handleImageBrowserFilterChange);
+    if (elements.imageBrowserFilterShowAll) {
+      elements.imageBrowserFilterShowAll.addEventListener("change", handleImageBrowserFilterChange);
     }
 
     if (elements.imageBrowserFilterBox) {
-      elements.imageBrowserFilterBox.addEventListener("change", handleImageBrowserFilterChange);
+      elements.imageBrowserFilterBox.addEventListener("click", handleImageBrowserTriStateToggle);
     }
 
     if (elements.imageBrowserFilterReference) {
-      elements.imageBrowserFilterReference.addEventListener("change", handleImageBrowserFilterChange);
+      elements.imageBrowserFilterReference.addEventListener("click", handleImageBrowserTriStateToggle);
     }
 
     if (elements.imageBrowserFilterCompleted) {
-      elements.imageBrowserFilterCompleted.addEventListener("change", handleImageBrowserFilterChange);
+      elements.imageBrowserFilterCompleted.addEventListener("click", handleImageBrowserTriStateToggle);
     }
 
     if (elements.imageBrowserFilterInProgress) {
-      elements.imageBrowserFilterInProgress.addEventListener("change", handleImageBrowserFilterChange);
+      elements.imageBrowserFilterInProgress.addEventListener("click", handleImageBrowserTriStateToggle);
+    }
+
+    if (elements.imageBrowserFilterUnassigned) {
+      elements.imageBrowserFilterUnassigned.addEventListener("click", handleImageBrowserTriStateToggle);
     }
 
     if (elements.imageBrowserClose) {

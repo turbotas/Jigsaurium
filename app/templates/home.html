@@ -616,6 +616,7 @@
     <section class="govuk-!-margin-top-6" aria-labelledby="collection-image-browser-heading">
       <h3 id="collection-image-browser-heading" class="govuk-heading-m">Image browser</h3>
       <p class="govuk-body">Review uploaded images, tag quickly, and crop or rotate before saving. Opening this tab launches the browser.</p>
+      <p id="image-library-load-summary" class="govuk-hint">Image browser source is not loaded yet.</p>
     </section>
 
     </div>
@@ -630,26 +631,31 @@
           <div class="app-image-browser__controls govuk-!-margin-bottom-3">
             <fieldset class="govuk-fieldset app-image-browser__filters" aria-describedby="image-browser-filters-hint">
               <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">Browser filter</legend>
-              <div id="image-browser-filters-hint" class="govuk-hint govuk-!-margin-bottom-1">Show images matching any selected option.</div>
+              <div id="image-browser-filters-hint" class="govuk-hint govuk-!-margin-bottom-1">Apply all selected filter constraints.</div>
+              <div class="govuk-hint govuk-!-margin-bottom-1">Click a filter to cycle: include, exclude (X), don't care.</div>
               <div class="govuk-checkboxes govuk-checkboxes--small">
                 <div class="govuk-checkboxes__item">
-                  <input id="image-browser-filter-unassigned" class="govuk-checkboxes__input" type="checkbox" checked>
+                  <input id="image-browser-filter-all" class="govuk-checkboxes__input" type="checkbox">
+                  <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-all">Show all images</label>
+                </div>
+                <div class="govuk-checkboxes__item">
+                  <input id="image-browser-filter-unassigned" class="govuk-checkboxes__input" type="checkbox" checked data-image-browser-filter-key="unassigned">
                   <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-unassigned">Unassigned</label>
                 </div>
                 <div class="govuk-checkboxes__item">
-                  <input id="image-browser-filter-box" class="govuk-checkboxes__input" type="checkbox">
+                  <input id="image-browser-filter-box" class="govuk-checkboxes__input" type="checkbox" data-image-browser-filter-key="box">
                   <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-box">Box family</label>
                 </div>
                 <div class="govuk-checkboxes__item">
-                  <input id="image-browser-filter-reference" class="govuk-checkboxes__input" type="checkbox">
+                  <input id="image-browser-filter-reference" class="govuk-checkboxes__input" type="checkbox" data-image-browser-filter-key="reference">
                   <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-reference">Reference</label>
                 </div>
                 <div class="govuk-checkboxes__item">
-                  <input id="image-browser-filter-completed" class="govuk-checkboxes__input" type="checkbox">
+                  <input id="image-browser-filter-completed" class="govuk-checkboxes__input" type="checkbox" data-image-browser-filter-key="completed">
                   <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-completed">Completed</label>
                 </div>
                 <div class="govuk-checkboxes__item">
-                  <input id="image-browser-filter-in-progress" class="govuk-checkboxes__input" type="checkbox">
+                  <input id="image-browser-filter-in-progress" class="govuk-checkboxes__input" type="checkbox" data-image-browser-filter-key="inProgress">
                   <label class="govuk-label govuk-checkboxes__label" for="image-browser-filter-in-progress">In progress</label>
                 </div>
               </div>
