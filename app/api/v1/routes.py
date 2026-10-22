@@ -132,6 +132,7 @@ ROLE_CAPABILITIES = {
         "diary.update_own",
         "audit.read",
         "image.assign",
+        "image.delete",
         "image.manage_library",
         "image.tag",
         "image.upload",
@@ -146,6 +147,7 @@ ROLE_CAPABILITIES = {
         "diary.update_own",
         "audit.read",
         "image.assign",
+        "image.delete",
         "image.manage_library",
         "image.tag",
         "image.upload",
@@ -3351,6 +3353,9 @@ def health_check():
     payload = {
         "status": "ok",
         "environment": current_app.config["APP_ENV"],
+        "version": current_app.config.get("APP_VERSION", "0.0.0-dev"),
+        "build_sha": current_app.config.get("APP_BUILD_SHA", "local"),
+        "build_time": current_app.config.get("APP_BUILD_TIME", ""),
     }
     return _success_response(payload)
 
@@ -5340,12 +5345,26 @@ def set_image_library_item_tag(image_id):
 
 
 @api_v1_bp.delete("/image-library/images/<int:image_id>")
-@require_role("administrator")
+@require_auth
 def delete_image_library_item(image_id):
+    if not _current_user_has_capability("image.delete"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     db_session = get_session()
     image = db_session.get(JigsawImage, image_id)
     if image is None:
         return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    if image.jigsaw_id is not None and "administrator" not in g.current_user_roles:
+        return _error_response(
+            "forbidden",
+            "You can only delete unassigned images.",
+            403,
+        )
 
     _record_audit_event(
         action="jigsaw.image_deleted",
@@ -5365,8 +5384,15 @@ def delete_image_library_item(image_id):
 
 
 @api_v1_bp.put("/image-library/images/<int:image_id>/content")
-@require_role("administrator")
+@require_auth
 def replace_image_library_item_content(image_id):
+    if not _current_user_has_capability("image.upload"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
     db_session = get_session()
     image = db_session.get(JigsawImage, image_id)
     if image is None:

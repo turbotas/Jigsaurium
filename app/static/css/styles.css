@@ -10,6 +10,18 @@
   max-width: 1240px;
 }
 
+.app-build-meta {
+  border-top: 1px solid #b1b4b6;
+  margin-top: 24px;
+  padding: 12px 0 20px;
+  background: #f3f2f1;
+}
+
+.app-build-meta__divider {
+  margin: 0 8px;
+  color: #505a5f;
+}
+
 .govuk-caption-l {
   color: #505a5f;
 }
@@ -664,6 +676,55 @@
   overflow: auto;
 }
 
+.app-image-browser-suggestions-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: rgba(11, 12, 12, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.app-image-browser-suggestions-modal[hidden] {
+  display: none !important;
+}
+
+.app-image-browser-suggestions-modal__panel {
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  border-radius: 6px;
+  background: #fff;
+  padding: 16px;
+}
+
+.app-image-browser-suggestions-modal .app-diary-suggestions {
+  align-items: stretch;
+}
+
+.app-image-browser-suggestions-modal .app-diary-suggestion-row {
+  justify-content: space-between;
+}
+
+.app-image-browser-suggestions-modal .app-diary-suggestion-details {
+  align-items: flex-start;
+}
+
+.app-image-browser-suggestions-modal .app-diary-suggestion-title,
+.app-image-browser-suggestions-modal .app-diary-suggestion-meta {
+  text-align: left;
+}
+
+.app-image-browser-name-preview__title {
+  margin-bottom: 8px;
+}
+
+.app-image-browser-name-preview__thumb {
+  display: inline-block;
+}
+
 @media (max-width: 640px) {
   .app-image-browser {
     padding: 8px;
@@ -697,6 +758,15 @@
     width: min(320px, calc(100vw - 32px));
     left: auto;
     right: 0;
+  }
+
+  .app-image-browser-suggestions-modal {
+    padding: 8px;
+  }
+
+  .app-image-browser-suggestions-modal__panel {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
   }
 }
 

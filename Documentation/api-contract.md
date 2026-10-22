@@ -72,6 +72,15 @@
 - `PATCH /api/v1/diary-entries/{id}`
 - `DELETE /api/v1/diary-entries/{id}`
 
+## Health Endpoint Response
+
+- `GET /api/v1/health` returns:
+  - `status`: static service status (`ok` when reachable)
+  - `environment`: current runtime environment (`dev`, `test`, `prod`)
+  - `version`: deployed app version (`APP_VERSION`)
+  - `build_sha`: source commit SHA (`APP_BUILD_SHA`)
+  - `build_time`: UTC build timestamp (`APP_BUILD_TIME`, may be blank for local builds)
+
 ## Filtering, Sorting, Pagination
 
 - Pagination query params: `page` (1-based), `page_size`.
@@ -180,7 +189,7 @@
 - Auth payload user objects include a derived `capabilities` array to support SPA feature-gating without hardcoding role names.
 - Current role capability defaults:
   - `administrator`: full administrative capabilities, including user/loan/AI management and destructive actions.
-  - `member`: shared-collection capabilities for jigsaw create/read/update/enrich, diary create/read/update-own, image upload/library/tag/assign, and audit read.
+  - `member`: shared-collection capabilities for jigsaw create/read/update/enrich, diary create/read/update-own, image upload/library/tag/assign/delete, and audit read.
   - `borrower`: legacy compatibility role that currently maps to the same capabilities as `member`.
 - `PATCH /api/v1/auth/me` allows users to update their own `display_name` (username) and change password with `current_password` + `new_password`.
 - `PATCH /api/v1/auth/me` rejects email changes.
@@ -242,6 +251,11 @@
   - Loan return sets `returned_at` to current UTC time and sets loan status to `returned`.
   - Loan return sets jigsaw status to `available` when the linked jigsaw is currently `on_loan`.
   - Loan return returns `409` when the loan is not active/overdue.
+
+- Image library endpoint notes:
+  - `DELETE /api/v1/image-library/images/{image_id}` requires `image.delete` capability.
+  - Non-admin callers can delete only unassigned images (`jigsaw_id = null`); assigned-image deletion returns `403`.
+  - `PUT /api/v1/image-library/images/{image_id}/content` requires `image.upload` capability.
 
 - Jigsaw metadata notes:
   - `GET /api/v1/jigsaws` supports optional pagination query params `page` and `page_size` (or legacy `limit` alias).

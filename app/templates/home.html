@@ -677,22 +677,55 @@
               <button id="image-browser-assign-next" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Assign to next</button>
               <button id="image-browser-mark-box-side" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box side</button>
               <button id="image-browser-mark-box-back" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box back</button>
-              <button id="image-browser-mark-reference" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Reference</button>
-              <button id="image-browser-mark-in-progress" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark In progress</button>
-              <button id="image-browser-create-jigsaw" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Create jigsaw</button>
-              <button id="image-browser-delete" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Delete image</button>
-            </div>
-            <div class="app-image-browser__controls-row app-image-browser__controls-row--image-edit">
-              <button id="image-browser-rotate-left" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate left</button>
-              <button id="image-browser-rotate-right" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate right</button>
-              <button id="image-browser-crop-toggle" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Crop</button>
-              <button id="image-browser-crop-apply" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Apply crop</button>
-              <button id="image-browser-save-create" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Save create</button>
-              <button id="image-browser-save" type="button" class="govuk-button" data-module="govuk-button">Save overwrite</button>
-            </div>
-          </div>
+               <button id="image-browser-mark-reference" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Reference</button>
+               <button id="image-browser-mark-in-progress" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark In progress</button>
+               <button id="image-browser-find-similar" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Find similar</button>
+               <button id="image-browser-find-name" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Find - Name</button>
+               <button id="image-browser-create-jigsaw" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Create jigsaw</button>
+               <button id="image-browser-delete" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Delete image</button>
+             </div>
+             <div class="app-image-browser__controls-row app-image-browser__controls-row--image-edit">
+               <button id="image-browser-rotate-left" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate left</button>
+               <button id="image-browser-rotate-right" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate right</button>
+               <button id="image-browser-crop-toggle" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Crop</button>
+               <button id="image-browser-crop-apply" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Apply crop</button>
+               <button id="image-browser-save-create" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Save create</button>
+               <button id="image-browser-save" type="button" class="govuk-button" data-module="govuk-button">Save overwrite</button>
+             </div>
+           </div>
 
-          <fieldset class="govuk-fieldset app-image-browser__help-fieldset govuk-!-margin-bottom-0">
+           <div id="image-browser-suggestions-modal" class="app-image-browser-suggestions-modal" hidden>
+             <div class="app-image-browser-suggestions-modal__panel" role="dialog" aria-modal="true" aria-labelledby="image-browser-suggestions-title">
+               <h5 id="image-browser-suggestions-title" class="govuk-heading-s govuk-!-margin-bottom-2">Closest matches</h5>
+               <p id="image-browser-suggestions-summary" class="govuk-hint govuk-!-margin-bottom-2"></p>
+               <div id="image-browser-suggestions-list" class="app-diary-suggestions"></div>
+               <button id="image-browser-suggestions-close" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Close</button>
+             </div>
+           </div>
+
+           <div id="image-browser-name-assign-modal" class="app-image-browser-suggestions-modal" hidden>
+             <div class="app-image-browser-suggestions-modal__panel" role="dialog" aria-modal="true" aria-labelledby="image-browser-name-assign-title">
+               <h5 id="image-browser-name-assign-title" class="govuk-heading-s govuk-!-margin-bottom-2">Find by jigsaw name</h5>
+               <p id="image-browser-name-assign-summary" class="govuk-hint govuk-!-margin-bottom-2"></p>
+               <div class="govuk-form-group govuk-!-margin-bottom-2">
+                 <label class="govuk-label" for="image-browser-name-query">Jigsaw title contains</label>
+                 <input id="image-browser-name-query" class="govuk-input govuk-input--width-20" type="text" autocomplete="off" spellcheck="false">
+               </div>
+               <div class="govuk-form-group govuk-!-margin-bottom-3">
+                 <label class="govuk-label" for="image-browser-name-results">Matches</label>
+                 <select id="image-browser-name-results" class="govuk-select">
+                   <option value="">Type at least 2 characters</option>
+                 </select>
+               </div>
+               <div id="image-browser-name-preview" class="govuk-inset-text govuk-!-margin-top-0 govuk-!-margin-bottom-3">Select a jigsaw to preview its thumbnail.</div>
+               <div class="app-inline-controls app-image-actions__row">
+                 <button id="image-browser-name-assign" type="button" class="govuk-button" data-module="govuk-button">Assign</button>
+                 <button id="image-browser-name-assign-close" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Close</button>
+               </div>
+             </div>
+           </div>
+
+           <fieldset class="govuk-fieldset app-image-browser__help-fieldset govuk-!-margin-bottom-0">
             <legend class="govuk-fieldset__legend govuk-fieldset__legend--s app-image-browser__help-row govuk-!-margin-bottom-0">
               <span class="app-hover-help app-image-browser__help-label" tabindex="0">
                 Keyboard shortcuts?

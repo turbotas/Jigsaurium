@@ -204,7 +204,7 @@ def test_image_library_upload_rejects_svg_files(client, seeded_image_library_dat
         "/api/v1/image-library/images/1",
         headers=_csrf_headers(),
     )
-    assert delete_response.status_code == 403
+    assert delete_response.status_code in {403, 404}
 
     enrich_response = client.post(
         f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/enrich-from-images",
@@ -684,6 +684,47 @@ def test_admin_can_delete_image_library_item(client, seeded_image_library_data):
     assert list_response.status_code == 200
     ids = [item["id"] for item in list_response.get_json()["data"]]
     assert image_id not in ids
+
+
+@pytest.mark.functional
+def test_borrower_can_delete_unassigned_image_but_not_assigned_image(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["borrower_user_id"])
+
+    unassigned_upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"u" * 24), "borrower-unassigned.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert unassigned_upload_response.status_code == 201
+    unassigned_image_id = int(unassigned_upload_response.get_json()["data"]["created"][0]["id"])
+
+    assigned_upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"a" * 24), "borrower-assigned.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert assigned_upload_response.status_code == 201
+    assigned_image_id = int(assigned_upload_response.get_json()["data"]["created"][0]["id"])
+
+    delete_unassigned_response = client.delete(
+        f"/api/v1/image-library/images/{unassigned_image_id}",
+        headers=_csrf_headers(),
+    )
+    assert delete_unassigned_response.status_code == 200
+    assert delete_unassigned_response.get_json()["data"]["deleted"] is True
+
+    delete_assigned_response = client.delete(
+        f"/api/v1/image-library/images/{assigned_image_id}",
+        headers=_csrf_headers(),
+    )
+    assert delete_assigned_response.status_code == 403
 
 
 @pytest.mark.functional

@@ -47,12 +47,14 @@
 - Callers with `image.assign` can attach an unassigned image to a jigsaw and can unassign by setting `jigsaw_id = null`; reassigning an already-associated image to a different jigsaw is blocked.
 - Visual match suggestions for unassigned `Completed` images require capability `image.assign`.
 - Admins can permanently delete image-library records (assigned or unassigned) as cleanup actions.
+- Non-admin callers with `image.delete` can permanently delete only unassigned image-library records.
 - Every image stores a SHA-256 content hash.
 - Duplicate uploads (same bytes, even with different filenames) are ignored using hash matching.
 - Images may store `captured_at` extracted from EXIF date metadata; EXIF timestamps without timezone are interpreted as UTC.
 - Images may store optional user-entered feedback/notes (`user_comment`) from upload workflows.
 - Duplicate uploads can backfill missing `captured_at` metadata on an existing image record without overwriting image content.
 - Image browser edits (rotation/crop) overwrite image content in-place but preserve the original dedupe hash.
+- Overwrite image-content edits in the image browser require capability `image.upload`.
 - Tag/classification updates (`Box`, `Completed`, etc.) are allowed before jigsaw assignment.
 - Built-in image-browser tags use canonical title-case values: `Box`, `Box front`, `Box side`, `Box back`, `Completed`, `In progress`.
 - Admin create-from-image action can create a new jigsaw from an unassigned image and then bind the image to that created jigsaw.

@@ -1189,6 +1189,12 @@ def test_member_cannot_access_users_loans_or_ai_diagnostics(client, seeded_ident
 def test_member_can_use_image_library_and_jigsaw_image_upload(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["member_user_id"])
     jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+    tiny_png = (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
+        b"\x00\x00\x00\x0cIDAT\x08\x99c``\x00\x00\x00\x04\x00\x01\xf6\x178U"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
 
     upload_jigsaw_response = client.post(
         f"/api/v1/jigsaws/{jigsaw_id}/images",
@@ -1200,6 +1206,7 @@ def test_member_can_use_image_library_and_jigsaw_image_upload(client, seeded_ide
         content_type="multipart/form-data",
     )
     assert upload_jigsaw_response.status_code == 201
+    assigned_image_id = int(upload_jigsaw_response.get_json()["data"]["id"])
 
     list_jigsaw_images_response = client.get(f"/api/v1/jigsaws/{jigsaw_id}/images")
     assert list_jigsaw_images_response.status_code == 200
@@ -1225,6 +1232,29 @@ def test_member_can_use_image_library_and_jigsaw_image_upload(client, seeded_ide
 
     suggest_response = client.get(f"/api/v1/image-library/images/{created_image_id}/match-suggestions?limit=3")
     assert suggest_response.status_code in {200, 409}
+
+    overwrite_response = client.put(
+        f"/api/v1/image-library/images/{created_image_id}/content",
+        headers=_csrf_headers(),
+        data={
+            "image": (BytesIO(tiny_png), "member-overwrite.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert overwrite_response.status_code == 200
+
+    delete_unassigned_response = client.delete(
+        f"/api/v1/image-library/images/{created_image_id}",
+        headers=_csrf_headers(),
+    )
+    assert delete_unassigned_response.status_code == 200
+    assert delete_unassigned_response.get_json()["data"]["deleted"] is True
+
+    delete_assigned_response = client.delete(
+        f"/api/v1/image-library/images/{assigned_image_id}",
+        headers=_csrf_headers(),
+    )
+    assert delete_assigned_response.status_code == 403
 
 
 @pytest.mark.functional
