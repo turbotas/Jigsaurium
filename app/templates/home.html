@@ -626,15 +626,21 @@
       <div id="image-browser-modal" class="app-image-browser" hidden>
         <div class="app-image-browser__panel" role="dialog" aria-modal="true" aria-labelledby="image-browser-title">
           <div class="app-image-browser__header">
-            <h4 id="image-browser-title" class="govuk-heading-m govuk-!-margin-bottom-1">Image browser</h4>
+            <div class="app-image-browser__titlebar">
+              <h4 id="image-browser-title" class="govuk-heading-m govuk-!-margin-bottom-1">Image browser</h4>
+              <button id="image-browser-close" type="button" class="govuk-button govuk-button--warning govuk-!-margin-bottom-0 app-image-browser__close-button" data-module="govuk-button">Close Image Browser</button>
+            </div>
             <p id="image-browser-status" class="govuk-hint govuk-!-margin-bottom-0"></p>
           </div>
 
           <div class="app-image-browser__controls govuk-!-margin-bottom-3">
-            <fieldset class="govuk-fieldset app-image-browser__filters" aria-describedby="image-browser-filters-hint">
-              <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">Browser filter</legend>
-              <div id="image-browser-filters-hint" class="govuk-hint govuk-!-margin-bottom-1">Apply all selected filter constraints.</div>
-              <div class="govuk-hint govuk-!-margin-bottom-1">Click a filter to cycle: include, exclude (X), don't care.</div>
+            <fieldset class="govuk-fieldset app-image-browser__filters">
+              <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">
+                <span class="app-hover-help app-image-browser__help-label" tabindex="0">
+                  Filter?
+                  <span class="app-hover-help__bubble" role="tooltip">Apply all selected filter constraints. Click a filter to cycle: include, exclude (X), don't care.</span>
+                </span>
+              </legend>
               <div class="govuk-checkboxes govuk-checkboxes--small">
                 <div class="govuk-checkboxes__item">
                   <input id="image-browser-filter-all" class="govuk-checkboxes__input" type="checkbox">
@@ -662,28 +668,38 @@
                 </div>
               </div>
             </fieldset>
-            <button id="image-browser-prev" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Previous</button>
-            <button id="image-browser-next" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Next</button>
-            <button id="image-browser-rotate-left" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate left</button>
-            <button id="image-browser-rotate-right" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate right</button>
-            <button id="image-browser-mark-box" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box</button>
-            <button id="image-browser-mark-completed" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Completed</button>
-            <button id="image-browser-assign-previous" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Assign to previous</button>
-            <button id="image-browser-assign-next" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Assign to next</button>
-            <button id="image-browser-mark-box-side" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box side</button>
-            <button id="image-browser-mark-box-back" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box back</button>
-            <button id="image-browser-mark-reference" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Reference</button>
-            <button id="image-browser-mark-in-progress" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark In progress</button>
-            <button id="image-browser-create-jigsaw" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Create jigsaw</button>
-            <button id="image-browser-delete" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Delete image</button>
-            <button id="image-browser-crop-toggle" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Crop</button>
-            <button id="image-browser-crop-apply" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Apply crop</button>
-            <button id="image-browser-save-create" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Save create</button>
-            <button id="image-browser-save" type="button" class="govuk-button" data-module="govuk-button">Save overwrite</button>
-            <button id="image-browser-close" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Close</button>
+            <div class="app-image-browser__controls-row">
+              <button id="image-browser-prev" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Previous</button>
+              <button id="image-browser-next" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Next</button>
+              <button id="image-browser-mark-box" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box</button>
+              <button id="image-browser-mark-completed" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Completed</button>
+              <button id="image-browser-assign-previous" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Assign to previous</button>
+              <button id="image-browser-assign-next" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Assign to next</button>
+              <button id="image-browser-mark-box-side" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box side</button>
+              <button id="image-browser-mark-box-back" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Box back</button>
+              <button id="image-browser-mark-reference" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark Reference</button>
+              <button id="image-browser-mark-in-progress" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Mark In progress</button>
+              <button id="image-browser-create-jigsaw" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Create jigsaw</button>
+              <button id="image-browser-delete" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Delete image</button>
+            </div>
+            <div class="app-image-browser__controls-row app-image-browser__controls-row--image-edit">
+              <button id="image-browser-rotate-left" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate left</button>
+              <button id="image-browser-rotate-right" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate right</button>
+              <button id="image-browser-crop-toggle" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Crop</button>
+              <button id="image-browser-crop-apply" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Apply crop</button>
+              <button id="image-browser-save-create" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Save create</button>
+              <button id="image-browser-save" type="button" class="govuk-button" data-module="govuk-button">Save overwrite</button>
+            </div>
           </div>
 
-          <p class="govuk-hint">Keyboard: Left/Right = previous/next, [ / ] (or Q / E) = rotate, B = Box, C = Completed, R = Reference, , = assign previous, . = assign next, S = Box side, K = Box back, I = In progress, J = create jigsaw, V = Save create, Delete/Backspace = delete image.</p>
+          <fieldset class="govuk-fieldset app-image-browser__help-fieldset govuk-!-margin-bottom-0">
+            <legend class="govuk-fieldset__legend govuk-fieldset__legend--s app-image-browser__help-row govuk-!-margin-bottom-0">
+              <span class="app-hover-help app-image-browser__help-label" tabindex="0">
+                Keyboard shortcuts?
+                <span class="app-hover-help__bubble" role="tooltip">Left/Right = previous/next, [ / ] (or Q / E) = rotate, B = Box, C = Completed, R = Reference, , = assign previous, . = assign next, S = Box side, K = Box back, I = In progress, J = create jigsaw, V = Save create, Delete/Backspace = delete image.</span>
+              </span>
+            </legend>
+          </fieldset>
 
           <div class="app-image-browser__viewport">
             <canvas id="image-browser-canvas" class="app-image-browser__canvas"></canvas>

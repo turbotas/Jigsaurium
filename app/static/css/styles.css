@@ -543,12 +543,98 @@
 
 .app-image-browser__header {
   flex: 0 0 auto;
+  display: block;
+}
+
+.app-image-browser__titlebar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-image-browser__close-button {
+  margin-left: auto;
+  flex: 0 0 auto;
+  white-space: normal;
+  text-align: center;
 }
 
 .app-image-browser__controls {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.app-image-browser__controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1 1 100%;
+}
+
+.app-image-browser__controls-row--image-edit {
+  padding-top: 4px;
+  border-top: 1px solid #d8d8d8;
+}
+
+.app-image-browser__help-fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.app-hover-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-bottom: 1px dotted #505a5f;
+  cursor: help;
+}
+
+.app-hover-help__bubble {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 10;
+  width: min(440px, calc(100vw - 32px));
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #0b0c0c;
+  color: #fff;
+  font-size: 0.9375rem;
+  line-height: 1.35;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transform: translateY(-2px);
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.app-image-browser__help-row {
+  margin: 0;
+}
+
+.app-image-browser__help-label {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+
+.app-hover-help__bubble {
+  font-family: inherit;
+  font-style: normal;
+  font-size: 0.9375rem;
+  line-height: 1.35;
+  font-weight: 400;
+}
+
+.app-hover-help:hover .app-hover-help__bubble,
+.app-hover-help:focus .app-hover-help__bubble,
+.app-hover-help:focus-within .app-hover-help__bubble {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .app-image-browser__filters {
@@ -576,6 +662,42 @@
   align-items: center;
   justify-content: center;
   overflow: auto;
+}
+
+@media (max-width: 640px) {
+  .app-image-browser {
+    padding: 8px;
+  }
+
+  .app-image-browser__panel {
+    height: calc(100dvh - 16px);
+    padding: 8px;
+  }
+
+  .app-image-browser__controls {
+    max-height: 34dvh;
+    overflow-y: auto;
+    align-content: flex-start;
+    scrollbar-gutter: stable;
+  }
+
+  .app-image-browser__close-button {
+    max-width: 170px;
+  }
+
+  .app-image-browser__titlebar {
+    align-items: flex-start;
+  }
+
+  .app-image-browser__viewport {
+    min-height: 42dvh;
+  }
+
+  .app-hover-help__bubble {
+    width: min(320px, calc(100vw - 32px));
+    left: auto;
+    right: 0;
+  }
 }
 
 .app-image-browser__canvas {
