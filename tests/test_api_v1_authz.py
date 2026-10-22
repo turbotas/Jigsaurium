@@ -1228,6 +1228,47 @@ def test_member_can_use_image_library_and_jigsaw_image_upload(client, seeded_ide
 
 
 @pytest.mark.functional
+def test_mobile_capture_related_apis_reject_user_without_required_capabilities(app, client, seeded_identity_data):
+    with app.app_context():
+        db_session = get_session()
+        observer_role = Role(name="observer")
+        restricted_user = User(email="observer@example.com", display_name="Observer User")
+        restricted_user.set_password("ObserverPassword123!")
+        db_session.add_all([observer_role, restricted_user])
+        db_session.flush()
+        db_session.add(UserRole(user_id=restricted_user.id, role_id=observer_role.id))
+        db_session.commit()
+        restricted_user_id = restricted_user.id
+
+    _set_user_session(client, restricted_user_id)
+
+    upload_library_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "tag": "completed",
+            "files": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"o" * 128), "restricted-library.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_library_response.status_code == 403
+
+    create_jigsaw_response = client.post(
+        "/api/v1/jigsaws",
+        headers=_csrf_headers(),
+        json={"title": "Restricted", "piece_count": 250, "status": "available"},
+    )
+    assert create_jigsaw_response.status_code == 403
+
+    enrich_response = client.post(
+        f"/api/v1/jigsaws/{seeded_identity_data['available_jigsaw_id']}/enrich-from-images",
+        headers=_csrf_headers(),
+        json={},
+    )
+    assert enrich_response.status_code == 403
+
+
+@pytest.mark.functional
 def test_api_rejects_unknown_session_user(client, seeded_identity_data):
     _set_user_session(client, 999999)
 

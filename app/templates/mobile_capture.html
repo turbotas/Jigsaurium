@@ -92,5 +92,5 @@
 {% endblock %}
 
 {% block scripts %}
-  <script src="{{ url_for('static', filename='js/mobile-intake.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/mobile-intake.js', v=app_version) }}"></script>
 {% endblock %}

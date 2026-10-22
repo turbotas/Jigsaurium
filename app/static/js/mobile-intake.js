@@ -35,11 +35,56 @@
   const state = {
     csrfToken: null,
     isSubmitting: false,
-    isAdmin: false,
+    capabilities: [],
     stfdAuthEnabled: false,
     stfdAllowLocalLogin: true,
     stfdLoginUrl: null,
   };
+
+  const fallbackRoleCapabilities = {
+    administrator: [
+      "image.upload",
+      "jigsaw.create",
+      "jigsaw.enrich",
+      "image.manage_library",
+    ],
+    member: [
+      "image.upload",
+      "jigsaw.create",
+      "jigsaw.enrich",
+      "image.manage_library",
+    ],
+    borrower: [
+      "image.upload",
+      "jigsaw.create",
+      "jigsaw.enrich",
+      "image.manage_library",
+    ],
+  };
+
+  function hasCapability(capability) {
+    return state.capabilities.includes(capability);
+  }
+
+  function extractCapabilitiesFromUser(user) {
+    const rawCapabilities = Array.isArray(user?.capabilities) ? user.capabilities : [];
+    const normalizedCapabilities = rawCapabilities
+      .filter((value) => typeof value === "string" && value.trim())
+      .map((value) => value.trim());
+
+    if (normalizedCapabilities.length > 0) {
+      return Array.from(new Set(normalizedCapabilities));
+    }
+
+    const roles = Array.isArray(user?.roles) ? user.roles : [];
+    const capabilitySet = new Set();
+    roles.forEach((roleName) => {
+      const normalizedRole = typeof roleName === "string" ? roleName.trim().toLowerCase() : "";
+      const roleCapabilities = fallbackRoleCapabilities[normalizedRole] || [];
+      roleCapabilities.forEach((capability) => capabilitySet.add(capability));
+    });
+    return Array.from(capabilitySet);
+  }
 
   function setStatus(message, isError = false) {
     if (!statusPanel) {
@@ -246,14 +291,14 @@
     const payload = await parseJsonSafe(response);
     if (!response.ok) {
       state.csrfToken = null;
-      state.isAdmin = false;
+      state.capabilities = [];
       return null;
     }
 
     const user = payload?.data?.user || null;
-    const roles = Array.isArray(user?.roles) ? user.roles : [];
+    const capabilities = extractCapabilitiesFromUser(user);
     state.csrfToken = payload?.data?.csrf_token || null;
-    state.isAdmin = roles.includes("administrator");
+    state.capabilities = capabilities;
     return user;
   }
 
@@ -309,6 +354,7 @@
     }
 
     state.csrfToken = payload?.data?.csrf_token || null;
+    state.capabilities = extractCapabilitiesFromUser(payload?.data?.user || null);
     return payload?.data?.user || null;
   }
 
@@ -325,9 +371,9 @@
     setSessionSummary(`Signed in as ${user.email} (${roleLabel}).`);
     setAuthUiSignedIn(true);
 
-    if (!state.isAdmin) {
+    if (!hasCapability("image.upload")) {
       setWorkflowVisible(false);
-      setStatus("This page is administrator-only for uploads. Sign in with an administrator account.", true);
+      setStatus("Your account does not have permission to upload images from this page.", true);
       return;
     }
 
@@ -343,8 +389,8 @@
     if (!state.csrfToken) {
       throw new Error("Please sign in before uploading mobile capture images.");
     }
-    if (!state.isAdmin) {
-      throw new Error("Administrator access is required for mobile capture upload.");
+    if (!hasCapability("image.upload")) {
+      throw new Error("Your account does not have permission to upload images from this page.");
     }
     return state.csrfToken;
   }
@@ -437,8 +483,8 @@
     if (state.isSubmitting) {
       return;
     }
-    if (!state.isAdmin) {
-      setStatus("Please sign in with an administrator account before uploading.", true);
+    if (!hasCapability("image.upload")) {
+      setStatus("Please sign in with an account that can upload images.", true);
       return;
     }
 
@@ -466,6 +512,9 @@
         return;
       }
 
+      if (!hasCapability("jigsaw.create")) {
+        throw new Error("Your account cannot create jigsaws from mobile capture uploads.");
+      }
       setStatus("Creating jigsaw record...");
       const createPayload = buildJigsawCreatePayload();
       const createdJigsaw = await apiRequest("/api/v1/jigsaws", {
@@ -496,11 +545,13 @@
         }
       }
 
-      setStatus("Running AI enrich from uploaded box images...");
-      await apiRequest(`/api/v1/jigsaws/${Number(jigsawId)}/enrich-from-images`, {
-        method: "POST",
-        body: JSON.stringify({ overwrite_existing: false }),
-      });
+      if (hasCapability("jigsaw.enrich")) {
+        setStatus("Running AI enrich from uploaded box images...");
+        await apiRequest(`/api/v1/jigsaws/${Number(jigsawId)}/enrich-from-images`, {
+          method: "POST",
+          body: JSON.stringify({ overwrite_existing: false }),
+        });
+      }
 
       const warningSuffix =
         duplicateWarnings.length > 0
@@ -549,7 +600,7 @@
 
       state.csrfToken = payload?.data?.csrf_token || null;
       const user = payload?.data?.user || null;
-      state.isAdmin = Array.isArray(user?.roles) && user.roles.includes("administrator");
+      state.capabilities = extractCapabilitiesFromUser(user);
       syncAuthUi(user);
       setStatus("Signed in.");
       if (loginPasswordInput) {
@@ -571,7 +622,7 @@
     }
 
     state.csrfToken = null;
-    state.isAdmin = false;
+    state.capabilities = [];
     syncAuthUi(null);
     setStatus("Signed out.");
   }
@@ -605,7 +656,7 @@
     .then((tokenUser) => {
       if (tokenUser) {
         syncAuthUi(tokenUser);
-        if (state.isAdmin) {
+        if (hasCapability("image.upload")) {
           setStatus("Ready to capture images.");
         }
         return null;
@@ -617,7 +668,7 @@
         return;
       }
       syncAuthUi(user);
-      if (user && state.isAdmin) {
+      if (user && hasCapability("image.upload")) {
         setStatus("Ready to capture images.");
       }
     })
