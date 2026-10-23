@@ -2482,6 +2482,7 @@
     const assignedImagesByJigsawId = buildAssignedJigsawImagesByJigsawId(state.imageLibraryImages);
     const canEditJigsaw = currentUserHasCapability("jigsaw.update");
     const canEnrichJigsaw = currentUserHasCapability("jigsaw.enrich");
+    const canDetachJigsawImages = currentUserHasCapability("image.assign");
     const canRetireOrDelete = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
 
     pageResult.rows.forEach((jigsaw) => {
@@ -2499,7 +2500,28 @@
           openUrl: preferredImage?.content_url,
         })
       );
-      row.appendChild(buildCell(String(jigsaw.title || "-")));
+      const titleCell = document.createElement("td");
+      titleCell.className = "govuk-table__cell";
+
+      const titleWrap = document.createElement("div");
+      titleWrap.className = "app-jigsaw-title-cell";
+
+      const titleText = document.createElement("span");
+      titleText.textContent = String(jigsaw.title || "-");
+      titleWrap.appendChild(titleText);
+
+      if (canDetachJigsawImages && preferredImage?.id) {
+        const detachMainImageButton = document.createElement("button");
+        detachMainImageButton.type = "button";
+        detachMainImageButton.className = "govuk-button govuk-button--secondary app-inline-button app-jigsaw-image-detach-button";
+        detachMainImageButton.setAttribute("data-module", "govuk-button");
+        detachMainImageButton.dataset.jigsawImageDetach = String(preferredImage.id);
+        detachMainImageButton.textContent = "Detach image";
+        titleWrap.appendChild(detachMainImageButton);
+      }
+
+      titleCell.appendChild(titleWrap);
+      row.appendChild(titleCell);
       row.appendChild(buildCell(String(jigsaw.piece_count || "-")));
       row.appendChild(buildCell(toLocalTimestamp(jigsaw.last_completed_at)));
 
@@ -2599,6 +2621,16 @@
           metadata.className = "govuk-body-s app-jigsaw-images-grid__meta";
           metadata.textContent = image.tag || "untagged";
           item.appendChild(metadata);
+
+          if (canDetachJigsawImages && image.id) {
+            const detachButton = document.createElement("button");
+            detachButton.type = "button";
+            detachButton.className = "govuk-button govuk-button--secondary app-inline-button app-jigsaw-image-detach-button";
+            detachButton.setAttribute("data-module", "govuk-button");
+            detachButton.dataset.jigsawImageDetach = String(image.id);
+            detachButton.textContent = "Detach";
+            item.appendChild(detachButton);
+          }
 
           grid.appendChild(item);
         });
@@ -5241,6 +5273,13 @@
     });
   }
 
+  async function unassignImageFromJigsaw(imageId) {
+    await apiRequest(`/api/v1/image-library/images/${Number(imageId)}/assign`, {
+      method: "PATCH",
+      body: JSON.stringify({ jigsaw_id: null }),
+    });
+  }
+
   function renderImageLibrarySuggestionOptions(imageId, candidates) {
     if (!elements.imageLibraryTableBody) {
       return false;
@@ -6574,6 +6613,32 @@
       return;
     }
 
+    const detachJigsawImageButton = event.target.closest("[data-jigsaw-image-detach]");
+    if (detachJigsawImageButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      if (!currentUserHasCapability("image.assign")) {
+        showFeedback("You do not have permission to detach images.", true);
+        return;
+      }
+
+      const imageId = Number(detachJigsawImageButton.getAttribute("data-jigsaw-image-detach"));
+      if (!imageId) {
+        showFeedback("Could not determine image to detach.", true);
+        return;
+      }
+
+      try {
+        await unassignImageFromJigsaw(imageId);
+        showFeedback("Image detached from jigsaw.");
+        await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
     if (editJigsawButton) {
       event.preventDefault();
       clearFeedback();
@@ -6950,10 +7015,7 @@
 
       const imageId = Number(imageUnassignButton.getAttribute("data-image-unassign"));
       try {
-        await apiRequest(`/api/v1/image-library/images/${imageId}/assign`, {
-          method: "PATCH",
-          body: JSON.stringify({ jigsaw_id: null }),
-        });
+        await unassignImageFromJigsaw(imageId);
         showFeedback("Image unassigned from jigsaw.");
         await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
       } catch (error) {

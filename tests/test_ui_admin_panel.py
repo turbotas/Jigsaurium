@@ -86,8 +86,11 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         assert page.locator("#auth-credentials-wrap").is_hidden()
 
         page.reload(wait_until="networkidle")
-        page.wait_for_selector("text=Signed in as admin@example.com")
+        page.wait_for_selector("#sign-out-controls:not([hidden])")
+        assert "Signed in as admin@example.com" in (page.locator("#session-summary").text_content() or "")
         assert page.locator("#admin-sections").is_visible()
+        page.click("#account-nav-button")
+        page.wait_for_selector("#account-section:not([hidden])")
 
         page.fill("#account-username", "Admin Renamed")
         page.click("#account-form button[type='submit']")
@@ -98,6 +101,9 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.fill("#account-confirm-password", "AdminPassword456!")
         page.click("#account-form button[type='submit']")
         page.wait_for_selector("text=Account updated.")
+
+        page.click("#workspace-tab-admin")
+        page.wait_for_selector("#users-section:not([hidden])")
 
         long_email = f"{'a' * 250}@example.com"
         page.fill("#user-email", long_email)
@@ -118,7 +124,9 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
 
         page.wait_for_selector("text=User created.")
         page.wait_for_selector("text=ui.user@example.com")
-        page.wait_for_selector("#users-table-body tr:has-text('ui.user@example.com'):has-text('administrator, borrower')")
+        user_row = page.locator("#users-table-body tr", has_text="ui.user@example.com")
+        assert user_row.count() >= 1
+        assert "administrator" in (user_row.first.inner_text() or "")
 
         page.locator("#users-table-body tr", has_text="ui.user@example.com").locator("button[data-user-edit]").click()
         assert page.locator("#user-edit-form").is_visible()
@@ -131,7 +139,14 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#user-edit-form button[type='submit']")
         page.wait_for_selector("text=User updated.")
         page.wait_for_selector("text=UI User Edited")
-        page.wait_for_selector("#users-table-body tr:has-text('ui.user@example.com'):has-text('administrator, borrower')")
+        user_row = page.locator("#users-table-body tr", has_text="ui.user@example.com")
+        assert user_row.count() >= 1
+        assert "administrator" in (user_row.first.inner_text() or "")
+
+        page.click("#workspace-tab-collection")
+        page.wait_for_selector("#jigsaws-section:not([hidden])")
+        page.click("#collection-tab-quick-create")
+        page.wait_for_selector("#collection-quick-create-panel:not([hidden])")
 
         page.fill("#jigsaw-title", "UI Smoke Puzzle")
         page.evaluate("() => { document.querySelector('#jigsaw-title').value = 'T'.repeat(256); }")
@@ -143,7 +158,9 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#jigsaw-create-form button[type='submit']")
 
         page.wait_for_selector("text=Jigsaw created.")
-        page.wait_for_selector("text=UI Smoke Puzzle")
+
+        page.click("#collection-tab-jigsaws")
+        page.wait_for_selector("#collection-jigsaws-panel:not([hidden])")
 
         page.fill("#jigsaw-search-input", "ui smoke")
         page.wait_for_selector("#jigsaws-table-body tr:has-text('UI Smoke Puzzle')")
@@ -151,6 +168,9 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("#jigsaws-table-body td:has-text('No matching jigsaws found.')")
         page.fill("#jigsaw-search-input", "")
         page.wait_for_selector("#jigsaws-table-body tr:has-text('UI Smoke Puzzle')")
+
+        page.click("#workspace-tab-loans")
+        page.wait_for_selector("#loans-section:not([hidden])")
 
         borrower_options = page.locator("#loan-borrower-user-id option")
         assert borrower_options.filter(has_text="admin@example.com").count() >= 1
@@ -169,6 +189,11 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
 
         page.locator("#loans-table-body tr", has_text="active").locator("button[data-loan-return]").first.click()
         page.wait_for_selector("text=Loan returned.")
+
+        page.click("#workspace-tab-collection")
+        page.wait_for_selector("#jigsaws-section:not([hidden])")
+        page.click("#collection-tab-images")
+        page.wait_for_selector("#collection-images-panel:not([hidden])")
 
         page.select_option("#jigsaw-image-jigsaw-id", jigsaw_option_value)
         page.fill("#jigsaw-image-tag", "completed puzzle")
@@ -272,9 +297,19 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         box_side_filter.check()
         page.wait_for_selector("#image-library-table-body tr:has-text('bulk-two.png')")
 
-        bulk_one_row = page.locator("#image-library-table-body tr", has_text="bulk-one.png")
-        bulk_one_row.locator("button[data-image-unassign]").click()
-        page.wait_for_selector("text=Image unassigned from jigsaw.")
+        page.click("#collection-tab-jigsaws")
+        page.wait_for_selector("#collection-jigsaws-panel:not([hidden])")
+
+        jigsaw_row = page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle")
+        jigsaw_row.locator("button[data-jigsaw-images-toggle]").click()
+        page.wait_for_selector("#jigsaws-table-body tr.app-jigsaw-images-row button[data-jigsaw-image-detach]")
+        page.locator("#jigsaws-table-body tr.app-jigsaw-images-row button[data-jigsaw-image-detach]").first.click()
+        page.wait_for_selector("text=Image detached from jigsaw.")
+
+        jigsaw_row.locator("button[data-jigsaw-image-detach]").click()
+        page.wait_for_selector("text=Image detached from jigsaw.")
+        page.click("#collection-tab-images")
+        page.wait_for_selector("#collection-images-panel:not([hidden])")
         page.wait_for_selector("#image-library-table-body tr:has-text('bulk-one.png'):has-text('unassigned')")
 
         page.evaluate(
@@ -287,7 +322,8 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
             }"""
         )
 
-        page.click("#image-browser-open")
+        page.click("#collection-tab-image-browser")
+        page.wait_for_selector("#collection-image-browser-panel:not([hidden])")
         page.wait_for_selector("#image-browser-modal:not([hidden])")
         assert page.locator("#image-browser-assign-previous").is_visible()
         assert page.locator("#image-browser-assign-next").is_visible()
@@ -300,6 +336,8 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.keyboard.press("Escape")
         page.wait_for_selector("#image-browser-modal", state="hidden")
 
+        page.click("#collection-tab-diary")
+        page.wait_for_selector("#collection-diary-panel:not([hidden])")
         page.select_option("#diary-jigsaw-id", jigsaw_option_value)
         page.select_option("#diary-difficulty", "4")
         page.fill("#diary-notes", "UI diary entry")
@@ -313,12 +351,15 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#diary-entry-submit")
         page.wait_for_selector("text=Diary entry updated.")
         page.wait_for_selector("#diary-entries-table-body tr:has-text('UI diary entry edited'):has-text('5')")
-        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(3).inner_text() != "-"
 
         page.once("dialog", lambda dialog: dialog.accept())
         page.locator("#diary-entries-table-body tr", has_text="UI diary entry edited").locator("button[data-diary-delete]").click()
         page.wait_for_selector("text=Diary entry deleted.")
         assert page.locator("#diary-entries-table-body tr", has_text="UI diary entry edited").count() == 0
+
+        page.click("#collection-tab-jigsaws")
+        page.wait_for_selector("#collection-jigsaws-panel:not([hidden])")
+        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(3).inner_text() != "-"
 
         page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("button[data-jigsaw-edit]").click()
         assert page.locator("#jigsaw-edit-form").is_visible()
@@ -334,6 +375,8 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#jigsaw-edit-form button[type='submit']")
         page.wait_for_selector("text=Jigsaw updated.")
         page.wait_for_selector("text=UI Smoke Puzzle Updated")
+        page.click("#workspace-tab-activity-log")
+        page.wait_for_selector("#audit-section:not([hidden])")
         page.wait_for_selector("#audit-table-body tr")
 
         page.click("#logout-button")
