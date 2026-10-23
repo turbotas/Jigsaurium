@@ -6287,11 +6287,12 @@
       const createdCount = Number(payload?.data?.created_count || 0);
       const skippedCount = Number(payload?.data?.skipped_count || 0);
       const metadataBackfilledCount = Number(payload?.data?.metadata_backfilled_count || 0);
+      const skippedItems = Array.isArray(payload?.data?.skipped) ? payload.data.skipped : [];
       let bulkCreateSummary = "";
+      let skippedReasonSuffix = "";
 
       let metadataSuffix = "";
       if (metadataBackfilledCount > 0) {
-        const skippedItems = Array.isArray(payload?.data?.skipped) ? payload.data.skipped : [];
         const backfilledNames = skippedItems
           .filter((item) => Boolean(item?.metadata_backfilled))
           .map((item) => String(item?.filename || "(unnamed)"));
@@ -6302,7 +6303,37 @@
           : "";
         metadataSuffix = ` Backfilled metadata on ${metadataBackfilledCount} existing image(s)${namesSuffix}.`;
       }
-      showFeedback(`Image library upload complete. Added ${createdCount} image(s), skipped ${skippedCount}.${metadataSuffix}${bulkCreateSummary}`);
+
+      if (skippedCount > 0 && skippedItems.length > 0) {
+        const reasonPreview = skippedItems
+          .slice(0, 3)
+          .map((item) => {
+            const filename = String(item?.filename || "(unnamed)");
+            let reason = String(item?.reason || item?.issue || "Skipped").trim();
+            const assignedMatch = reason.match(/attached to jigsaw #(\d+)\.?$/i);
+            if (assignedMatch) {
+              const assignedJigsawId = Number(assignedMatch[1]);
+              const assignedJigsaw = (Array.isArray(state.jigsaws) ? state.jigsaws : []).find(
+                (jigsaw) => Number(jigsaw?.id) === assignedJigsawId,
+              );
+              const assignedTitle = String(assignedJigsaw?.title || "").trim();
+              if (assignedTitle) {
+                reason = `Image already exists, attached to jigsaw "${assignedTitle}".`;
+              }
+            }
+
+            if (reason && !/[.!?]$/.test(reason)) {
+              reason = `${reason}.`;
+            }
+
+            return `${filename}: ${reason}`;
+          })
+          .join("; ");
+        const overflow = Math.max(0, skippedItems.length - 3);
+        skippedReasonSuffix = ` Reasons: ${reasonPreview}${overflow > 0 ? `; +${overflow} more` : ""}`;
+      }
+
+      showFeedback(`Image library upload complete. Added ${createdCount} image(s), skipped ${skippedCount}.${skippedReasonSuffix}${metadataSuffix}${bulkCreateSummary}`);
       clearBulkUploadFiles();
       if (elements.imageLibraryBulkCreate) {
         elements.imageLibraryBulkCreate.checked = false;

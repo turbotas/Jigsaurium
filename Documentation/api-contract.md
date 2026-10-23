@@ -306,6 +306,7 @@
   - Accepted upload MIME types are raster formats only: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`.
   - SVG and other active image-document formats are rejected.
   - `POST /api/v1/image-library/uploads` returns a summary: `created_count`, `skipped_count`, `metadata_backfilled_count`, and per-item `created` / `skipped` details.
+  - Each skipped item may include a human-readable `reason` string; duplicate-content skips include association context when available (for example: `Image already exists, attached to jigsaw "Library Puzzle".`).
   - Hash duplicate handling applies to bulk imports too: duplicate image bytes are skipped and reported in `skipped`.
   - Duplicate-image skips may still backfill missing capture metadata on the existing image record when newly uploaded bytes include EXIF capture time.
   - `PATCH /api/v1/image-library/images/{image_id}/assign` requires `image.assign` capability and JSON body with `jigsaw_id`:

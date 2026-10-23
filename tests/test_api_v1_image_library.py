@@ -788,6 +788,7 @@ def test_bulk_upload_skips_duplicate_image_content(client, seeded_image_library_
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
             "files": [(BytesIO(image_bytes), "existing.png", "image/png")],
         },
         content_type="multipart/form-data",
@@ -812,6 +813,12 @@ def test_bulk_upload_skips_duplicate_image_content(client, seeded_image_library_
     assert payload["created_count"] == 0
     assert payload["skipped_count"] == 2
     assert all("duplicate image content" in item["issue"] for item in payload["skipped"])
+    reasons = [item.get("reason") for item in payload["skipped"] if item.get("reason")]
+    assert any(
+        reason == 'Image already exists, attached to jigsaw "Library Puzzle".'
+        for reason in reasons
+    )
+    assert all(reason and "Image already exists" in reason for reason in reasons)
 
 
 @pytest.mark.functional

@@ -5098,6 +5098,7 @@ def upload_image_library_items():
 
     image_hashes = sorted({item["image_sha256"] for item in image_items if item.get("image_sha256")})
     existing_images_by_hash = {}
+    existing_jigsaw_titles_by_id = {}
     if image_hashes:
         existing_images = db_session.execute(
             select(JigsawImage).where(JigsawImage.image_sha256.in_(image_hashes)).order_by(JigsawImage.id.asc())
@@ -5106,11 +5107,45 @@ def upload_image_library_items():
             if existing.image_sha256 and existing.image_sha256 not in existing_images_by_hash:
                 existing_images_by_hash[existing.image_sha256] = existing
 
+        existing_jigsaw_ids = sorted(
+            {
+                existing.jigsaw_id
+                for existing in existing_images
+                if existing.jigsaw_id is not None
+            }
+        )
+        if existing_jigsaw_ids:
+            existing_jigsaw_titles_by_id = {
+                jigsaw_id: (title.strip() if isinstance(title, str) and title.strip() else None)
+                for jigsaw_id, title in db_session.execute(
+                    select(Jigsaw.id, Jigsaw.title).where(Jigsaw.id.in_(existing_jigsaw_ids))
+                ).all()
+            }
+
     try:
         for item in image_items:
             image_sha256 = item.get("image_sha256")
             if image_sha256 and image_sha256 in existing_images_by_hash:
                 existing_image = existing_images_by_hash[image_sha256]
+                existing_jigsaw_title = existing_jigsaw_titles_by_id.get(existing_image.jigsaw_id)
+                if existing_image.jigsaw_id is not None and not existing_jigsaw_title:
+                    existing_jigsaw_title = db_session.execute(
+                        select(Jigsaw.title).where(Jigsaw.id == existing_image.jigsaw_id)
+                    ).scalar_one_or_none()
+                    if isinstance(existing_jigsaw_title, str):
+                        existing_jigsaw_title = existing_jigsaw_title.strip() or None
+
+                if existing_jigsaw_title:
+                    duplicate_reason = (
+                        f'Image already exists, attached to jigsaw "{existing_jigsaw_title}".'
+                    )
+                elif existing_image.jigsaw_id is not None:
+                    duplicate_reason = (
+                        f"Image already exists, attached to jigsaw #{existing_image.jigsaw_id}."
+                    )
+                else:
+                    duplicate_reason = "Image already exists in the image library."
+
                 metadata_backfilled = _backfill_image_capture_metadata(
                     existing_image,
                     item.get("captured_at"),
@@ -5123,6 +5158,7 @@ def upload_image_library_items():
                     {
                         "filename": item["filename"] or "(unnamed)",
                         "issue": "duplicate image content already exists",
+                        "reason": duplicate_reason,
                         "metadata_backfilled": metadata_backfilled,
                         "comment_backfilled": comment_backfilled,
                         "uploaded_by_backfilled": uploaded_by_backfilled,
@@ -5135,6 +5171,7 @@ def upload_image_library_items():
                     {
                         "filename": item["filename"] or "(unnamed)",
                         "issue": "duplicate image content in current upload batch",
+                        "reason": "Image already appears earlier in this upload batch.",
                     }
                 )
                 continue
