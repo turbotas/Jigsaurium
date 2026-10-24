@@ -51,6 +51,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 - Completion diary:
   - Log completions per jigsaw with optional 1-5 difficulty rating and notes.
   - View diary entries as any authenticated user.
+  - Switch between list and month-calendar diary views.
   - Add diary entries as a normal user.
   - Edit own diary entries as a normal user; administrators can edit any entry.
   - Delete diary entries as an administrator.
@@ -102,6 +103,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 - Guided capture that includes a box image creates a jigsaw, tags/uploads captured slot images, and runs enrich-from-images once.
 - Authenticated non-admin users can log and edit their own completion diary entries.
 - Admin can log, edit, and delete completion diary entries with difficulty ratings and notes per jigsaw.
+- Diary tab supports list and month-calendar modes, with month navigation in calendar mode.
 - Admin can create users and assign one of the supported roles.
 - Borrower cannot access admin-only API endpoints.
 - All create/update/delete actions write an audit event.

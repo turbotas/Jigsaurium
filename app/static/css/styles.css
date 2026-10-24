@@ -468,6 +468,127 @@
   text-align: right;
 }
 
+.app-diary-view-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+}
+
+#collection-diary-panel,
+#collection-diary-panel * {
+  font-family: "GDS Transport", arial, sans-serif !important;
+}
+
+.app-diary-view-toggle {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-diary-view-toggle__button {
+  margin-bottom: 0;
+}
+
+.app-diary-view-toggle__button.is-active {
+  border-color: #1d70b8;
+  box-shadow: inset 0 0 0 2px #1d70b8;
+  background: #fff;
+}
+
+.app-diary-month-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.app-diary-month-nav__label {
+  margin: 0;
+  min-width: 11rem;
+  font-weight: 700;
+}
+
+.app-diary-calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.app-diary-calendar-weekdays span {
+  text-align: center;
+  font-weight: 700;
+  color: #505a5f;
+  font-size: 0.9rem;
+  font-family: "GDS Transport", arial, sans-serif;
+}
+
+.app-diary-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.app-diary-calendar-day {
+  border: 1px solid #b1b4b6;
+  border-radius: 6px;
+  min-height: 130px;
+  padding: 6px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.app-diary-calendar-day--outside-month {
+  background: #f8f8f8;
+  color: #505a5f;
+}
+
+.app-diary-calendar-day--has-entry {
+  border-color: #1d70b8;
+}
+
+.app-diary-calendar-day__number {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-family: "GDS Transport", arial, sans-serif;
+}
+
+.app-diary-calendar-day__meta {
+  margin: 0;
+  color: #505a5f;
+  font-size: 0.8rem;
+  font-family: "GDS Transport", arial, sans-serif;
+}
+
+.app-diary-calendar-thumb .app-thumbnail-trigger {
+  width: 100% !important;
+  min-height: 72px;
+}
+
+@media (max-width: 700px) {
+  .app-diary-calendar-weekdays span {
+    font-size: 0.75rem;
+  }
+
+  .app-diary-calendar-day {
+    min-height: 112px;
+    padding: 4px;
+  }
+
+  .app-diary-calendar-day__meta {
+    font-size: 0.72rem;
+  }
+
+  .app-diary-month-nav__label {
+    min-width: 8rem;
+  }
+}
+
 .app-dropzone {
   border: 2px dashed #b1b4b6;
   border-radius: 6px;

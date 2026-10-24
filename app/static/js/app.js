@@ -21,6 +21,8 @@
   const BROWSER_FILTER_MODE_IGNORE = "ignore";
   const BROWSER_FILTER_MODE_INCLUDE = "include";
   const BROWSER_FILTER_MODE_EXCLUDE = "exclude";
+  const DIARY_VIEW_MODE_LIST = "list";
+  const DIARY_VIEW_MODE_CALENDAR = "calendar";
 
   function createDefaultTableSortState() {
     return {
@@ -93,6 +95,8 @@
     diaryEntries: [],
     diaryEditingEntryId: null,
     diarySelectionTouchedByUser: false,
+    diaryViewMode: DIARY_VIEW_MODE_LIST,
+    diaryCalendar: createInitialDiaryCalendarState(),
     bulkUploadFiles: [],
     bulkCreateJobId: null,
     bulkCreateJobPollTimer: null,
@@ -287,6 +291,16 @@
     diaryCompletedAt: document.getElementById("diary-completed-at"),
     diaryDifficulty: document.getElementById("diary-difficulty"),
     diaryNotes: document.getElementById("diary-notes"),
+    diaryViewModeButtons: Array.from(document.querySelectorAll("[data-diary-view-mode]")),
+    diaryListRegion: document.getElementById("diary-list-region"),
+    diaryCalendarRegion: document.getElementById("diary-calendar-region"),
+    diaryCalendarControls: document.getElementById("diary-calendar-controls"),
+    diaryCalendarPrevButton: document.getElementById("diary-calendar-prev"),
+    diaryCalendarNextButton: document.getElementById("diary-calendar-next"),
+    diaryCalendarTodayButton: document.getElementById("diary-calendar-today"),
+    diaryCalendarMonthLabel: document.getElementById("diary-calendar-month-label"),
+    diaryCalendarSummary: document.getElementById("diary-calendar-summary"),
+    diaryCalendarGrid: document.getElementById("diary-calendar-grid"),
     diaryEntriesCaption: document.getElementById("diary-entries-caption"),
     diaryEntriesTableBody: document.getElementById("diary-entries-table-body"),
     diaryPaginationTop: document.getElementById("diary-pagination-top"),
@@ -1467,6 +1481,14 @@
     return getCurrentUserCapabilities().includes(target);
   }
 
+  function createInitialDiaryCalendarState() {
+    const today = new Date();
+    return {
+      year: today.getFullYear(),
+      month: today.getMonth(),
+    };
+  }
+
   function currentUserIsAdministrator() {
     return Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
   }
@@ -1723,6 +1745,57 @@
     return Number(selectedJigsawId || "0") > 0
       ? "No diary entries found for this jigsaw. Select 'All completed jigsaws' to include unlinked completed images."
       : "No diary entries or unlinked completed images found.";
+  }
+
+  function normalizeDiaryViewMode(mode) {
+    const normalizedMode = String(mode || "").trim().toLowerCase();
+    return normalizedMode === DIARY_VIEW_MODE_CALENDAR ? DIARY_VIEW_MODE_CALENDAR : DIARY_VIEW_MODE_LIST;
+  }
+
+  function updateDiaryViewUi() {
+    const activeMode = normalizeDiaryViewMode(state.diaryViewMode);
+    state.diaryViewMode = activeMode;
+    const isCalendarMode = activeMode === DIARY_VIEW_MODE_CALENDAR;
+
+    elements.diaryViewModeButtons.forEach((button) => {
+      const buttonMode = normalizeDiaryViewMode(button.dataset.diaryViewMode);
+      const isActive = buttonMode === activeMode;
+      button.classList.toggle("is-active", isActive);
+      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+
+    if (elements.diaryListRegion) {
+      elements.diaryListRegion.hidden = isCalendarMode;
+    }
+    if (elements.diaryCalendarRegion) {
+      elements.diaryCalendarRegion.hidden = !isCalendarMode;
+    }
+    if (elements.diaryCalendarControls) {
+      elements.diaryCalendarControls.hidden = !isCalendarMode;
+    }
+  }
+
+  function setDiaryViewMode(mode) {
+    state.diaryViewMode = normalizeDiaryViewMode(mode);
+    updateDiaryViewUi();
+  }
+
+  function shiftDiaryCalendarMonth(monthOffset) {
+    const offset = Number(monthOffset || 0);
+    if (!Number.isFinite(offset) || Math.trunc(offset) === 0) {
+      return;
+    }
+
+    const currentMonth = new Date(state.diaryCalendar.year, state.diaryCalendar.month, 1);
+    currentMonth.setMonth(currentMonth.getMonth() + Math.trunc(offset));
+    state.diaryCalendar.year = currentMonth.getFullYear();
+    state.diaryCalendar.month = currentMonth.getMonth();
+  }
+
+  function resetDiaryCalendarToCurrentMonth() {
+    const todayMonth = createInitialDiaryCalendarState();
+    state.diaryCalendar.year = todayMonth.year;
+    state.diaryCalendar.month = todayMonth.month;
   }
 
   function resetDiaryEntryFormEditingState({ keepJigsawSelection = true } = {}) {
@@ -4634,7 +4707,7 @@
     }
   }
 
-  function renderDiaryEntries(entries, emptyMessage = "No diary entries found.") {
+  function renderDiaryEntriesList(entries, emptyMessage = "No diary entries found.") {
     const tableBody = elements.diaryEntriesTableBody;
     clearTableBody(tableBody);
 
@@ -4759,6 +4832,162 @@
 
     renderPaginationPair(elements.diaryPaginationTop, elements.diaryPagination, "diary", pageResult);
   }
+
+  function toLocalDateKey(value) {
+    if (!value) {
+      return "";
+    }
+    const parsedDate = new Date(value);
+    if (Number.isNaN(parsedDate.valueOf())) {
+      return "";
+    }
+    const year = parsedDate.getFullYear();
+    const month = String(parsedDate.getMonth() + 1).padStart(2, "0");
+    const day = String(parsedDate.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function toDiaryCalendarMonthLabel(year, month) {
+    const monthStart = new Date(Number(year), Number(month), 1);
+    return monthStart.toLocaleDateString(undefined, {
+      month: "long",
+      year: "numeric",
+    });
+  }
+
+  function getDiaryCalendarImageUrls(entry, preferredImagesByJigsawId) {
+    const sourceImageUrls = getDiaryEntryImageUrls(entry);
+    if (sourceImageUrls.thumbnailUrl) {
+      return sourceImageUrls;
+    }
+
+    const preferredImage = preferredImagesByJigsawId.get(Number(entry?.jigsaw_id || 0));
+    return {
+      thumbnailUrl: String(preferredImage?.thumbnail_url || preferredImage?.content_url || ""),
+      previewUrl: String(preferredImage?.preview_url || preferredImage?.content_url || ""),
+      openUrl: String(preferredImage?.content_url || ""),
+    };
+  }
+
+  function renderDiaryCalendar(entries, emptyMessage = "No diary entries found.") {
+    if (!elements.diaryCalendarGrid) {
+      return;
+    }
+
+    clearTableBody(elements.diaryEntriesTableBody);
+    clearPagination(elements.diaryPaginationTop);
+    clearPagination(elements.diaryPagination);
+
+    const calendarEntries = Array.isArray(entries)
+      ? entries.filter((entry) => entry?.entry_type !== "orphan_completed_image" && Number(entry?.jigsaw_id || 0) > 0)
+      : [];
+
+    const entriesByDate = new Map();
+    calendarEntries.forEach((entry) => {
+      const dateKey = toLocalDateKey(entry?.completed_at);
+      if (!dateKey) {
+        return;
+      }
+      if (!entriesByDate.has(dateKey)) {
+        entriesByDate.set(dateKey, []);
+      }
+      entriesByDate.get(dateKey).push(entry);
+    });
+
+    const sortedDays = Array.from(entriesByDate.keys()).sort();
+    if (elements.diaryCalendarSummary) {
+      if (sortedDays.length > 0) {
+        const monthKey = `${state.diaryCalendar.year}-${String(state.diaryCalendar.month + 1).padStart(2, "0")}`;
+        const monthEntryCount = sortedDays.filter((dateKey) => dateKey.startsWith(monthKey)).reduce((count, dateKey) => {
+          const dayEntries = entriesByDate.get(dateKey) || [];
+          return count + dayEntries.length;
+        }, 0);
+        elements.diaryCalendarSummary.textContent = `${monthEntryCount} completion${monthEntryCount === 1 ? "" : "s"} in this month.`;
+      } else {
+        elements.diaryCalendarSummary.textContent = emptyMessage;
+      }
+    }
+
+    if (elements.diaryCalendarMonthLabel) {
+      elements.diaryCalendarMonthLabel.textContent = toDiaryCalendarMonthLabel(
+        state.diaryCalendar.year,
+        state.diaryCalendar.month,
+      );
+    }
+
+    while (elements.diaryCalendarGrid.firstChild) {
+      elements.diaryCalendarGrid.removeChild(elements.diaryCalendarGrid.firstChild);
+    }
+
+    const firstDayOfMonth = new Date(state.diaryCalendar.year, state.diaryCalendar.month, 1);
+    const monthStartWeekday = firstDayOfMonth.getDay();
+    const gridStartDate = new Date(state.diaryCalendar.year, state.diaryCalendar.month, 1 - monthStartWeekday);
+    const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.jigsawThumbnailImages);
+
+    for (let dayOffset = 0; dayOffset < 42; dayOffset += 1) {
+      const cellDate = new Date(gridStartDate.getFullYear(), gridStartDate.getMonth(), gridStartDate.getDate() + dayOffset);
+      const cellDateKey = toLocalDateKey(cellDate);
+      const isCurrentMonth = cellDate.getMonth() === state.diaryCalendar.month && cellDate.getFullYear() === state.diaryCalendar.year;
+      const dayEntries = entriesByDate.get(cellDateKey) || [];
+      const sortedDayEntries = [...dayEntries].sort((left, right) => {
+        const leftTime = new Date(left?.completed_at || 0).valueOf();
+        const rightTime = new Date(right?.completed_at || 0).valueOf();
+        return rightTime - leftTime;
+      });
+      const primaryEntry = sortedDayEntries[0] || null;
+
+      const dayCell = document.createElement("article");
+      dayCell.className = "app-diary-calendar-day";
+      dayCell.setAttribute("role", "gridcell");
+      if (!isCurrentMonth) {
+        dayCell.classList.add("app-diary-calendar-day--outside-month");
+      }
+      if (primaryEntry) {
+        dayCell.classList.add("app-diary-calendar-day--has-entry");
+      }
+
+      const dayLabel = document.createElement("p");
+      dayLabel.className = "app-diary-calendar-day__number";
+      dayLabel.classList.add("govuk-body", "govuk-!-margin-bottom-0");
+      dayLabel.style.fontFamily = '"GDS Transport", arial, sans-serif';
+      dayLabel.textContent = String(cellDate.getDate());
+      dayCell.appendChild(dayLabel);
+
+      if (primaryEntry) {
+        const thumbnailUrls = getDiaryCalendarImageUrls(primaryEntry, preferredImagesByJigsawId);
+        const jigsawTitle = getJigsawTitleById(primaryEntry?.jigsaw_id);
+        const thumbnail = buildThumbnailWidget(thumbnailUrls.thumbnailUrl, {
+          altText: `Completion image for ${jigsawTitle}`,
+          previewUrl: thumbnailUrls.previewUrl,
+          openUrl: thumbnailUrls.openUrl,
+          fallbackText: "Logged",
+          widthPx: 96,
+        });
+        thumbnail.classList.add("app-diary-calendar-thumb");
+        dayCell.appendChild(thumbnail);
+
+        const dayMeta = document.createElement("p");
+        dayMeta.className = "app-diary-calendar-day__meta";
+        dayMeta.classList.add("govuk-body-s", "govuk-!-margin-bottom-0");
+        dayMeta.textContent = sortedDayEntries.length > 1
+          ? `${jigsawTitle} (+${sortedDayEntries.length - 1} more)`
+          : jigsawTitle;
+        dayCell.appendChild(dayMeta);
+      }
+
+      elements.diaryCalendarGrid.appendChild(dayCell);
+    }
+  }
+
+  function renderDiaryEntries(entries, emptyMessage = "No diary entries found.") {
+    updateDiaryViewUi();
+    if (normalizeDiaryViewMode(state.diaryViewMode) === DIARY_VIEW_MODE_CALENDAR) {
+      renderDiaryCalendar(entries, emptyMessage);
+      return;
+    }
+    renderDiaryEntriesList(entries, emptyMessage);
+  }
+
   async function refreshSession() {
     try {
       const payload = await apiRequest("/api/v1/auth/me");
@@ -7120,6 +7349,40 @@
     loadDiaryEntriesForSelected();
   }
 
+  function handleDiaryViewModeClick(event) {
+    const button = event.target?.closest("[data-diary-view-mode]");
+    if (!(button instanceof HTMLButtonElement)) {
+      return;
+    }
+
+    const selectedMode = normalizeDiaryViewMode(button.dataset.diaryViewMode);
+    if (selectedMode === state.diaryViewMode) {
+      return;
+    }
+
+    setDiaryViewMode(selectedMode);
+    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
+  }
+
+  function handleDiaryCalendarPreviousMonth() {
+    shiftDiaryCalendarMonth(-1);
+    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
+  }
+
+  function handleDiaryCalendarNextMonth() {
+    shiftDiaryCalendarMonth(1);
+    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
+  }
+
+  function handleDiaryCalendarCurrentMonth() {
+    resetDiaryCalendarToCurrentMonth();
+    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
+  }
+
   function handleDiaryEntryCancelEdit() {
     clearFeedback();
     resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
@@ -7777,6 +8040,24 @@
       elements.diaryJigsawId.addEventListener("change", handleDiarySelectionChange);
     }
 
+    if (elements.diaryViewModeButtons.length > 0) {
+      elements.diaryViewModeButtons.forEach((button) => {
+        button.addEventListener("click", handleDiaryViewModeClick);
+      });
+    }
+
+    if (elements.diaryCalendarPrevButton) {
+      elements.diaryCalendarPrevButton.addEventListener("click", handleDiaryCalendarPreviousMonth);
+    }
+
+    if (elements.diaryCalendarNextButton) {
+      elements.diaryCalendarNextButton.addEventListener("click", handleDiaryCalendarNextMonth);
+    }
+
+    if (elements.diaryCalendarTodayButton) {
+      elements.diaryCalendarTodayButton.addEventListener("click", handleDiaryCalendarCurrentMonth);
+    }
+
     if (elements.diaryEntriesTableBody) {
       elements.diaryEntriesTableBody.addEventListener("click", handleTableActions);
     }
@@ -7853,6 +8134,7 @@
   async function init() {
     syncHeaderAuthControls();
     state.diarySelectionTouchedByUser = false;
+    setDiaryViewMode(state.diaryViewMode);
     renderUserRoleSelectors();
     setImageBrowserFilterInputsFromState();
     syncImageBrowserFilterStateFromInputs();

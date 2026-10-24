@@ -784,25 +784,54 @@
         <button id="diary-entry-cancel" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Cancel edit</button>
       </form>
 
-      <div id="diary-pagination-top" class="app-pagination" aria-live="polite"></div>
-      <div class="table-scroll-wrap">
-        <table class="govuk-table" id="diary-entries-table">
-          <caption id="diary-entries-caption" class="govuk-table__caption govuk-table__caption--m">Recent diary entries and unlinked completed images (most recent first)</caption>
-          <thead class="govuk-table__head">
-            <tr class="govuk-table__row">
-              <th class="govuk-table__header" data-sort-list="diary" data-sort-field="id">ID</th>
-              <th class="govuk-table__header" data-sort-list="diary" data-sort-field="jigsaw_title">Jigsaw</th>
-              <th class="govuk-table__header">Completed image</th>
-              <th class="govuk-table__header" data-sort-list="diary" data-sort-field="completed_at">Completed</th>
-              <th class="govuk-table__header" data-sort-list="diary" data-sort-field="difficulty">Difficulty</th>
-              <th class="govuk-table__header" data-sort-list="diary" data-sort-field="notes">Notes</th>
-              <th class="govuk-table__header">Action</th>
-            </tr>
-          </thead>
-          <tbody class="govuk-table__body" id="diary-entries-table-body"></tbody>
-        </table>
+      <div class="app-diary-view-controls govuk-!-margin-bottom-3">
+        <div class="app-diary-view-toggle" role="group" aria-label="Diary view mode">
+          <button id="diary-view-list" type="button" class="govuk-button govuk-button--secondary app-inline-button app-diary-view-toggle__button is-active" data-diary-view-mode="list" aria-pressed="true">List</button>
+          <button id="diary-view-calendar" type="button" class="govuk-button govuk-button--secondary app-inline-button app-diary-view-toggle__button" data-diary-view-mode="calendar" aria-pressed="false">Calendar</button>
+        </div>
+        <div id="diary-calendar-controls" class="app-diary-month-nav" hidden>
+          <button id="diary-calendar-prev" type="button" class="govuk-button govuk-button--secondary app-inline-button">Previous month</button>
+          <p id="diary-calendar-month-label" class="govuk-body app-diary-month-nav__label"></p>
+          <button id="diary-calendar-next" type="button" class="govuk-button govuk-button--secondary app-inline-button">Next month</button>
+          <button id="diary-calendar-today" type="button" class="govuk-button govuk-button--secondary app-inline-button">Current month</button>
+        </div>
       </div>
-      <div id="diary-pagination" class="app-pagination" aria-live="polite"></div>
+
+      <div id="diary-list-region">
+        <div id="diary-pagination-top" class="app-pagination" aria-live="polite"></div>
+        <div class="table-scroll-wrap">
+          <table class="govuk-table" id="diary-entries-table">
+            <caption id="diary-entries-caption" class="govuk-table__caption govuk-table__caption--m">Recent diary entries and unlinked completed images (most recent first)</caption>
+            <thead class="govuk-table__head">
+              <tr class="govuk-table__row">
+                <th class="govuk-table__header" data-sort-list="diary" data-sort-field="id">ID</th>
+                <th class="govuk-table__header" data-sort-list="diary" data-sort-field="jigsaw_title">Jigsaw</th>
+                <th class="govuk-table__header">Completed image</th>
+                <th class="govuk-table__header" data-sort-list="diary" data-sort-field="completed_at">Completed</th>
+                <th class="govuk-table__header" data-sort-list="diary" data-sort-field="difficulty">Difficulty</th>
+                <th class="govuk-table__header" data-sort-list="diary" data-sort-field="notes">Notes</th>
+                <th class="govuk-table__header">Action</th>
+              </tr>
+            </thead>
+            <tbody class="govuk-table__body" id="diary-entries-table-body"></tbody>
+          </table>
+        </div>
+        <div id="diary-pagination" class="app-pagination" aria-live="polite"></div>
+      </div>
+
+      <div id="diary-calendar-region" hidden>
+        <p id="diary-calendar-summary" class="govuk-body-s govuk-!-margin-bottom-2"></p>
+        <div class="app-diary-calendar-weekdays" aria-hidden="true">
+          <span class="govuk-body-s govuk-!-margin-bottom-0">Sun</span>
+          <span class="govuk-body-s govuk-!-margin-bottom-0">Mon</span>
+          <span class="govuk-body-s govuk-!-margin-bottom-0">Tue</span>
+          <span class="govuk-body-s govuk-!-margin-bottom-0">Wed</span>
+          <span class="govuk-body-s govuk-!-margin-bottom-0">Thu</span>
+          <span class="govuk-body-s govuk-!-margin-bottom-0">Fri</span>
+          <span class="govuk-body-s govuk-!-margin-bottom-0">Sat</span>
+        </div>
+        <div id="diary-calendar-grid" class="app-diary-calendar-grid" role="grid" aria-label="Diary calendar"></div>
+      </div>
     </section>
     </div>
   </section>
@@ -1027,5 +1056,5 @@
 {% endblock %}
 
 {% block scripts %}
-  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/app.js', v=app_version) }}"></script>
 {% endblock %}

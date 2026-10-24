@@ -352,6 +352,19 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("text=Diary entry updated.")
         page.wait_for_selector("#diary-entries-table-body tr:has-text('UI diary entry edited'):has-text('5')")
 
+        page.click("#diary-view-calendar")
+        page.wait_for_selector("#diary-calendar-region:not([hidden])")
+        assert page.locator("#diary-calendar-grid .app-diary-calendar-day").count() == 42
+        assert page.locator("#diary-calendar-grid .app-diary-calendar-day--has-entry").count() >= 1
+        initial_month_label = (page.locator("#diary-calendar-month-label").text_content() or "").strip()
+        page.click("#diary-calendar-next")
+        next_month_label = (page.locator("#diary-calendar-month-label").text_content() or "").strip()
+        assert next_month_label and next_month_label != initial_month_label
+        page.click("#diary-calendar-today")
+        assert (page.locator("#diary-calendar-month-label").text_content() or "").strip() == initial_month_label
+        page.click("#diary-view-list")
+        page.wait_for_selector("#diary-list-region:not([hidden])")
+
         page.once("dialog", lambda dialog: dialog.accept())
         page.locator("#diary-entries-table-body tr", has_text="UI diary entry edited").locator("button[data-diary-delete]").click()
         page.wait_for_selector("text=Diary entry deleted.")
