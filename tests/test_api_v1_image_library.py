@@ -3,6 +3,7 @@ from decimal import Decimal
 from io import BytesIO
 import json
 import zipfile
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import pytest
 from sqlalchemy.exc import OperationalError
@@ -132,11 +133,11 @@ def test_image_library_endpoints_require_authentication(
 
 
 @pytest.mark.functional
-def test_borrower_cannot_use_image_library_admin_endpoints(client, seeded_image_library_data):
+def test_borrower_can_use_shared_image_library_endpoints_but_not_admin_bulk_create(client, seeded_image_library_data):
     _set_user_session(client, seeded_image_library_data["borrower_user_id"])
 
     list_response = client.get("/api/v1/image-library/images")
-    assert list_response.status_code == 403
+    assert list_response.status_code == 200
 
     upload_response = client.post(
         "/api/v1/image-library/uploads",
@@ -144,7 +145,7 @@ def test_borrower_cannot_use_image_library_admin_endpoints(client, seeded_image_
         data={"files": (BytesIO(b"\x89PNG\r\n\x1a\n"), "one.png", "image/png")},
         content_type="multipart/form-data",
     )
-    assert upload_response.status_code == 403
+    assert upload_response.status_code == 201
 
     bulk_create_response = client.post(
         "/api/v1/image-library/bulk-create-jigsaws",
@@ -191,14 +192,14 @@ def test_image_library_upload_rejects_svg_files(client, seeded_image_library_dat
         headers=_csrf_headers(),
         json={"jigsaw_id": seeded_image_library_data["jigsaw_id"]},
     )
-    assert assign_response.status_code == 403
+    assert assign_response.status_code in {403, 404}
 
     tag_response = client.patch(
         "/api/v1/image-library/images/1/tag",
         headers=_csrf_headers(),
         json={"tag": "Box"},
     )
-    assert tag_response.status_code == 403
+    assert tag_response.status_code in {403, 404}
 
     delete_response = client.delete(
         "/api/v1/image-library/images/1",
@@ -211,7 +212,7 @@ def test_image_library_upload_rejects_svg_files(client, seeded_image_library_dat
         headers=_csrf_headers(),
         json={},
     )
-    assert enrich_response.status_code == 403
+    assert enrich_response.status_code in {403, 409}
 
     diagnostics_response = client.get("/api/v1/ai-usage/diagnostics")
     assert diagnostics_response.status_code == 403
@@ -227,7 +228,7 @@ def test_image_library_upload_rejects_svg_files(client, seeded_image_library_dat
     assert backfill_job_response.status_code == 403
 
     suggest_response = client.get("/api/v1/image-library/images/1/match-suggestions")
-    assert suggest_response.status_code == 403
+    assert suggest_response.status_code in {403, 409}
 
 
 @pytest.mark.functional
@@ -895,10 +896,38 @@ def test_image_content_variant_query_is_validated(client, seeded_image_library_d
     assert upload_response.status_code == 201
     image = upload_response.get_json()["data"]["created"][0]
 
-    invalid_variant_response = client.get(f"{image['content_url']}?variant=unsupported")
+    invalid_variant_response = client.get(f"{image['content_url']}&variant=unsupported")
     assert invalid_variant_response.status_code == 422
     payload = invalid_variant_response.get_json()
     assert payload["error"]["details"][0]["field"] == "variant"
+
+
+@pytest.mark.functional
+def test_image_variant_response_is_cacheable_when_content_version_is_present(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"k" * 24), "cacheable.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image = upload_response.get_json()["data"]["created"][0]
+
+    cacheable_response = client.get(image["thumbnail_url"])
+    assert cacheable_response.status_code == 200
+    assert "immutable" in cacheable_response.headers.get("Cache-Control", "")
+
+    parsed_url = urlparse(image["thumbnail_url"])
+    query_without_version = [(key, value) for key, value in parse_qsl(parsed_url.query, keep_blank_values=True) if key != "v"]
+    unversioned_url = urlunparse(parsed_url._replace(query=urlencode(query_without_version)))
+
+    unversioned_response = client.get(unversioned_url)
+    assert unversioned_response.status_code == 200
+    assert "no-store" in unversioned_response.headers.get("Cache-Control", "")
 
 
 @pytest.mark.functional

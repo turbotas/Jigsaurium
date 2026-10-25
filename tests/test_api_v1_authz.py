@@ -840,9 +840,12 @@ def test_admin_can_upload_and_list_jigsaw_images(client, seeded_identity_data):
     uploaded = upload_response.get_json()["data"]
     assert uploaded["tag"] == "Box front"
     assert uploaded["mime_type"] == "image/png"
-    assert uploaded["content_url"].endswith("/content")
-    assert uploaded["thumbnail_url"].endswith("/content?variant=thumbnail")
-    assert uploaded["preview_url"].endswith("/content?variant=preview")
+    assert uploaded["content_url"].startswith(f"/api/v1/images/{uploaded['id']}/content?")
+    assert "v=" in uploaded["content_url"]
+    assert "variant=thumbnail" in uploaded["thumbnail_url"]
+    assert "v=" in uploaded["thumbnail_url"]
+    assert "variant=preview" in uploaded["preview_url"]
+    assert "v=" in uploaded["preview_url"]
 
     list_response = client.get(f"/api/v1/jigsaws/{jigsaw_id}/images")
     assert list_response.status_code == 200

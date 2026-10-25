@@ -935,7 +935,28 @@ def _serialize_jigsaw(jigsaw):
     }
 
 
+def _normalize_image_content_version(value):
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return 1
+    return normalized if normalized > 0 else 1
+
+
+def _build_image_urls(image_id, content_version):
+    normalized_image_id = int(image_id)
+    normalized_content_version = _normalize_image_content_version(content_version)
+    version_query = f"v={normalized_content_version}"
+    base_url = f"/api/v1/images/{normalized_image_id}/content"
+    return {
+        "content_url": f"{base_url}?{version_query}",
+        "thumbnail_url": f"{base_url}?variant={IMAGE_VARIANT_THUMBNAIL}&{version_query}",
+        "preview_url": f"{base_url}?variant={IMAGE_VARIANT_PREVIEW}&{version_query}",
+    }
+
+
 def _serialize_jigsaw_image(image):
+    urls = _build_image_urls(image.id, getattr(image, "content_version", 1))
     return {
         "id": image.id,
         "jigsaw_id": image.jigsaw_id,
@@ -943,9 +964,10 @@ def _serialize_jigsaw_image(image):
         "tag": image.tag,
         "filename": image.filename,
         "mime_type": image.mime_type,
-        "content_url": f"/api/v1/images/{image.id}/content",
-        "thumbnail_url": f"/api/v1/images/{image.id}/content?variant={IMAGE_VARIANT_THUMBNAIL}",
-        "preview_url": f"/api/v1/images/{image.id}/content?variant={IMAGE_VARIANT_PREVIEW}",
+        "content_version": _normalize_image_content_version(getattr(image, "content_version", 1)),
+        "content_url": urls["content_url"],
+        "thumbnail_url": urls["thumbnail_url"],
+        "preview_url": urls["preview_url"],
         "captured_at": image.captured_at.isoformat() if image.captured_at else None,
         "captured_at_source": image.captured_at_source,
         "user_comment": image.user_comment,
@@ -960,12 +982,14 @@ def _serialize_jigsaw_image_fields(
     tag,
     filename,
     mime_type,
+    content_version,
     captured_at,
     captured_at_source,
     user_comment,
     created_at,
     uploaded_by_user_id=None,
 ):
+    urls = _build_image_urls(image_id, content_version)
     return {
         "id": int(image_id),
         "jigsaw_id": jigsaw_id,
@@ -973,14 +997,31 @@ def _serialize_jigsaw_image_fields(
         "tag": tag,
         "filename": filename,
         "mime_type": mime_type,
-        "content_url": f"/api/v1/images/{int(image_id)}/content",
-        "thumbnail_url": f"/api/v1/images/{int(image_id)}/content?variant={IMAGE_VARIANT_THUMBNAIL}",
-        "preview_url": f"/api/v1/images/{int(image_id)}/content?variant={IMAGE_VARIANT_PREVIEW}",
+        "content_version": _normalize_image_content_version(content_version),
+        "content_url": urls["content_url"],
+        "thumbnail_url": urls["thumbnail_url"],
+        "preview_url": urls["preview_url"],
         "captured_at": captured_at.isoformat() if captured_at else None,
         "captured_at_source": captured_at_source,
         "user_comment": user_comment,
         "created_at": created_at.isoformat() if created_at else None,
     }
+
+
+def _jigsaw_image_metadata_columns():
+    return (
+        JigsawImage.id,
+        JigsawImage.jigsaw_id,
+        JigsawImage.uploaded_by_user_id,
+        JigsawImage.tag,
+        JigsawImage.filename,
+        JigsawImage.mime_type,
+        JigsawImage.content_version,
+        JigsawImage.captured_at,
+        JigsawImage.captured_at_source,
+        JigsawImage.user_comment,
+        JigsawImage.created_at,
+    )
 
 
 def _jigsaw_thumbnail_tag_priority(tag):
@@ -2374,11 +2415,14 @@ def _refresh_image_derivatives_for_image_id(app, image_id):
         if image is None:
             return
 
+        had_missing_derivatives = image.thumbnail_data is None or image.preview_data is None
         variants = _build_image_variants(image.image_data, image.mime_type)
         image.thumbnail_mime_type = variants["thumbnail_mime_type"]
         image.thumbnail_data = variants["thumbnail_data"]
         image.preview_mime_type = variants["preview_mime_type"]
         image.preview_data = variants["preview_data"]
+        if had_missing_derivatives:
+            image.content_version = _normalize_image_content_version(getattr(image, "content_version", 1)) + 1
 
         if image.captured_at is None:
             captured_at, captured_at_source, captured_at_raw = _extract_image_captured_at(image.image_data)
@@ -2549,6 +2593,7 @@ def _create_jigsaw_image_record(
         preview_mime_type=variants["preview_mime_type"],
         preview_data=variants["preview_data"],
         image_sha256=image_sha256,
+        content_version=1,
         captured_at=captured_at,
         captured_at_source=captured_at_source,
         captured_at_raw=captured_at_raw,
@@ -2781,12 +2826,37 @@ def _resolve_image_variant_payload(image, variant):
     return image.image_data, image.mime_type
 
 
+def _variant_has_derived_payload(image, variant):
+    if variant == IMAGE_VARIANT_THUMBNAIL:
+        return bool(image.thumbnail_data)
+    if variant == IMAGE_VARIANT_PREVIEW:
+        return bool(image.preview_data)
+    return True
+
+
+def _requested_image_content_version_matches(image, raw_version):
+    if raw_version is None:
+        return False
+    try:
+        requested_version = int(str(raw_version).strip())
+    except (TypeError, ValueError):
+        return False
+    return requested_version > 0 and requested_version == _normalize_image_content_version(getattr(image, "content_version", 1))
+
+
 def _build_image_content_response(image, variant):
     image_bytes, mime_type = _resolve_image_variant_payload(image, variant)
     response = current_app.response_class(image_bytes, mimetype=mime_type)
-    response.headers["Cache-Control"] = "no-store"
+    has_derived_payload = _variant_has_derived_payload(image, variant)
+    has_versioned_request = _requested_image_content_version_matches(image, request.args.get("v"))
+    if has_versioned_request and has_derived_payload:
+        response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    else:
+        response.headers["Cache-Control"] = "no-store"
     if variant != IMAGE_VARIANT_ORIGINAL:
         response.headers["Vary"] = "Accept"
+    response.set_etag(f'img-{int(image.id)}-{variant}-v{_normalize_image_content_version(getattr(image, "content_version", 1))}')
+    response.make_conditional(request)
     if image.filename and variant == IMAGE_VARIANT_ORIGINAL:
         response.headers["Content-Disposition"] = f'inline; filename="{image.filename}"'
     return response
@@ -4051,15 +4121,28 @@ def list_jigsaw_thumbnail_images():
     _load_current_user()
     db_session = get_session()
 
-    stmt = select(JigsawImage).where(JigsawImage.jigsaw_id.is_not(None))
+    stmt = select(*_jigsaw_image_metadata_columns()).where(JigsawImage.jigsaw_id.is_not(None))
     if "administrator" not in getattr(g, "current_user_roles", []):
         stmt = stmt.join(Jigsaw, Jigsaw.id == JigsawImage.jigsaw_id).where(Jigsaw.status != JigsawStatus.RETIRED)
 
-    images = db_session.execute(stmt.order_by(JigsawImage.id.desc())).scalars().all()
+    image_rows = db_session.execute(stmt.order_by(JigsawImage.id.desc())).all()
 
     preferred_by_jigsaw_id = {}
-    for image in images:
-        jigsaw_id = int(image.jigsaw_id or 0)
+    for image_row in image_rows:
+        image = _serialize_jigsaw_image_fields(
+            image_id=image_row.id,
+            jigsaw_id=image_row.jigsaw_id,
+            uploaded_by_user_id=image_row.uploaded_by_user_id,
+            tag=image_row.tag,
+            filename=image_row.filename,
+            mime_type=image_row.mime_type,
+            content_version=image_row.content_version,
+            captured_at=image_row.captured_at,
+            captured_at_source=image_row.captured_at_source,
+            user_comment=image_row.user_comment,
+            created_at=image_row.created_at,
+        )
+        jigsaw_id = int(image.get("jigsaw_id") or 0)
         if jigsaw_id <= 0:
             continue
 
@@ -4068,12 +4151,12 @@ def list_jigsaw_thumbnail_images():
             preferred_by_jigsaw_id[jigsaw_id] = image
             continue
 
-        candidate_priority = _jigsaw_thumbnail_tag_priority(image.tag)
-        existing_priority = _jigsaw_thumbnail_tag_priority(existing.tag)
+        candidate_priority = _jigsaw_thumbnail_tag_priority(image.get("tag"))
+        existing_priority = _jigsaw_thumbnail_tag_priority(existing.get("tag"))
         if candidate_priority < existing_priority:
             preferred_by_jigsaw_id[jigsaw_id] = image
 
-    payload = [_serialize_jigsaw_image(image) for image in preferred_by_jigsaw_id.values()]
+    payload = list(preferred_by_jigsaw_id.values())
     return _success_response(payload)
 
 
@@ -4515,8 +4598,27 @@ def list_jigsaw_images(jigsaw_id):
     if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
         return _error_response("not_found", "Jigsaw was not found.", 404)
 
-    images = db_session.execute(select(JigsawImage).where(JigsawImage.jigsaw_id == jigsaw.id).order_by(JigsawImage.id.desc())).scalars().all()
-    payload = [_serialize_jigsaw_image(image) for image in images]
+    image_rows = db_session.execute(
+        select(*_jigsaw_image_metadata_columns())
+        .where(JigsawImage.jigsaw_id == jigsaw.id)
+        .order_by(JigsawImage.id.desc())
+    ).all()
+    payload = [
+        _serialize_jigsaw_image_fields(
+            image_id=row.id,
+            jigsaw_id=row.jigsaw_id,
+            uploaded_by_user_id=row.uploaded_by_user_id,
+            tag=row.tag,
+            filename=row.filename,
+            mime_type=row.mime_type,
+            content_version=row.content_version,
+            captured_at=row.captured_at,
+            captured_at_source=row.captured_at_source,
+            user_comment=row.user_comment,
+            created_at=row.created_at,
+        )
+        for row in image_rows
+    ]
     return _success_response(payload)
 
 
@@ -4708,13 +4810,28 @@ def list_image_library_images():
 
     db_session = get_session()
     total_items = int(db_session.execute(select(func.count(JigsawImage.id))).scalar_one() or 0)
-    images = db_session.execute(
-        select(JigsawImage)
+    image_rows = db_session.execute(
+        select(*_jigsaw_image_metadata_columns())
         .order_by(JigsawImage.id.desc())
         .offset(pagination["offset"])
         .limit(pagination["page_size"])
-    ).scalars().all()
-    payload = [_serialize_jigsaw_image(image) for image in images]
+    ).all()
+    payload = [
+        _serialize_jigsaw_image_fields(
+            image_id=row.id,
+            jigsaw_id=row.jigsaw_id,
+            uploaded_by_user_id=row.uploaded_by_user_id,
+            tag=row.tag,
+            filename=row.filename,
+            mime_type=row.mime_type,
+            content_version=row.content_version,
+            captured_at=row.captured_at,
+            captured_at_source=row.captured_at_source,
+            user_comment=row.user_comment,
+            created_at=row.created_at,
+        )
+        for row in image_rows
+    ]
     return _success_list_response(
         payload,
         page=pagination["page"],
@@ -5485,6 +5602,7 @@ def replace_image_library_item_content(image_id):
     image.thumbnail_data = variants["thumbnail_data"]
     image.preview_mime_type = variants["preview_mime_type"]
     image.preview_data = variants["preview_data"]
+    image.content_version = _normalize_image_content_version(getattr(image, "content_version", 1)) + 1
     if captured_at is not None:
         image.captured_at = captured_at
         image.captured_at_source = captured_at_source
@@ -6021,6 +6139,7 @@ def list_diary_feed_entries():
                 JigsawImage.tag,
                 JigsawImage.filename,
                 JigsawImage.mime_type,
+                JigsawImage.content_version,
                 JigsawImage.captured_at,
                 JigsawImage.captured_at_source,
                 JigsawImage.user_comment,
@@ -6034,6 +6153,7 @@ def list_diary_feed_entries():
                 tag=tag,
                 filename=filename,
                 mime_type=mime_type,
+                content_version=content_version,
                 captured_at=captured_at,
                 captured_at_source=captured_at_source,
                 user_comment=user_comment,
@@ -6045,6 +6165,7 @@ def list_diary_feed_entries():
                 tag,
                 filename,
                 mime_type,
+                content_version,
                 captured_at,
                 captured_at_source,
                 user_comment,
@@ -6079,6 +6200,7 @@ def list_diary_feed_entries():
                 JigsawImage.tag,
                 JigsawImage.filename,
                 JigsawImage.mime_type,
+                JigsawImage.content_version,
                 JigsawImage.captured_at,
                 JigsawImage.captured_at_source,
                 JigsawImage.user_comment,
@@ -6101,6 +6223,7 @@ def list_diary_feed_entries():
             tag,
             filename,
             mime_type,
+            content_version,
             captured_at,
             captured_at_source,
             user_comment,
@@ -6114,6 +6237,7 @@ def list_diary_feed_entries():
                 tag=tag,
                 filename=filename,
                 mime_type=mime_type,
+                content_version=content_version,
                 captured_at=captured_at,
                 captured_at_source=captured_at_source,
                 user_comment=user_comment,

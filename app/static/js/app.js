@@ -1908,10 +1908,12 @@
     const sourceImage = entry?.source_image;
     if (sourceImage) {
       const sourceImageId = Number(sourceImage?.id || entry?.source_image_id || 0);
+      const sourceImageVersion = Number(sourceImage?.content_version || 0);
+      const versionQuery = sourceImageVersion > 0 ? `&v=${sourceImageVersion}` : "";
       return {
-        thumbnailUrl: String(sourceImage?.thumbnail_url || (sourceImageId ? `/api/v1/images/${sourceImageId}/content?variant=thumbnail` : "")),
-        previewUrl: String(sourceImage?.preview_url || (sourceImageId ? `/api/v1/images/${sourceImageId}/content?variant=preview` : "")),
-        openUrl: String(sourceImage?.content_url || (sourceImageId ? `/api/v1/images/${sourceImageId}/content` : "")),
+        thumbnailUrl: String(sourceImage?.thumbnail_url || (sourceImageId ? `/api/v1/images/${sourceImageId}/content?variant=thumbnail${versionQuery}` : "")),
+        previewUrl: String(sourceImage?.preview_url || (sourceImageId ? `/api/v1/images/${sourceImageId}/content?variant=preview${versionQuery}` : "")),
+        openUrl: String(sourceImage?.content_url || (sourceImageId ? `/api/v1/images/${sourceImageId}/content${sourceImageVersion > 0 ? `?v=${sourceImageVersion}` : ""}` : "")),
       };
     }
 
@@ -1927,11 +1929,13 @@
     const matchingImage = Array.isArray(state.imageLibraryImages)
       ? state.imageLibraryImages.find((image) => Number(image.id) === sourceImageId)
       : null;
+    const sourceImageVersion = Number(matchingImage?.content_version || 0);
+    const versionQuery = sourceImageVersion > 0 ? `&v=${sourceImageVersion}` : "";
 
     return {
-      thumbnailUrl: String(matchingImage?.thumbnail_url || `/api/v1/images/${sourceImageId}/content?variant=thumbnail`),
-      previewUrl: String(matchingImage?.preview_url || `/api/v1/images/${sourceImageId}/content?variant=preview`),
-      openUrl: String(matchingImage?.content_url || `/api/v1/images/${sourceImageId}/content`),
+      thumbnailUrl: String(matchingImage?.thumbnail_url || `/api/v1/images/${sourceImageId}/content?variant=thumbnail${versionQuery}`),
+      previewUrl: String(matchingImage?.preview_url || `/api/v1/images/${sourceImageId}/content?variant=preview${versionQuery}`),
+      openUrl: String(matchingImage?.content_url || `/api/v1/images/${sourceImageId}/content${sourceImageVersion > 0 ? `?v=${sourceImageVersion}` : ""}`),
     };
   }
 
@@ -2183,6 +2187,15 @@
     setActiveCollectionTab(tabName);
     updateCollectionTabsUi();
     applyCollectionPanelVisibility();
+    if (
+      (tabName === "images" || tabName === "image-browser")
+      && currentUserHasCapability("image.manage_library")
+      && (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0)
+    ) {
+      loadImageLibraryImages().catch(() => {
+        // Loader reports its own errors to feedback UI.
+      });
+    }
     if (tabName === "image-browser") {
       openImageBrowser();
     }
@@ -8202,13 +8215,18 @@
         loadRoles(),
         loadUsers(),
         loadJigsaws(),
+        loadJigsawThumbnailImages(),
         loadLoans(),
         loadAuditEvents(),
         loadBlockedIps(),
         loadAiUsageDiagnostics(),
-        loadImageLibraryImages(),
       ]);
       await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
+      if (currentUserHasCapability("image.manage_library")) {
+        loadImageLibraryImages().catch(() => {
+          // Background refresh errors are surfaced by the image-library loader.
+        });
+      }
     } else {
       clearImageEmbeddingBackfillProgress();
       setImageEmbeddingBackfillStatus("");

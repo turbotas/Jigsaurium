@@ -29,6 +29,7 @@ class JigsawImage(Base):
         LargeBinary().with_variant(mysql.LONGBLOB(), "mysql"), nullable=True
     )
     image_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content_version: Mapped[int] = mapped_column(default=1, nullable=False)
     captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     captured_at_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     captured_at_raw: Mapped[str | None] = mapped_column(String(64), nullable=True)

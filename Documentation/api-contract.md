@@ -289,9 +289,10 @@
   - SVG and other active image-document formats are rejected.
   - Uploaded images are stored in the database for v1.
   - Image payloads include derivative URLs:
-    - `content_url` (original)
-    - `thumbnail_url` (`variant=thumbnail`, optimized for inventory/list tables)
-    - `preview_url` (`variant=preview`, optimized for hover/magnify preview)
+    - `content_url` (original, versioned with `v=<content_version>`)
+    - `thumbnail_url` (`variant=thumbnail`, optimized for inventory/list tables, versioned with `v=<content_version>`)
+    - `preview_url` (`variant=preview`, optimized for hover/magnify preview, versioned with `v=<content_version>`)
+  - Image payloads include `content_version` (monotonic integer for cache-busting image URLs when bytes/derivatives change).
   - Image content hash (`SHA-256`) is used for duplicate suppression; uploading identical bytes returns the existing image instead of creating a duplicate row.
   - Image payloads include optional capture metadata: `captured_at` (UTC ISO 8601) and `captured_at_source`.
   - Image payloads include optional `user_comment` (caller-uploaded feedback/notes for that image).
