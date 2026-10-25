@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Jigsaurium</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/govuk/govuk-frontend.min.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/govuk/govuk-frontend.min.css', v=static_asset_version) }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v=static_asset_version) }}">
   </head>
   <body class="govuk-template__body">
     <script>
@@ -17,7 +17,22 @@
         {% block content %}{% endblock %}
       </div>
     </main>
-    <script src="{{ url_for('static', filename='vendor/govuk/govuk-frontend.min.js') }}"></script>
+    <footer class="app-build-meta" aria-label="Build metadata">
+      <div class="govuk-width-container app-main-container">
+        <p class="govuk-body-s govuk-!-margin-bottom-0">
+          <strong>Environment:</strong> {{ app_environment }}
+          <span class="app-build-meta__divider">|</span>
+          <strong>Version:</strong> {{ app_version }}
+          <span class="app-build-meta__divider">|</span>
+          <strong>Build:</strong> {{ app_build_sha }}
+          {% if app_build_time %}
+            <span class="app-build-meta__divider">|</span>
+            <strong>Built:</strong> {{ app_build_time }}
+          {% endif %}
+        </p>
+      </div>
+    </footer>
+    <script src="{{ url_for('static', filename='vendor/govuk/govuk-frontend.min.js', v=static_asset_version) }}"></script>
     <script>
       if (window.GOVUKFrontend) {
         window.GOVUKFrontend.initAll();

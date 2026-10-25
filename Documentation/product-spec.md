@@ -14,6 +14,9 @@ Build a personal jigsaw collection application centered on inventory management 
   - View available jigsaws.
   - View own borrowing status and history.
   - Borrow and return jigsaws (subject to policy and implementation phase).
+- Guest (unauthenticated)
+  - Browse non-retired jigsaws in the catalog.
+  - Sign in.
 
 ## Delivery Phases
 
@@ -43,6 +46,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 ## Functional Scope (v1)
 
 - Authentication and authorization.
+- Public browse access for jigsaw catalog listing (read-only, non-retired records only).
 - Role management with at least `administrator`, `member`, and legacy `borrower` support during transition.
 - Jigsaw management:
   - Add (quick-add: title + piece count), edit, archive/retire, restore.
@@ -106,5 +110,6 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 - Diary tab supports list and month-calendar modes, with month navigation in calendar mode.
 - Admin can create users and assign one of the supported roles.
 - Borrower cannot access admin-only API endpoints.
+- Unauthenticated users can browse non-retired jigsaws and cannot access authenticated-only features.
 - All create/update/delete actions write an audit event.
 - Core workflows are covered by automated tests.

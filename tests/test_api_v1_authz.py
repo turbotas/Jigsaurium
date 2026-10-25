@@ -130,8 +130,6 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
     ("method", "path", "json_payload"),
     [
         ("GET", "/api/v1/roles", None),
-        ("GET", "/api/v1/jigsaws", None),
-        ("GET", "/api/v1/jigsaws/thumbnail-images", None),
         ("GET", "/api/v1/loans", None),
         ("GET", "/api/v1/ai-usage/diagnostics", None),
         ("GET", "/api/v1/security/blocked-ips", None),
@@ -206,6 +204,26 @@ def test_api_jigsaws_hides_retired_for_non_admin(client, seeded_identity_data):
     titles = [entry["title"] for entry in payload["data"]]
     assert "Harbor Sunset" in titles
     assert "Old Castle" not in titles
+
+
+@pytest.mark.functional
+def test_api_jigsaws_hides_retired_for_unauthenticated_browse(client, seeded_identity_data):
+    response = client.get("/api/v1/jigsaws")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    titles = [entry["title"] for entry in payload["data"]]
+    assert "Harbor Sunset" in titles
+    assert "Old Castle" not in titles
+
+
+@pytest.mark.functional
+def test_api_jigsaw_thumbnail_images_allows_unauthenticated_browse(client, seeded_identity_data):
+    response = client.get("/api/v1/jigsaws/thumbnail-images")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert isinstance(payload["data"], list)
 
 
 @pytest.mark.functional
@@ -844,6 +862,63 @@ def test_admin_can_upload_and_list_jigsaw_images(client, seeded_identity_data):
 
 
 @pytest.mark.functional
+def test_unauthenticated_catalog_browse_can_fetch_thumbnail_and_preview_but_not_original_image(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    jigsaw_id = seeded_identity_data["available_jigsaw_id"]
+
+    upload_response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "box front",
+            "image": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"q" * 128), "guest-browse.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    uploaded = upload_response.get_json()["data"]
+
+    with client.session_transaction() as test_session:
+        test_session.clear()
+
+    thumbnail_response = client.get(uploaded["thumbnail_url"])
+    assert thumbnail_response.status_code == 200
+
+    preview_response = client.get(uploaded["preview_url"])
+    assert preview_response.status_code == 200
+
+    original_response = client.get(uploaded["content_url"])
+    _assert_authentication_required(original_response)
+
+
+@pytest.mark.functional
+def test_unauthenticated_catalog_browse_cannot_fetch_retired_jigsaw_thumbnails(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    retired_jigsaw_id = seeded_identity_data["retired_jigsaw_id"]
+
+    upload_response = client.post(
+        f"/api/v1/jigsaws/{retired_jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={
+            "tag": "box front",
+            "image": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"r" * 128), "retired-thumb.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    uploaded = upload_response.get_json()["data"]
+
+    with client.session_transaction() as test_session:
+        test_session.clear()
+
+    thumbnail_response = client.get(uploaded["thumbnail_url"])
+    assert thumbnail_response.status_code == 404
+
+    preview_response = client.get(uploaded["preview_url"])
+    assert preview_response.status_code == 404
+
+
+@pytest.mark.functional
 def test_admin_can_upload_jigsaw_image_without_tag(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["admin_user_id"])
     jigsaw_id = seeded_identity_data["available_jigsaw_id"]
@@ -1299,16 +1374,20 @@ def test_mobile_capture_related_apis_reject_user_without_required_capabilities(a
 
 
 @pytest.mark.functional
-def test_api_rejects_unknown_session_user(client, seeded_identity_data):
+def test_api_unknown_session_user_browses_public_catalog(client, seeded_identity_data):
     _set_user_session(client, 999999)
 
     response = client.get("/api/v1/jigsaws")
 
-    _assert_authentication_required(response)
+    assert response.status_code == 200
+    payload = response.get_json()
+    titles = [entry["title"] for entry in payload["data"]]
+    assert "Harbor Sunset" in titles
+    assert "Old Castle" not in titles
 
 
 @pytest.mark.functional
-def test_api_rejects_inactive_user_session(app, client, seeded_identity_data):
+def test_api_inactive_user_session_browses_public_catalog(app, client, seeded_identity_data):
     with app.app_context():
         db_session = get_session()
         borrower_user = db_session.query(User).filter_by(email="borrower@example.com").one()
@@ -1318,7 +1397,11 @@ def test_api_rejects_inactive_user_session(app, client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["borrower_user_id"])
     response = client.get("/api/v1/jigsaws")
 
-    _assert_authentication_required(response)
+    assert response.status_code == 200
+    payload = response.get_json()
+    titles = [entry["title"] for entry in payload["data"]]
+    assert "Harbor Sunset" in titles
+    assert "Old Castle" not in titles
 
 
 @pytest.mark.functional

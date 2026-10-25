@@ -9,12 +9,15 @@
 
 ## Auth and Authorization
 
-- API access requires authenticated user context.
+- API access requires authenticated user context except for explicitly public endpoints.
 - Session authentication endpoints:
   - `GET /api/v1/auth/stfd/login-url` (public, returns STFD sign-in URL when STFD mode is enabled)
   - `POST /api/v1/auth/login` (public, expects `token` when STFD mode is enabled; otherwise expects `email` + `password`)
   - `GET /api/v1/auth/me` (authenticated)
   - `POST /api/v1/auth/logout` (authenticated)
+- Public catalog endpoints:
+  - `GET /api/v1/jigsaws` (public read-only browse; unauthenticated and non-admin callers do not see retired jigsaws)
+  - `GET /api/v1/jigsaws/thumbnail-images` (public read-only browse; unauthenticated and non-admin callers do not receive retired-jigsaw thumbnails)
 - Role/capability checks are enforced server-side for all protected routes.
 - Authorization is capability-driven in v1; route handlers validate required capabilities and return `403` for authenticated callers that lack them.
 - Operational health endpoint `GET /api/v1/health` is allowed without authentication.
@@ -259,8 +262,12 @@
 
 - Jigsaw metadata notes:
   - `GET /api/v1/jigsaws` supports optional pagination query params `page` and `page_size` (or legacy `limit` alias).
+  - `GET /api/v1/jigsaws` is public for browse use; unauthenticated and non-admin callers exclude `retired` records.
   - When pagination params are provided, response includes standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
   - `GET /api/v1/jigsaws/thumbnail-images` returns one preferred image per jigsaw for fast stock-list thumbnail rendering.
+  - `GET /api/v1/jigsaws/thumbnail-images` is public for browse use; unauthenticated and non-admin callers exclude thumbnails linked to retired jigsaws.
+  - `GET /api/v1/images/{image_id}/content?variant=thumbnail|preview` is available to unauthenticated callers only for non-retired jigsaw-linked images.
+  - `GET /api/v1/images/{image_id}/content` (`variant=original`) remains authenticated-only.
   - `POST /api/v1/jigsaws` requires `jigsaw.create` capability and allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.
   - `PATCH /api/v1/jigsaws/{id}` requires `jigsaw.update` capability.
   - Non-admin callers cannot set jigsaw status to `retired` through `PATCH /api/v1/jigsaws/{id}`.

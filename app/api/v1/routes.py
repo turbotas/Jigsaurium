@@ -3972,12 +3972,12 @@ def update_user(user_id):
 
 
 @api_v1_bp.get("/jigsaws")
-@require_auth
 def list_jigsaws():
+    _load_current_user()
     db_session = get_session()
     stmt = select(Jigsaw)
 
-    if "administrator" not in g.current_user_roles:
+    if "administrator" not in getattr(g, "current_user_roles", []):
         stmt = stmt.where(Jigsaw.status != JigsawStatus.RETIRED)
 
     raw_status = request.args.get("status")
@@ -4047,12 +4047,12 @@ def list_jigsaws():
 
 
 @api_v1_bp.get("/jigsaws/thumbnail-images")
-@require_auth
 def list_jigsaw_thumbnail_images():
+    _load_current_user()
     db_session = get_session()
 
     stmt = select(JigsawImage).where(JigsawImage.jigsaw_id.is_not(None))
-    if "administrator" not in g.current_user_roles:
+    if "administrator" not in getattr(g, "current_user_roles", []):
         stmt = stmt.join(Jigsaw, Jigsaw.id == JigsawImage.jigsaw_id).where(Jigsaw.status != JigsawStatus.RETIRED)
 
     images = db_session.execute(stmt.order_by(JigsawImage.id.desc())).scalars().all()
@@ -5861,11 +5861,18 @@ def enrich_jigsaw_from_images(jigsaw_id):
 
 
 @api_v1_bp.get("/images/<int:image_id>/content")
-@require_auth
 def get_image_content(image_id):
     variant, error = _parse_image_variant(request.args.get("variant"))
     if error is not None:
         return error
+
+    user = _load_current_user()
+    if user is None and variant == IMAGE_VARIANT_ORIGINAL:
+        return _error_response(
+            "authentication_required",
+            "Authentication is required for this endpoint.",
+            401,
+        )
 
     db_session = get_session()
     image = db_session.get(JigsawImage, image_id)
@@ -5877,8 +5884,10 @@ def get_image_content(image_id):
         if jigsaw is None:
             return _error_response("not_found", "Jigsaw image was not found.", 404)
 
-        if "administrator" not in g.current_user_roles and jigsaw.status == JigsawStatus.RETIRED:
+        if "administrator" not in getattr(g, "current_user_roles", []) and jigsaw.status == JigsawStatus.RETIRED:
             return _error_response("not_found", "Jigsaw image was not found.", 404)
+    elif user is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
 
     return _build_image_content_response(image, variant)
 

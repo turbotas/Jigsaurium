@@ -221,3 +221,19 @@
 - Why: token `sub` and role UNI claims must map deterministically into local authorization state.
 - Decision: emit explicit audit events for `user.provisioned_from_stfd`, `user.synced_from_stfd`, and `auth.login`.
 - Why: operators need a clear trail for first-seen identities, subsequent UNI-linked profile updates, and access events.
+
+## 2026-10-21 - SemVer Releases, Environment Pointers, and Runtime Build Metadata
+
+- Decision: use immutable SemVer release tags (`vMAJOR.MINOR.PATCH`) for container releases.
+- Why: immutable tags provide reproducible deployments, clear rollback points, and auditable release history.
+- Decision: use mutable pointer tags (`dev`, `test`, `prod`) that are promoted to reference a release image without rebuilding.
+- Why: promotion by pointer simplifies staged rollout while preserving release immutability.
+- Decision: surface runtime build metadata (`APP_ENV`, `APP_VERSION`, `APP_BUILD_SHA`, `APP_BUILD_TIME`) in the UI footer and API health response.
+- Why: operators need immediate visibility of deployed environment and version/build identity for diagnostics and change verification.
+
+## 2026-10-24 - Public Catalog Browse for Unauthenticated Users
+
+- Decision: allow unauthenticated users to call `GET /api/v1/jigsaws` and `GET /api/v1/jigsaws/thumbnail-images`.
+- Why: visitors need read-only browse access to the collection before signing in.
+- Decision: keep all non-browse features authenticated and capability-guarded, and continue filtering retired jigsaws for non-admin/unauthenticated callers.
+- Why: this preserves least-privilege defaults while exposing a safe guest catalog surface.

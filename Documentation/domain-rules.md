@@ -28,7 +28,7 @@
   - `on_loan`
   - `maintenance`
   - `retired`
-- Retired jigsaws are hidden from borrower browse views by default.
+- Retired jigsaws are hidden from non-admin browse views by default, including unauthenticated catalog browse.
 - Admins can permanently delete a jigsaw even when it has loan history.
 - Permanent delete removes the jigsaw row and hard-deletes its associated images, diary entries, and loans (active or historic).
 

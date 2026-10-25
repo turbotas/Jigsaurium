@@ -67,6 +67,9 @@ def create_app(config_class="config.Config"):
     install_forwarded_aware_werkzeug_logging()
 
     app.config.setdefault("APP_ENV", "dev")
+    app.config.setdefault("APP_VERSION", "0.0.0-dev")
+    app.config.setdefault("APP_BUILD_SHA", "local")
+    app.config.setdefault("APP_BUILD_TIME", "")
     app.config.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     app.config.setdefault("LOG_LEVEL", "INFO")
     app.config.setdefault("CANONICAL_HOST", "localhost")
@@ -98,6 +101,9 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("STFD_ROLE_UNI_ADMINISTRATOR", "")
     app.config.setdefault("STFD_ROLE_UNI_MEMBER", "")
     app.config.setdefault("STFD_ROLE_UNI_BORROWER", "")
+
+    if app.config.get("APP_ENV") == "dev" or bool(app.config.get("TESTING", False)):
+        app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
     @app.before_request
     def set_request_id():
@@ -177,7 +183,25 @@ def create_app(config_class="config.Config"):
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
         )
+        if app.config.get("APP_ENV") == "dev" or bool(app.config.get("TESTING", False)):
+            if request.path.startswith("/static/"):
+                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                response.headers["Pragma"] = "no-cache"
         return response
+
+    @app.context_processor
+    def inject_build_metadata():
+        app_env = app.config.get("APP_ENV", "dev")
+        static_asset_version = app.config.get("APP_VERSION", "0.0.0-dev")
+        if app_env in {"dev", "test"}:
+            static_asset_version = getattr(g, "request_id", static_asset_version)
+        return {
+            "app_environment": app_env,
+            "app_version": app.config.get("APP_VERSION", "0.0.0-dev"),
+            "app_build_sha": app.config.get("APP_BUILD_SHA", "local"),
+            "app_build_time": app.config.get("APP_BUILD_TIME", ""),
+            "static_asset_version": static_asset_version,
+        }
 
     @app.errorhandler(RequestEntityTooLarge)
     def handle_request_entity_too_large(_error):

@@ -44,6 +44,7 @@
     stfdAuthEnabled: false,
     stfdAllowLocalLogin: true,
     stfdLoginUrl: null,
+    authDialogOpen: false,
     activeWorkspaceTab: null,
     workspaceTabVisibility: {
       account: false,
@@ -155,6 +156,10 @@
     authCredentialsWrap: document.getElementById("auth-credentials-wrap"),
     signInControls: document.getElementById("sign-in-controls"),
     signOutControls: document.getElementById("sign-out-controls"),
+    signInHeaderControls: document.getElementById("sign-in-header-controls"),
+    loginOpenButton: document.getElementById("login-open-button"),
+    authDialogBackdrop: document.getElementById("auth-dialog-backdrop"),
+    authDialogCloseButton: document.getElementById("auth-dialog-close"),
     accountNavButton: document.getElementById("account-nav-button"),
     workspaceTabs: document.getElementById("workspace-tabs"),
     workspaceTabButtons: Array.from(document.querySelectorAll("[data-workspace-tab]")),
@@ -413,6 +418,30 @@
     if (elements.accountNavButton) {
       elements.accountNavButton.hidden = !isSignedIn || isStfdSession;
     }
+    if (elements.signInHeaderControls) {
+      elements.signInHeaderControls.hidden = isSignedIn;
+    }
+  }
+
+  function openAuthDialog() {
+    if (!elements.authDialogBackdrop || state.user) {
+      return;
+    }
+    state.authDialogOpen = true;
+    elements.authDialogBackdrop.hidden = false;
+    syncLoginUiForAuthMode();
+    const targetInput = state.stfdAuthEnabled && !state.stfdAllowLocalLogin ? elements.loginSubmitButton : elements.loginEmail;
+    if (targetInput) {
+      targetInput.focus();
+    }
+  }
+
+  function closeAuthDialog() {
+    if (!elements.authDialogBackdrop) {
+      return;
+    }
+    state.authDialogOpen = false;
+    elements.authDialogBackdrop.hidden = true;
   }
 
   function setImageLibraryLoadSummary(message) {
@@ -2206,17 +2235,17 @@
       state.authProvider = null;
       elements.sessionSummary.textContent = "Not signed in.";
       setWorkspaceSectionAccess("account", false);
-      setWorkspaceSectionAccess("collection", false);
+      setWorkspaceSectionAccess("collection", true);
       setWorkspaceSectionAccess("admin", false);
       setWorkspaceSectionAccess("activityLog", false);
       setWorkspaceSectionAccess("loans", false);
       state.workspaceTabVisibility.account = false;
-      state.workspaceTabVisibility.collection = false;
+      state.workspaceTabVisibility.collection = true;
       state.workspaceTabVisibility.admin = false;
       state.workspaceTabVisibility["activity-log"] = false;
       state.workspaceTabVisibility.loans = false;
       state.collectionTabVisibility["quick-create"] = false;
-      state.collectionTabVisibility.jigsaws = false;
+      state.collectionTabVisibility.jigsaws = true;
       state.collectionTabVisibility.images = false;
       state.collectionTabVisibility["image-browser"] = false;
       state.collectionTabVisibility.diary = false;
@@ -2226,9 +2255,9 @@
       state.editorScrollPositions.user = null;
       state.editorScrollPositions.jigsaw = null;
       state.editorScrollPositions.diary = null;
-      setActiveCollectionTab(null);
+      setActiveCollectionTab("jigsaws");
       setActiveAdminTab(null);
-      setActiveWorkspaceTab(null);
+      setActiveWorkspaceTab("collection");
       updateWorkspaceTabsUi();
       updateCollectionTabsUi();
       updateAdminTabsUi();
@@ -2251,9 +2280,7 @@
       if (elements.logoutButton) {
         elements.logoutButton.hidden = true;
       }
-      if (elements.authSection) {
-        elements.authSection.hidden = false;
-      }
+      closeAuthDialog();
       syncLoginUiForAuthMode();
       syncHeaderAuthControls();
       populateLoanFormOptions();
@@ -2327,9 +2354,7 @@
       elements.signInControls.hidden = true;
     }
     syncHeaderAuthControls();
-    if (elements.authSection) {
-      elements.authSection.hidden = true;
-    }
+    closeAuthDialog();
     if (elements.authCredentialsWrap) {
       elements.authCredentialsWrap.hidden = true;
     }
@@ -2557,10 +2582,11 @@
     const canEnrichJigsaw = currentUserHasCapability("jigsaw.enrich");
     const canDetachJigsawImages = currentUserHasCapability("image.assign");
     const canRetireOrDelete = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
+    const canOpenOriginalImages = Boolean(state.user);
 
     pageResult.rows.forEach((jigsaw) => {
       const row = document.createElement("tr");
-      row.className = "govuk-table__row";
+      row.className = "govuk-table__row app-jigsaw-data-row";
 
       const preferredImage = preferredImagesByJigsawId.get(Number(jigsaw.id));
       const additionalImages = getAdditionalAssignedImagesForJigsaw(jigsaw.id, preferredImage, assignedImagesByJigsawId);
@@ -2570,7 +2596,9 @@
         buildThumbnailCell(preferredImage?.thumbnail_url || preferredImage?.content_url, {
           altText: `Thumbnail for ${jigsaw.title || "jigsaw"}`,
           previewUrl: preferredImage?.preview_url || preferredImage?.content_url,
-          openUrl: preferredImage?.content_url,
+          openUrl: canOpenOriginalImages
+            ? preferredImage?.content_url
+            : (preferredImage?.preview_url || preferredImage?.thumbnail_url || ""),
         })
       );
       const titleCell = document.createElement("td");
@@ -2595,12 +2623,18 @@
 
       titleCell.appendChild(titleWrap);
       row.appendChild(titleCell);
-      row.appendChild(buildCell(String(jigsaw.piece_count || "-")));
-      row.appendChild(buildCell(toLocalTimestamp(jigsaw.last_completed_at)));
+      const piecesCell = buildCell(String(jigsaw.piece_count || "-"));
+      piecesCell.dataset.mobileLabel = "Pieces";
+      row.appendChild(piecesCell);
+
+      const lastCompletedCell = buildCell(toLocalTimestamp(jigsaw.last_completed_at));
+      lastCompletedCell.dataset.mobileLabel = "Last completed";
+      row.appendChild(lastCompletedCell);
 
       const actionCell = document.createElement("td");
       actionCell.className = "govuk-table__cell";
       actionCell.classList.add("app-cell-actions");
+      actionCell.dataset.mobileLabel = "Actions";
 
       const controlsWrap = document.createElement("div");
       controlsWrap.className = "app-inline-controls";
@@ -2685,7 +2719,9 @@
           const thumbnail = buildThumbnailWidget(image.thumbnail_url || image.content_url, {
             altText: `${jigsaw.title || "Jigsaw"} image ${image.id}`,
             previewUrl: image.preview_url || image.content_url,
-            openUrl: image.content_url,
+            openUrl: canOpenOriginalImages
+              ? image.content_url
+              : (image.preview_url || image.thumbnail_url || ""),
             widthPx: 120,
           });
           item.appendChild(thumbnail);
@@ -4994,6 +5030,7 @@
       state.user = payload.data.user;
       state.csrfToken = payload.data.csrf_token || null;
       state.authProvider = String(payload.data.auth_provider || "local").toLowerCase();
+      closeAuthDialog();
       setSessionSummary();
       return true;
     } catch (error) {
@@ -5046,6 +5083,7 @@
       state.user = payload.data.user;
       state.csrfToken = payload.data.csrf_token;
       state.authProvider = String(payload.data.auth_provider || "stfd").toLowerCase();
+      closeAuthDialog();
       setSessionSummary();
 
       url.searchParams.delete("token");
@@ -5119,13 +5157,6 @@
   }
 
   async function loadJigsaws() {
-    if (!state.user) {
-      state.jigsaws = [];
-      renderJigsaws([]);
-      closeJigsawEditor();
-      return;
-    }
-
     try {
       const payload = await apiRequest("/api/v1/jigsaws");
       state.jigsaws = Array.isArray(payload.data) ? payload.data : [];
@@ -5147,12 +5178,6 @@
   }
 
   async function loadJigsawThumbnailImages() {
-    if (!state.user) {
-      state.jigsawThumbnailImages = [];
-      renderJigsaws(state.jigsaws);
-      return;
-    }
-
     try {
       const payload = await apiRequest("/api/v1/jigsaws/thumbnail-images");
       state.jigsawThumbnailImages = Array.isArray(payload.data) ? payload.data : [];
@@ -5760,6 +5785,7 @@
       state.user = payload.data.user;
       state.csrfToken = payload.data.csrf_token;
       state.authProvider = String(payload.data.auth_provider || "local").toLowerCase();
+      closeAuthDialog();
       setSessionSummary();
       showFeedback("Signed in successfully.");
       await Promise.all([
@@ -5803,6 +5829,7 @@
       state.user = null;
       state.csrfToken = null;
       state.authProvider = null;
+      closeAuthDialog();
       setSessionSummary();
       state.users = [];
       state.roleDefinitions = [];
@@ -5864,6 +5891,7 @@
       populateImageLibraryJigsawOptions();
       renderAuditEvents([]);
       updateSortableTableHeaders();
+      await Promise.all([loadJigsaws(), loadJigsawThumbnailImages()]);
       showFeedback("Signed out.");
     } catch (error) {
       showFeedback(error.message, true);
@@ -7670,6 +7698,28 @@
   }
 
   function attachEvents() {
+    if (elements.loginOpenButton) {
+      elements.loginOpenButton.addEventListener("click", openAuthDialog);
+    }
+
+    if (elements.authDialogCloseButton) {
+      elements.authDialogCloseButton.addEventListener("click", closeAuthDialog);
+    }
+
+    if (elements.authDialogBackdrop) {
+      elements.authDialogBackdrop.addEventListener("click", (event) => {
+        if (event.target === elements.authDialogBackdrop) {
+          closeAuthDialog();
+        }
+      });
+    }
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && state.authDialogOpen) {
+        closeAuthDialog();
+      }
+    });
+
     if (elements.loginForm) {
       elements.loginForm.addEventListener("submit", handleLoginSubmit);
     }
@@ -8162,9 +8212,9 @@
     } else {
       clearImageEmbeddingBackfillProgress();
       setImageEmbeddingBackfillStatus("");
+      await Promise.all([loadJigsaws(), loadJigsawThumbnailImages()]);
       renderUsers([]);
       renderUserRoleSelectors();
-      renderJigsaws([]);
       renderLoans([]);
       renderBlockedIps([]);
       renderJigsawImages([]);

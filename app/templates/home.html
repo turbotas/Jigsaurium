@@ -10,8 +10,11 @@
       <a id="mobile-upload-nav-button" href="/mobile-capture" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Mobile upload</a>
       <button id="logout-button" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Sign out</button>
     </div>
+    <div id="sign-in-header-controls" class="app-page-header__actions">
+      <button id="login-open-button" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Sign in</button>
+    </div>
   </div>
-  <p class="govuk-body">Sign in, then manage your account, collection, and administration tasks from this single page.</p>
+  <p class="govuk-body">Browse the jigsaw catalog below, or sign in to manage your account, collection, and administration tasks.</p>
 
   <div id="app-feedback" class="govuk-notification-banner govuk-notification-banner--success" hidden>
     <div class="govuk-notification-banner__header">
@@ -22,30 +25,35 @@
     </div>
   </div>
 
-  <section id="auth-section" class="govuk-!-margin-bottom-8" aria-labelledby="auth-heading">
-    <h2 id="auth-heading" class="govuk-heading-l">Authentication</h2>
-    <form id="login-form" class="govuk-!-margin-bottom-4">
-      <div id="auth-credentials-wrap" class="govuk-grid-row">
-        <div class="govuk-grid-column-one-half">
-          <div class="govuk-form-group">
-            <label class="govuk-label" for="login-email">Email</label>
-            <input id="login-email" name="email" class="govuk-input" type="email" required>
+  <div id="auth-dialog-backdrop" class="app-auth-dialog-backdrop" hidden>
+    <section id="auth-section" class="app-auth-dialog" aria-labelledby="auth-heading" aria-modal="true" role="dialog">
+      <div class="app-auth-dialog__header">
+        <h2 id="auth-heading" class="govuk-heading-m govuk-!-margin-bottom-0">Sign in</h2>
+        <button id="auth-dialog-close" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Close</button>
+      </div>
+      <form id="login-form" class="govuk-!-margin-bottom-4">
+        <div id="auth-credentials-wrap" class="govuk-grid-row">
+          <div class="govuk-grid-column-one-half">
+            <div class="govuk-form-group">
+              <label class="govuk-label" for="login-email">Email</label>
+              <input id="login-email" name="email" class="govuk-input" type="email" required>
+            </div>
+          </div>
+          <div class="govuk-grid-column-one-half">
+            <div class="govuk-form-group">
+              <label class="govuk-label" for="login-password">Password</label>
+              <input id="login-password" name="password" class="govuk-input" type="password" required>
+            </div>
           </div>
         </div>
-        <div class="govuk-grid-column-one-half">
-          <div class="govuk-form-group">
-            <label class="govuk-label" for="login-password">Password</label>
-            <input id="login-password" name="password" class="govuk-input" type="password" required>
-          </div>
+        <div id="sign-in-controls">
+          <button type="submit" class="govuk-button" data-module="govuk-button">Sign in</button>
+          <button id="stfd-login-button" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Sign in with STFD</button>
         </div>
-      </div>
-      <div id="sign-in-controls">
-        <button type="submit" class="govuk-button" data-module="govuk-button">Sign in</button>
-        <button id="stfd-login-button" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Sign in with STFD</button>
-      </div>
-    </form>
-    <p class="govuk-body" id="session-summary">Not signed in.</p>
-  </section>
+      </form>
+      <p class="govuk-body govuk-!-margin-bottom-0" id="session-summary">Not signed in.</p>
+    </section>
+  </div>
 
   <nav id="workspace-tabs" class="app-workspace-tabs govuk-!-margin-bottom-6" aria-label="Main page sections" hidden>
     <ul class="app-workspace-tabs__list" role="tablist">
@@ -1056,5 +1064,5 @@
 {% endblock %}
 
 {% block scripts %}
-  <script src="{{ url_for('static', filename='js/app.js', v=app_version) }}"></script>
+  <script src="{{ url_for('static', filename='js/app.js', v=static_asset_version) }}"></script>
 {% endblock %}
