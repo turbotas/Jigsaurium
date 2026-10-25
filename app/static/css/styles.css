@@ -288,7 +288,8 @@
   }
 
   .app-jigsaws-table .app-jigsaw-data-row .app-thumbnail-trigger {
-    width: 100%;
+    width: 100% !important;
+    max-width: 100%;
     min-height: 78px;
   }
 
