@@ -57,6 +57,48 @@ def ui_server(tmp_path):
         server_thread.join(timeout=5)
 
 
+@pytest.fixture()
+def ui_server_stfd_only(tmp_path):
+    db_path = tmp_path / "ui_stfd_only.db"
+
+    class UITestStfdOnlyConfig:
+        APP_ENV = "test"
+        SECRET_KEY = "ui-test-secret"
+        TESTING = True
+        DATABASE_URL = f"sqlite+pysqlite:///{db_path.as_posix()}"
+        LOG_LEVEL = "INFO"
+        CANONICAL_HOST = "localhost"
+        TRUSTED_PROXY_CIDRS = []
+        TRUSTED_PROXY_HOPS = None
+        SESSION_COOKIE_SECURE = False
+        REMEMBER_COOKIE_SECURE = False
+        PREFERRED_URL_SCHEME = "http"
+        STFD_ENABLED = True
+        STFD_ALLOW_LOCAL_LOGIN = False
+        STFD_APP_UNI = "jigsaurium-test-app-uni"
+        STFD_SHARED_KEY = "test-shared-key-0123456789abcdef0123456789abcdef"
+        STFD_ASSERT_BASE_URL = "https://stfd.example.test/stfd/assert"
+        STFD_REDIRECT_URI = "http://127.0.0.1/"
+        STFD_ROLE_UNI_ADMINISTRATOR = "role-uni-admin"
+        STFD_ROLE_UNI_MEMBER = "role-uni-member"
+        STFD_ROLE_UNI_BORROWER = "role-uni-borrower"
+
+    app = create_app(UITestStfdOnlyConfig)
+    upgrade_database_to_head(UITestStfdOnlyConfig.DATABASE_URL)
+
+    server = make_server("127.0.0.1", 0, app)
+    server_thread = Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        yield base_url
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5)
+
+
 @pytest.mark.functional
 @pytest.mark.ui
 def test_admin_ui_login_and_create_jigsaw(ui_server):
@@ -75,6 +117,21 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         assert page.locator("#sign-in-header-controls").is_visible()
         assert page.locator("#sign-out-controls").is_hidden()
         assert page.locator("#auth-dialog-backdrop").is_hidden()
+
+        page.click("#login-open-button")
+        page.wait_for_selector("#auth-dialog-backdrop:not([hidden])")
+        page.click("#auth-dialog-close")
+        page.wait_for_selector("#auth-dialog-backdrop", state="hidden")
+
+        page.click("#login-open-button")
+        page.wait_for_selector("#auth-dialog-backdrop:not([hidden])")
+        page.locator("#auth-dialog-backdrop").click(position={"x": 5, "y": 5})
+        page.wait_for_selector("#auth-dialog-backdrop", state="hidden")
+
+        page.click("#login-open-button")
+        page.wait_for_selector("#auth-dialog-backdrop:not([hidden])")
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#auth-dialog-backdrop", state="hidden")
 
         page.click("#login-open-button")
         page.wait_for_selector("#auth-dialog-backdrop:not([hidden])")
@@ -409,5 +466,28 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.fill("#login-password", "AdminPassword456!")
         page.click("#login-form button[type='submit']")
         page.wait_for_selector("text=Signed in successfully.")
+
+        browser.close()
+
+
+@pytest.mark.functional
+@pytest.mark.ui
+def test_stfd_only_mode_hides_local_credentials_in_modal(ui_server_stfd_only):
+    with playwright_sync_api.sync_playwright() as playwright:
+        browser = None
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except Exception as error:  # pragma: no cover
+            pytest.skip(f"Playwright browser unavailable: {error}")
+
+        page = browser.new_page()
+        page.goto(ui_server_stfd_only, wait_until="networkidle")
+
+        page.click("#login-open-button")
+        page.wait_for_selector("#auth-dialog-backdrop:not([hidden])")
+
+        assert page.locator("#auth-credentials-wrap").is_hidden()
+        assert page.locator("#stfd-login-button").is_hidden()
+        assert page.locator("#login-form button[type='submit']").inner_text().strip() == "Sign in with STFD"
 
         browser.close()

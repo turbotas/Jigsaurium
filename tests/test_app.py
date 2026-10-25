@@ -1,5 +1,6 @@
 import flask
 import pytest
+import re
 
 from app import create_app
 
@@ -104,3 +105,28 @@ def test_security_headers_are_present_on_html_and_api_responses(client):
         assert response.headers["X-Frame-Options"] == "DENY"
         assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
         assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+
+
+@pytest.mark.functional
+def test_home_route_uses_request_scoped_static_asset_version_in_test_env(client):
+    first_response = client.get("/")
+    second_response = client.get("/")
+
+    first_html = first_response.get_data(as_text=True)
+    second_html = second_response.get_data(as_text=True)
+
+    first_match = re.search(r"/static/js/app\.js\?v=(req_[a-f0-9]{12})", first_html)
+    second_match = re.search(r"/static/js/app\.js\?v=(req_[a-f0-9]{12})", second_html)
+
+    assert first_match is not None
+    assert second_match is not None
+    assert first_match.group(1) != second_match.group(1)
+
+
+@pytest.mark.functional
+def test_static_assets_disable_cache_in_test_env(client):
+    response = client.get("/static/js/app.js")
+
+    assert response.status_code == 200
+    assert "no-store" in response.headers.get("Cache-Control", "")
+    assert response.headers.get("Pragma") == "no-cache"
