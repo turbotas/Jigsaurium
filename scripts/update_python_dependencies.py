@@ -58,6 +58,29 @@ def run_command(command: list[str], repo_root: Path) -> None:
         raise SystemExit(completed.returncode)
 
 
+def run_pip_integrity_check(repo_root: Path) -> None:
+    command = [sys.executable, "-m", "pip", "check"]
+    command_text = " ".join(command)
+    print(f"+ {command_text}")
+    completed = subprocess.run(command, cwd=repo_root, capture_output=True, text=True, check=False)
+
+    stdout = completed.stdout.strip()
+    stderr = completed.stderr.strip()
+    if stdout:
+        print(stdout)
+    if stderr:
+        print(stderr, file=sys.stderr)
+
+    invalid_distribution_seen = "Ignoring invalid distribution" in stderr
+    if invalid_distribution_seen or completed.returncode != 0:
+        print(
+            "Dependency integrity check failed. "
+            "A package install may have been interrupted; rerun the updater after closing any running Python processes.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
 def split_inline_comment(line: str) -> tuple[str, str]:
     hash_index = line.find("#")
     if hash_index == -1:
@@ -273,6 +296,7 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
 
     upgrade_dependencies(repo_root, args.profile, args.targets)
+    run_pip_integrity_check(repo_root)
     installed_versions = read_installed_versions(repo_root)
     ensure_playwright_browser_if_needed(args, repo_root, installed_versions)
     run_tests_if_enabled(args, repo_root)

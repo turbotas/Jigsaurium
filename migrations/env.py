@@ -12,7 +12,7 @@ except ModuleNotFoundError:  # pragma: no cover
     load_dotenv = None
 
 from app import models  # noqa: F401
-from app.db import Base
+from app.db import Base, ensure_sqlite_datetime_adapters
 from config import Config
 
 # this is the Alembic Config object, which provides
@@ -46,6 +46,9 @@ else:
     resolved_database_url = Config.DATABASE_URL
 
 config.set_main_option("sqlalchemy.url", resolved_database_url)
+
+if resolved_database_url.startswith("sqlite"):
+    ensure_sqlite_datetime_adapters()
 
 if resolved_database_url == "sqlite+pysqlite:///:memory:":
     raise RuntimeError(

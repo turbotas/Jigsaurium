@@ -1,3 +1,6 @@
+from datetime import date, datetime
+import sqlite3
+
 from flask import current_app
 from sqlalchemy import create_engine
 from sqlalchemy import MetaData
@@ -17,7 +20,29 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
+_SQLITE_ADAPTERS_REGISTERED = False
+
+
+def _adapt_sqlite_date(value: date) -> str:
+    return value.isoformat()
+
+
+def _adapt_sqlite_datetime(value: datetime) -> str:
+    return value.isoformat(" ")
+
+
+def ensure_sqlite_datetime_adapters() -> None:
+    global _SQLITE_ADAPTERS_REGISTERED
+    if _SQLITE_ADAPTERS_REGISTERED:
+        return
+    sqlite3.register_adapter(date, _adapt_sqlite_date)
+    sqlite3.register_adapter(datetime, _adapt_sqlite_datetime)
+    _SQLITE_ADAPTERS_REGISTERED = True
+
+
 def init_db(app):
+    if app.config["DATABASE_URL"].startswith("sqlite"):
+        ensure_sqlite_datetime_adapters()
     engine = create_engine(app.config["DATABASE_URL"], pool_pre_ping=True)
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     session = scoped_session(session_factory)
