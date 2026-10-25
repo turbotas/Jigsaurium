@@ -67,6 +67,22 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
   - `environments/dev.env.example`
   - `environments/test.env.example`
   - `environments/prod.env.example`
+- Build/release metadata variables are supported:
+  - `APP_VERSION` (for example `v1.2.3`)
+  - `APP_BUILD_SHA` (source commit SHA)
+  - `APP_BUILD_TIME` (UTC build timestamp)
+- Environment/version/build metadata is shown in the UI footer and in `GET /api/v1/health`.
+
+## Embedding model prefetch
+
+- Prefetch the pinned embedding model into the local vendored path:
+  - Windows: `.venv\Scripts\python.exe scripts\prefetch_embedding_model.py`
+  - Linux/macOS: `.venv/bin/python scripts/prefetch_embedding_model.py`
+- Optional overrides:
+  - `--revision <commit-or-tag>`
+  - `--target-dir <path>`
+  - `--token <hf_token>` (or set `HF_TOKEN`)
+  - `--keep-existing` (incremental refresh)
 
 ## Testing
 

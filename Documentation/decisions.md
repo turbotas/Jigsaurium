@@ -237,3 +237,12 @@
 - Why: visitors need read-only browse access to the collection before signing in.
 - Decision: keep all non-browse features authenticated and capability-guarded, and continue filtering retired jigsaws for non-admin/unauthenticated callers.
 - Why: this preserves least-privilege defaults while exposing a safe guest catalog surface.
+
+## 2026-10-25 - Deterministic Embedding Runtime with Startup Warm Load
+
+- Decision: pin embedding model revision to a specific commit and support vendored local-path loading (`IMAGE_EMBEDDING_MODEL_LOCAL_PATH`) with local-only mode enabled by default.
+- Why: deterministic performance and behavior require eliminating runtime drift and preventing implicit Hub fetches.
+- Decision: warm-load the embedding model at app startup when embeddings are enabled, with configurable fail-fast behavior on startup errors.
+- Why: first embedding request previously absorbed model load latency and could time out; startup warm-load moves that cost out of user request paths.
+- Decision: add admin diagnostics API/UI for embeddings health and performance (`GET /api/v1/image-embeddings/diagnostics`).
+- Why: operators need visibility into stale/missing embeddings and observed per-image compute timings to manage backfills and runtime readiness.

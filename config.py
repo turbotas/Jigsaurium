@@ -27,6 +27,9 @@ def _parse_bool(value, default=False):
 
 class Config:
     APP_ENV = os.getenv("APP_ENV", "dev")
+    APP_VERSION = os.getenv("APP_VERSION", "0.0.0-dev")
+    APP_BUILD_SHA = os.getenv("APP_BUILD_SHA", "local")
+    APP_BUILD_TIME = os.getenv("APP_BUILD_TIME", "")
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -44,6 +47,13 @@ class Config:
     IMAGE_EMBEDDINGS_ENABLED = _parse_bool(os.getenv("IMAGE_EMBEDDINGS_ENABLED"), default=False)
     IMAGE_EMBEDDING_MODEL_NAME = os.getenv("IMAGE_EMBEDDING_MODEL_NAME", "openai/clip-vit-base-patch32")
     IMAGE_EMBEDDING_MODEL_REVISION = os.getenv("IMAGE_EMBEDDING_MODEL_REVISION", "main")
+    IMAGE_EMBEDDING_MODEL_LOCAL_PATH = os.getenv("IMAGE_EMBEDDING_MODEL_LOCAL_PATH", "")
+    IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY = _parse_bool(os.getenv("IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY"), default=True)
+    IMAGE_EMBEDDINGS_WARM_ON_STARTUP = _parse_bool(os.getenv("IMAGE_EMBEDDINGS_WARM_ON_STARTUP"), default=True)
+    IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR = _parse_bool(
+        os.getenv("IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR"),
+        default=True,
+    )
     IMAGE_EMBEDDINGS_INLINE = _parse_bool(os.getenv("IMAGE_EMBEDDINGS_INLINE"), default=False)
     IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK = _parse_bool(
         os.getenv("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK"),

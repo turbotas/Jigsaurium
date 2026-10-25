@@ -7,6 +7,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.db import get_session, init_db
 from app.dev_server import install_forwarded_aware_werkzeug_logging
+from app.image_embeddings import warm_embedding_runtime
 from app.request_security import (
     AUTO_BLOCK_SOURCE,
     build_auto_blocked_until,
@@ -61,6 +62,50 @@ def _validate_stfd_config_on_startup(app):
         app.logger.warning("STFD_SHARED_KEY is shorter than recommended (32+ chars).")
 
 
+def _warm_embeddings_on_startup(app):
+    if not bool(app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
+        return
+    if not bool(app.config.get("IMAGE_EMBEDDINGS_WARM_ON_STARTUP", True)):
+        return
+
+    model_name = str(app.config.get("IMAGE_EMBEDDING_MODEL_NAME") or "").strip() or "openai/clip-vit-base-patch32"
+    model_revision = str(app.config.get("IMAGE_EMBEDDING_MODEL_REVISION") or "").strip() or "main"
+    model_local_path = str(app.config.get("IMAGE_EMBEDDING_MODEL_LOCAL_PATH") or "").strip()
+    local_files_only = bool(app.config.get("IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY", False))
+
+    app.logger.info(
+        "image_embeddings_startup_warm_loading",
+        extra={
+            "model_name": model_name,
+            "model_revision": model_revision,
+            "model_local_path": model_local_path or None,
+            "local_files_only": local_files_only,
+        },
+    )
+
+    try:
+        result = warm_embedding_runtime(
+            model_name=model_name,
+            model_revision=model_revision,
+            model_local_path=model_local_path,
+            local_files_only=local_files_only,
+        )
+        app.logger.info(
+            "image_embeddings_startup_warm_loaded",
+            extra={
+                "model_name": model_name,
+                "model_revision": model_revision,
+                "model_local_path": model_local_path or None,
+                "local_files_only": local_files_only,
+                "load_seconds": round(float(result.get("duration_seconds", 0.0)), 3),
+            },
+        )
+    except Exception:
+        app.logger.exception("image_embeddings_startup_warm_failed")
+        if bool(app.config.get("IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR", True)):
+            raise
+
+
 def create_app(config_class="config.Config"):
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_object(config_class)
@@ -86,6 +131,10 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("IMAGE_EMBEDDINGS_ENABLED", False)
     app.config.setdefault("IMAGE_EMBEDDING_MODEL_NAME", "openai/clip-vit-base-patch32")
     app.config.setdefault("IMAGE_EMBEDDING_MODEL_REVISION", "main")
+    app.config.setdefault("IMAGE_EMBEDDING_MODEL_LOCAL_PATH", "")
+    app.config.setdefault("IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY", True)
+    app.config.setdefault("IMAGE_EMBEDDINGS_WARM_ON_STARTUP", not bool(app.config.get("TESTING", False)))
+    app.config.setdefault("IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR", True)
     app.config.setdefault("IMAGE_EMBEDDINGS_INLINE", bool(app.config.get("TESTING", False)))
     app.config.setdefault("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", bool(app.config.get("TESTING", False)))
     app.config.setdefault("IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES", ["box", "reference"])
@@ -230,4 +279,5 @@ def create_app(config_class="config.Config"):
     reset_request_security_state()
     start_bulk_ai_create_worker(app)
     _validate_stfd_config_on_startup(app)
+    _warm_embeddings_on_startup(app)
     return app

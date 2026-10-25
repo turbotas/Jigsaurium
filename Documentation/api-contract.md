@@ -67,6 +67,7 @@
 - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}/items`
 - `POST /api/v1/image-embeddings/backfill`
 - `GET /api/v1/image-embeddings/backfill/{job_id}`
+- `GET /api/v1/image-embeddings/diagnostics`
 - `GET /api/v1/image-library/images/{image_id}/match-suggestions`
 - `GET /api/v1/images/{image_id}/content`
 - `GET /api/v1/jigsaws/{id}/diary-entries`
@@ -83,6 +84,7 @@
   - `version`: deployed app version (`APP_VERSION`)
   - `build_sha`: source commit SHA (`APP_BUILD_SHA`)
   - `build_time`: UTC build timestamp (`APP_BUILD_TIME`, may be blank for local builds)
+  - `image_embeddings`: embedding runtime snapshot (`enabled`, model identity, local-only mode, runtime readiness/error)
 
 ## Filtering, Sorting, Pagination
 
@@ -335,8 +337,17 @@
   - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}` returns aggregate job status and counters (`queued` / `running` / `completed` / `failed`).
   - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}/items` returns per-image outcomes with list pagination.
   - `POST /api/v1/image-embeddings/backfill` is admin-only and queues an image-embedding backfill job across all stored images.
+  - `POST /api/v1/image-embeddings/backfill` accepts optional JSON field `scope`:
+    - `all` (default): recompute embeddings for all images
+    - `missing`: compute embeddings only for images missing an embedding row for the active model key
   - `POST /api/v1/image-embeddings/backfill` returns `409` when embedding runtime dependencies are unavailable (for example incompatible `transformers` install).
-  - `GET /api/v1/image-embeddings/backfill/{job_id}` is admin-only and returns backfill job status/counters.
+  - `GET /api/v1/image-embeddings/backfill/{job_id}` is admin-only and returns backfill job status/counters plus `scope`.
+  - `GET /api/v1/image-embeddings/diagnostics` is admin-only and returns:
+    - model configuration (`name`, `revision`, `model_key`, `local_path`, `local_files_only`)
+    - health counters (`total_images`, `up_to_date_embeddings`, `stale_embeddings`, `missing_embeddings`, `all_images_up_to_date`)
+    - `missing_images` preview list with image ids and content/thumbnail URLs
+    - performance summary (`samples`, `min_ms`, `avg_ms`, `p95_ms`, `max_ms`)
+    - latest backfill job summary for the active model key.
   - `GET /api/v1/image-library/images/{image_id}/match-suggestions` requires `image.assign` capability and returns top visual-match jigsaw candidates for one unassigned `Completed` image.
   - `GET /api/v1/image-library/images/{image_id}/match-suggestions` returns `409` when embedding runtime dependencies are unavailable.
   - Each match candidate includes `reference_image` URLs (`content_url`, `thumbnail_url`, `preview_url`) so the admin UI can show side-by-side visual confirmation.

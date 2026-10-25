@@ -1,6 +1,8 @@
 import hashlib
 import math
+import os
 import threading
+import time
 from io import BytesIO
 
 
@@ -70,7 +72,7 @@ def _compute_test_fallback_embedding(image_bytes):
     return _normalize_vector(values)
 
 
-def _load_clip_model(model_name, model_revision):
+def _load_clip_model(model_name, model_revision, *, model_local_path=None, local_files_only=False):
     from transformers import AutoModel
 
     try:
@@ -78,13 +80,39 @@ def _load_clip_model(model_name, model_revision):
     except ImportError:
         from transformers import CLIPProcessor as AutoProcessor
 
-    model_key = f"{model_name}@{model_revision}"
+    resolved_local_path = str(model_local_path or "").strip()
+    model_source = resolved_local_path or model_name
+    model_key = f"{model_source}@{model_revision}|local_only={bool(local_files_only)}"
     with _MODEL_LOCK:
         if _MODEL_CACHE["model_key"] == model_key and _MODEL_CACHE["processor"] is not None and _MODEL_CACHE["model"] is not None:
             return _MODEL_CACHE["processor"], _MODEL_CACHE["model"]
 
-        processor = AutoProcessor.from_pretrained(model_name, revision=model_revision, use_fast=False)
-        model = AutoModel.from_pretrained(model_name, revision=model_revision)
+        if resolved_local_path and not os.path.isdir(resolved_local_path):
+            raise RuntimeError(f"Configured embedding model path does not exist: {resolved_local_path}")
+
+        load_kwargs = {}
+        if resolved_local_path:
+            load_kwargs["local_files_only"] = True
+        elif bool(local_files_only):
+            load_kwargs["local_files_only"] = True
+            if model_revision:
+                load_kwargs["revision"] = model_revision
+        elif model_revision:
+            load_kwargs["revision"] = model_revision
+
+        try:
+            processor = AutoProcessor.from_pretrained(
+                model_source,
+                backend="pil",
+                **load_kwargs,
+            )
+        except TypeError:
+            processor = AutoProcessor.from_pretrained(
+                model_source,
+                use_fast=False,
+                **load_kwargs,
+            )
+        model = AutoModel.from_pretrained(model_source, **load_kwargs)
         model.eval()
 
         _MODEL_CACHE["model_key"] = model_key
@@ -121,7 +149,35 @@ def build_model_key(model_name, model_revision):
     return f"{str(model_name or '').strip()}@{str(model_revision or '').strip()}"
 
 
-def compute_image_embedding(image_bytes, *, model_name, model_revision, allow_test_fallback=False):
+def warm_embedding_runtime(*, model_name, model_revision, model_local_path=None, local_files_only=False):
+    runtime_error = embedding_runtime_error()
+    if runtime_error is not None:
+        raise RuntimeError(runtime_error)
+
+    started = time.perf_counter()
+    processor, model = _load_clip_model(
+        model_name,
+        model_revision,
+        model_local_path=model_local_path,
+        local_files_only=local_files_only,
+    )
+    duration_seconds = time.perf_counter() - started
+    return {
+        "processor_loaded": processor is not None,
+        "model_loaded": model is not None,
+        "duration_seconds": duration_seconds,
+    }
+
+
+def compute_image_embedding(
+    image_bytes,
+    *,
+    model_name,
+    model_revision,
+    model_local_path=None,
+    local_files_only=False,
+    allow_test_fallback=False,
+):
     if allow_test_fallback:
         runtime_error = embedding_runtime_error()
         if runtime_error is not None:
@@ -136,7 +192,12 @@ def compute_image_embedding(image_bytes, *, model_name, model_revision, allow_te
         raise RuntimeError("Image embedding dependencies are not installed.") from error
 
     try:
-        processor, model = _load_clip_model(model_name, model_revision)
+        processor, model = _load_clip_model(
+            model_name,
+            model_revision,
+            model_local_path=model_local_path,
+            local_files_only=local_files_only,
+        )
     except Exception as error:
         if allow_test_fallback:
             return _compute_test_fallback_embedding(image_bytes)

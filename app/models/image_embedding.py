@@ -19,5 +19,6 @@ class ImageEmbedding(Base):
     vector_json: Mapped[str] = mapped_column(Text(), nullable=False)
     vector_dim: Mapped[int] = mapped_column(Integer(), nullable=False)
     source_content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    compute_duration_ms: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

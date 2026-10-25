@@ -16,6 +16,7 @@ class ImageEmbeddingJob(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, default="all")
     model_key: Mapped[str] = mapped_column(String(255), nullable=False)
     total_items: Mapped[int] = mapped_column(Integer(), nullable=False, default=0)
     processed_items: Mapped[int] = mapped_column(Integer(), nullable=False, default=0)

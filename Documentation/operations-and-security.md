@@ -22,6 +22,9 @@
 - `DATABASE_URL`: SQLAlchemy MariaDB connection string.
 - `SECRET_KEY`: Flask secret key.
 - `APP_ENV`: one of `dev`, `test`, `prod`.
+- `APP_VERSION`: deployed application version (SemVer or release tag such as `v1.2.3`).
+- `APP_BUILD_SHA`: source commit SHA for the deployed build.
+- `APP_BUILD_TIME`: UTC build timestamp for the deployed build.
 - `LOG_LEVEL`: application logging level.
 - `CANONICAL_HOST`: expected public host per environment.
 - `MAX_CONTENT_LENGTH_BYTES`: optional hard cap for inbound request payload size (defaults to `33554432` / 32 MiB).
@@ -47,15 +50,29 @@
 - `IMAGE_EMBEDDINGS_ENABLED`: enable/disable CLIP embedding generation and visual match suggestion APIs.
 - `IMAGE_EMBEDDING_MODEL_NAME`: CLIP model identifier used for embedding generation (default `openai/clip-vit-base-patch32`).
 - `IMAGE_EMBEDDING_MODEL_REVISION`: model revision/tag used with `IMAGE_EMBEDDING_MODEL_NAME`.
+- `IMAGE_EMBEDDING_MODEL_LOCAL_PATH`: optional local filesystem path for vendored model artifacts; when set, runtime loads from disk path instead of Hub repo id.
+- `IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY`: when `1`, forbid network fetches while loading embeddings (`local_files_only=True`).
+- `IMAGE_EMBEDDINGS_WARM_ON_STARTUP`: when `1`, force model load during app startup so first request does not absorb model-load latency.
+- `IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR`: when `1`, fail app startup if embedding warm-load fails.
 - `IMAGE_EMBEDDINGS_INLINE`: optional boolean for embedding generation mode (`false` = background threads, `true` = inline).
 - `IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK`: optional boolean to allow deterministic non-CLIP fallback embeddings in test-only environments.
 - `IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES`: comma-separated tag prefixes that count as visual-match references (default `box,reference`).
+- `HF_TOKEN`: optional Hugging Face access token for authenticated build-time downloads (runtime should not require this when vendored local model mode is enabled).
 
 ## Canonical Hosts
 
 - Dev: `www.dev.jigsaurium.lateral-thought.co.uk`
 - Test: `www.test.jigsaurium.lateral-thought.co.uk`
 - Prod: `www.jigsaurium.lateral-thought.co.uk`
+
+## Embedding Model Provisioning
+
+- For deterministic embedding startup, prefetch the pinned model revision into `IMAGE_EMBEDDING_MODEL_LOCAL_PATH` before enabling embeddings.
+- Example (run from repo root):
+  - Windows: `.venv\Scripts\python.exe scripts\prefetch_embedding_model.py`
+  - Linux/macOS: `.venv/bin/python scripts/prefetch_embedding_model.py`
+- Optional: pass `--token` or set `HF_TOKEN` for higher download limits.
+- With `IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY=1`, startup and embedding requests fail fast if that local path is missing or incomplete.
 
 ## Proxy Header Handling
 

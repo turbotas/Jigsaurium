@@ -10,6 +10,8 @@ This folder defines the product, architecture, and delivery rules for Jigsaurium
 - `operations-and-security.md`: runtime config, proxy trust model, logging, and release checks.
 - `roadmap.md`: Phase-based delivery plan for multiple developers.
 - `decisions.md`: ADR-style decision log.
+- `release-and-versioning.md`: SemVer tags, environment pointers, and release/promotion flow.
+- `truenas-compose-import.md`: production compose baseline and TrueNAS YAML import notes.
 
 ## Working Agreement
 
@@ -44,6 +46,7 @@ This folder defines the product, architecture, and delivery rules for Jigsaurium
   - test execution (`scripts/run_tests.bat`, `scripts/run_tests.sh`)
   - direct interpreter test execution (`.venv\\Scripts\\python.exe -m pytest` on Windows, `.venv/bin/python -m pytest` on Linux/macOS)
   - dependency checks (`scripts/check_updates.bat`, `scripts/check_updates.sh`)
+  - embedding model prefetch (`scripts/prefetch_embedding_model.py`)
   - targeted Python dependency updates + known-good lock refresh (`scripts/update_python_dependencies.bat`, `scripts/update_python_dependencies.sh`)
   - GOV.UK asset updates (`scripts/update_govuk_assets.bat`, `scripts/update_govuk_assets.sh`)
   - admin bootstrap (`scripts/bootstrap_admin.py`)

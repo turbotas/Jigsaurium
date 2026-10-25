@@ -65,6 +65,7 @@
     adminTabVisibility: {
       users: false,
       ai: false,
+      embeddings: false,
       "ip-blocks": false,
     },
     workspaceSectionAccess: {
@@ -90,6 +91,7 @@
     imageLibraryFilterUnassigned: true,
     imageLibraryFilterTagSelections: {},
     aiUsageDiagnostics: null,
+    imageEmbeddingDiagnostics: null,
     aiUsageRecentById: {},
     imageBrowserContentCacheByImageId: {},
     imageBrowserSavingImageIds: {},
@@ -183,6 +185,7 @@
     collectionDiaryPanel: document.getElementById("collection-diary-panel"),
     imageLibraryLoadSummary: document.getElementById("image-library-load-summary"),
     aiUsageSection: document.getElementById("ai-usage-section"),
+    embeddingsSection: document.getElementById("embeddings-section"),
     loansSection: document.getElementById("loans-section"),
     auditSection: document.getElementById("audit-section"),
     ipBlocksSection: document.getElementById("ip-blocks-section"),
@@ -245,8 +248,22 @@
     imageLibraryPaginationTop: document.getElementById("image-library-pagination-top"),
     imageLibraryPagination: document.getElementById("image-library-pagination"),
     imageLibraryBulkCreateUnassignedBoxButton: document.getElementById("image-library-bulk-create-unassigned-box"),
+    imageEmbeddingBackfillMissing: document.getElementById("image-embedding-backfill-missing"),
     imageEmbeddingBackfillStart: document.getElementById("image-embedding-backfill-start"),
     imageEmbeddingBackfillStatus: document.getElementById("image-embedding-backfill-status"),
+    embeddingsModelKey: document.getElementById("embeddings-model-key"),
+    embeddingsModelSource: document.getElementById("embeddings-model-source"),
+    embeddingsLocalOnly: document.getElementById("embeddings-local-only"),
+    embeddingsHealthTotalImages: document.getElementById("embeddings-health-total-images"),
+    embeddingsHealthUpToDate: document.getElementById("embeddings-health-up-to-date"),
+    embeddingsHealthStale: document.getElementById("embeddings-health-stale"),
+    embeddingsHealthMissing: document.getElementById("embeddings-health-missing"),
+    embeddingsHealthStatus: document.getElementById("embeddings-health-status"),
+    embeddingsPerfSamples: document.getElementById("embeddings-perf-samples"),
+    embeddingsPerfAvgMs: document.getElementById("embeddings-perf-avg-ms"),
+    embeddingsPerfP95Ms: document.getElementById("embeddings-perf-p95-ms"),
+    embeddingsPerfMinMaxMs: document.getElementById("embeddings-perf-min-max-ms"),
+    embeddingsMissingGrid: document.getElementById("embeddings-missing-grid"),
     imageBrowserOpen: document.getElementById("image-browser-open"),
     imageBrowserModal: document.getElementById("image-browser-modal"),
     imageBrowserStatus: document.getElementById("image-browser-status"),
@@ -1202,6 +1219,14 @@
     return `$${parsed.toFixed(4)}`;
   }
 
+  function toMillisecondsLabel(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return "-";
+    }
+    return `${Math.trunc(parsed).toLocaleString()} ms`;
+  }
+
   function buildAiStatusTag(statusValue) {
     const normalizedStatus = String(statusValue || "").trim().toLowerCase();
     const tag = document.createElement("span");
@@ -1978,7 +2003,7 @@
   }
 
   function getFirstVisibleAdminTab() {
-    const tabOrder = ["users", "ai", "ip-blocks"];
+    const tabOrder = ["users", "ai", "embeddings", "ip-blocks"];
     return tabOrder.find((tabName) => state.adminTabVisibility[tabName]) || null;
   }
 
@@ -2109,6 +2134,9 @@
       if (elements.aiUsageSection) {
         elements.aiUsageSection.hidden = true;
       }
+      if (elements.embeddingsSection) {
+        elements.embeddingsSection.hidden = true;
+      }
       if (elements.ipBlocksSection) {
         elements.ipBlocksSection.hidden = true;
       }
@@ -2122,6 +2150,9 @@
     }
     if (elements.aiUsageSection) {
       elements.aiUsageSection.hidden = !(state.adminTabVisibility.ai && activeAdminTab === "ai");
+    }
+    if (elements.embeddingsSection) {
+      elements.embeddingsSection.hidden = !(state.adminTabVisibility.embeddings && activeAdminTab === "embeddings");
     }
     if (elements.ipBlocksSection) {
       elements.ipBlocksSection.hidden = !(state.adminTabVisibility["ip-blocks"] && activeAdminTab === "ip-blocks");
@@ -2264,6 +2295,7 @@
       state.collectionTabVisibility.diary = false;
       state.adminTabVisibility.users = false;
       state.adminTabVisibility.ai = false;
+      state.adminTabVisibility.embeddings = false;
       state.adminTabVisibility["ip-blocks"] = false;
       state.editorScrollPositions.user = null;
       state.editorScrollPositions.jigsaw = null;
@@ -2326,8 +2358,9 @@
     const canAccessCollection = canReadJigsaw || canReadDiary || canManageImages || canCreateJigsaw;
     const canAccessAdminUsers = canManageUsers;
     const canAccessAdminAi = canManageAi;
+    const canAccessAdminEmbeddings = isAdministrator;
     const canAccessAdminIpBlocks = canManageSecurity;
-    const canAccessAdmin = canAccessAdminUsers || canAccessAdminAi || canAccessAdminIpBlocks;
+    const canAccessAdmin = canAccessAdminUsers || canAccessAdminAi || canAccessAdminEmbeddings || canAccessAdminIpBlocks;
     const canAccessActivityLog = canReadAudit;
     const canAccessLoans = Boolean(isAdministrator && canManageLoans);
 
@@ -2351,6 +2384,7 @@
 
     state.adminTabVisibility.users = canAccessAdminUsers;
     state.adminTabVisibility.ai = canAccessAdminAi;
+    state.adminTabVisibility.embeddings = canAccessAdminEmbeddings;
     state.adminTabVisibility["ip-blocks"] = canAccessAdminIpBlocks;
 
     setActiveCollectionTab(state.activeCollectionTab);
@@ -3037,6 +3071,94 @@
     });
 
     renderPaginationPair(elements.aiUsageRecentPaginationTop, elements.aiUsageRecentPagination, "aiRecent", pageResult);
+  }
+
+  function renderImageEmbeddingDiagnostics(diagnostics) {
+    const model = diagnostics?.model || {};
+    const health = diagnostics?.health || {};
+    const performance = diagnostics?.performance || {};
+    const hasDiagnostics = Boolean(diagnostics);
+
+    if (elements.embeddingsModelKey) {
+      elements.embeddingsModelKey.textContent = String(model.model_key || "-");
+    }
+    if (elements.embeddingsModelSource) {
+      const localPath = String(model.local_path || "").trim();
+      elements.embeddingsModelSource.textContent = localPath || String(model.name || "-");
+    }
+    if (elements.embeddingsLocalOnly) {
+      elements.embeddingsLocalOnly.textContent = hasDiagnostics ? (model.local_files_only ? "Yes" : "No") : "-";
+    }
+
+    if (elements.embeddingsHealthTotalImages) {
+      elements.embeddingsHealthTotalImages.textContent = toIntegerLabel(health.total_images);
+    }
+    if (elements.embeddingsHealthUpToDate) {
+      elements.embeddingsHealthUpToDate.textContent = toIntegerLabel(health.up_to_date_embeddings);
+    }
+    if (elements.embeddingsHealthStale) {
+      elements.embeddingsHealthStale.textContent = toIntegerLabel(health.stale_embeddings);
+    }
+    if (elements.embeddingsHealthMissing) {
+      elements.embeddingsHealthMissing.textContent = toIntegerLabel(health.missing_embeddings);
+    }
+    if (elements.embeddingsHealthStatus) {
+      elements.embeddingsHealthStatus.textContent = !hasDiagnostics
+        ? "Unknown"
+        : health.all_images_up_to_date
+          ? "Healthy (all up to date)"
+          : "Attention needed";
+    }
+
+    if (elements.embeddingsPerfSamples) {
+      elements.embeddingsPerfSamples.textContent = toIntegerLabel(performance.samples);
+    }
+    if (elements.embeddingsPerfAvgMs) {
+      elements.embeddingsPerfAvgMs.textContent = toMillisecondsLabel(performance.avg_ms);
+    }
+    if (elements.embeddingsPerfP95Ms) {
+      elements.embeddingsPerfP95Ms.textContent = toMillisecondsLabel(performance.p95_ms);
+    }
+    if (elements.embeddingsPerfMinMaxMs) {
+      const minMs = toMillisecondsLabel(performance.min_ms);
+      const maxMs = toMillisecondsLabel(performance.max_ms);
+      elements.embeddingsPerfMinMaxMs.textContent = minMs === "-" && maxMs === "-" ? "-" : `${minMs} / ${maxMs}`;
+    }
+
+    if (elements.embeddingsMissingGrid) {
+      elements.embeddingsMissingGrid.innerHTML = "";
+      const missingImages = Array.isArray(diagnostics?.missing_images) ? diagnostics.missing_images : [];
+      if (missingImages.length === 0) {
+        const emptyState = document.createElement("p");
+        emptyState.className = "govuk-body govuk-!-margin-bottom-0";
+        emptyState.textContent = "No missing embeddings in preview.";
+        elements.embeddingsMissingGrid.appendChild(emptyState);
+      } else {
+        missingImages.forEach((image) => {
+          const card = document.createElement("article");
+          card.className = "app-embedding-missing-card";
+
+          const thumbWrap = document.createElement("div");
+          thumbWrap.className = "app-embedding-missing-thumb";
+          thumbWrap.appendChild(
+            buildThumbnailWidget(String(image.thumbnail_url || ""), {
+              altText: String(image.filename || `Image #${image.id || "?"}`),
+              openUrl: String(image.content_url || ""),
+              previewUrl: String(image.preview_url || image.content_url || ""),
+              widthPx: 120,
+            }),
+          );
+
+          const meta = document.createElement("p");
+          meta.className = "govuk-body-s govuk-!-margin-bottom-0";
+          meta.textContent = `#${image.id} ${String(image.filename || "(unnamed)")}`;
+
+          card.appendChild(thumbWrap);
+          card.appendChild(meta);
+          elements.embeddingsMissingGrid.appendChild(card);
+        });
+      }
+    }
   }
 
   function renderLoans(loans) {
@@ -5766,6 +5888,27 @@
     }
   }
 
+  async function loadImageEmbeddingDiagnostics() {
+    if (!state.user) {
+      state.imageEmbeddingDiagnostics = null;
+      renderImageEmbeddingDiagnostics(null);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest("/api/v1/image-embeddings/diagnostics");
+      state.imageEmbeddingDiagnostics = payload?.data || null;
+      renderImageEmbeddingDiagnostics(state.imageEmbeddingDiagnostics);
+    } catch (error) {
+      if (error.status === 403) {
+        state.imageEmbeddingDiagnostics = null;
+        renderImageEmbeddingDiagnostics(null);
+        return;
+      }
+      showFeedback(error.message, true);
+    }
+  }
+
   async function handleLoginSubmit(event) {
     event.preventDefault();
     clearFeedback();
@@ -5809,6 +5952,7 @@
         loadAuditEvents(),
         loadBlockedIps(),
         loadAiUsageDiagnostics(),
+        loadImageEmbeddingDiagnostics(),
         loadImageLibraryImages(),
       ]);
       await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
@@ -5858,6 +6002,7 @@
       state.imageLibraryFilterUnassigned = true;
       state.imageLibraryFilterTagSelections = {};
       state.aiUsageDiagnostics = null;
+      state.imageEmbeddingDiagnostics = null;
       state.imageBrowserContentCacheByImageId = {};
       state.imageBrowserSavingImageIds = {};
       state.tableSorts = createDefaultTableSortState();
@@ -5882,6 +6027,7 @@
       renderImageLibraryImages([]);
       renderDiaryEntries([]);
       renderAiUsageDiagnostics(null);
+      renderImageEmbeddingDiagnostics(null);
       closeAiUsageDetailModal();
       clearBulkUploadFiles();
       clearBulkCreateProgress();
@@ -6466,7 +6612,8 @@
         return;
       }
 
-      const summary = `Embedding job #${job.id}: ${job.processed_items}/${job.total_items} processed, ${job.succeeded_items} succeeded, ${job.failed_items} failed.`;
+      const scopeLabel = String(job.scope || "all") === "missing" ? "missing-only" : "all";
+      const summary = `Embedding job #${job.id} (${scopeLabel}): ${job.processed_items}/${job.total_items} processed, ${job.succeeded_items} succeeded, ${job.failed_items} failed.`;
       if (job.status === "queued" || job.status === "running") {
         setImageEmbeddingBackfillStatus(`${summary} (${job.status})`);
         state.imageEmbeddingBackfillPollTimer = window.setTimeout(() => {
@@ -6482,7 +6629,7 @@
         showFeedback(`Image embedding backfill finished with failures. ${summary}`, true);
       }
 
-      await Promise.all([loadImageLibraryImages(), loadDiaryEntriesForSelected(), loadAuditEvents()]);
+      await Promise.all([loadImageLibraryImages(), loadDiaryEntriesForSelected(), loadAuditEvents(), loadImageEmbeddingDiagnostics()]);
       state.imageEmbeddingBackfillPollTimer = window.setTimeout(() => {
         clearImageEmbeddingBackfillProgress();
       }, 4000);
@@ -6494,14 +6641,17 @@
     }
   }
 
-  async function handleImageEmbeddingBackfillStart() {
+  async function handleImageEmbeddingBackfillStart(event) {
     clearFeedback();
     clearImageEmbeddingBackfillProgress();
+
+    const requestedScope = String(event?.currentTarget?.dataset?.embeddingBackfillScope || "all").trim().toLowerCase();
+    const scope = requestedScope === "missing" ? "missing" : "all";
 
     try {
       const payload = await apiRequest("/api/v1/image-embeddings/backfill", {
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify({ scope }),
       });
       const job = payload?.data?.job || null;
       if (!job?.id) {
@@ -6510,7 +6660,8 @@
       }
 
       state.imageEmbeddingBackfillJobId = Number(job.id);
-      setImageEmbeddingBackfillStatus(`Embedding backfill job #${job.id} queued.`);
+      const scopeLabel = scope === "missing" ? "missing-only" : "all";
+      setImageEmbeddingBackfillStatus(`Embedding backfill job #${job.id} queued (${scopeLabel}).`);
       pollImageEmbeddingBackfillJobStatus(state.imageEmbeddingBackfillJobId);
     } catch (error) {
       showFeedback(error.message, true);
@@ -7883,6 +8034,9 @@
     if (elements.imageEmbeddingBackfillStart) {
       elements.imageEmbeddingBackfillStart.addEventListener("click", handleImageEmbeddingBackfillStart);
     }
+    if (elements.imageEmbeddingBackfillMissing) {
+      elements.imageEmbeddingBackfillMissing.addEventListener("click", handleImageEmbeddingBackfillStart);
+    }
 
     if (elements.imageBrowserFilterShowAll) {
       elements.imageBrowserFilterShowAll.addEventListener("change", handleImageBrowserFilterChange);
@@ -8220,6 +8374,7 @@
         loadAuditEvents(),
         loadBlockedIps(),
         loadAiUsageDiagnostics(),
+        loadImageEmbeddingDiagnostics(),
       ]);
       await Promise.all([loadJigsawImagesForSelected(), loadDiaryEntriesForSelected()]);
       if (currentUserHasCapability("image.manage_library")) {
@@ -8240,6 +8395,7 @@
       renderDiaryEntries([]);
       renderAuditEvents([]);
       renderAiUsageDiagnostics(null);
+      renderImageEmbeddingDiagnostics(null);
       closeAiUsageDetailModal();
       renderBulkUploadFiles();
       clearBulkCreateProgress();

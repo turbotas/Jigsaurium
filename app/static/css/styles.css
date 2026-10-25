@@ -599,6 +599,23 @@
   text-align: right;
 }
 
+.app-thumbnail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.app-embedding-missing-card {
+  border: 1px solid #b1b4b6;
+  border-radius: 6px;
+  padding: 8px;
+  background: #fff;
+}
+
+.app-embedding-missing-thumb .app-thumbnail-trigger {
+  width: 100% !important;
+}
+
 .app-diary-view-controls {
   display: flex;
   flex-wrap: wrap;

@@ -191,6 +191,8 @@ IMAGE_EMBEDDING_JOB_STATUS_QUEUED = "queued"
 IMAGE_EMBEDDING_JOB_STATUS_RUNNING = "running"
 IMAGE_EMBEDDING_JOB_STATUS_COMPLETED = "completed"
 IMAGE_EMBEDDING_JOB_STATUS_FAILED = "failed"
+IMAGE_EMBEDDING_BACKFILL_SCOPE_ALL = "all"
+IMAGE_EMBEDDING_BACKFILL_SCOPE_MISSING = "missing"
 
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = 15 * 60
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 10
@@ -271,11 +273,13 @@ def _serialize_bulk_ai_create_job_item(item):
 def _get_embedding_model_config():
     model_name = str(current_app.config.get("IMAGE_EMBEDDING_MODEL_NAME") or "").strip()
     model_revision = str(current_app.config.get("IMAGE_EMBEDDING_MODEL_REVISION") or "").strip()
+    model_local_path = str(current_app.config.get("IMAGE_EMBEDDING_MODEL_LOCAL_PATH") or "").strip()
+    local_files_only = bool(current_app.config.get("IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY", False))
     if not model_name:
         model_name = "openai/clip-vit-base-patch32"
     if not model_revision:
         model_revision = "main"
-    return model_name, model_revision, build_model_key(model_name, model_revision)
+    return model_name, model_revision, build_model_key(model_name, model_revision), model_local_path, local_files_only
 
 
 def _serialize_image_embedding_job(job):
@@ -292,6 +296,7 @@ def _serialize_image_embedding_job(job):
         "id": job.id,
         "actor_user_id": job.actor_user_id,
         "status": job.status,
+        "scope": str(getattr(job, "scope", IMAGE_EMBEDDING_BACKFILL_SCOPE_ALL) or IMAGE_EMBEDDING_BACKFILL_SCOPE_ALL),
         "model_key": job.model_key,
         "total_items": int(job.total_items or 0),
         "processed_items": int(job.processed_items or 0),
@@ -374,16 +379,30 @@ def _allow_image_embeddings_test_fallback():
     )
 
 
-def _upsert_image_embedding_for_image(db_session, image, *, model_name, model_revision, model_key, allow_test_fallback):
+def _upsert_image_embedding_for_image(
+    db_session,
+    image,
+    *,
+    model_name,
+    model_revision,
+    model_key,
+    model_local_path,
+    local_files_only,
+    allow_test_fallback,
+):
     if image is None:
         return None
 
+    embedding_started = time.perf_counter()
     vector = compute_image_embedding(
         image.image_data,
         model_name=model_name,
         model_revision=model_revision,
+        model_local_path=model_local_path,
+        local_files_only=local_files_only,
         allow_test_fallback=allow_test_fallback,
     )
+    embedding_duration_ms = max(0, int((time.perf_counter() - embedding_started) * 1000))
     now = datetime.now(timezone.utc)
     vector_json = json.dumps(vector)
     vector_dim = len(vector)
@@ -395,6 +414,7 @@ def _upsert_image_embedding_for_image(db_session, image, *, model_name, model_re
         "vector_json": vector_json,
         "vector_dim": vector_dim,
         "source_content_sha256": source_content_sha256,
+        "compute_duration_ms": embedding_duration_ms,
         "created_at": now,
         "updated_at": now,
     }
@@ -407,6 +427,7 @@ def _upsert_image_embedding_for_image(db_session, image, *, model_name, model_re
             vector_json=insert_stmt.inserted.vector_json,
             vector_dim=insert_stmt.inserted.vector_dim,
             source_content_sha256=insert_stmt.inserted.source_content_sha256,
+            compute_duration_ms=insert_stmt.inserted.compute_duration_ms,
             updated_at=insert_stmt.inserted.updated_at,
         )
     elif dialect_name == "sqlite":
@@ -417,6 +438,7 @@ def _upsert_image_embedding_for_image(db_session, image, *, model_name, model_re
                 "vector_json": insert_stmt.excluded.vector_json,
                 "vector_dim": insert_stmt.excluded.vector_dim,
                 "source_content_sha256": insert_stmt.excluded.source_content_sha256,
+                "compute_duration_ms": insert_stmt.excluded.compute_duration_ms,
                 "updated_at": insert_stmt.excluded.updated_at,
             },
         )
@@ -428,6 +450,7 @@ def _upsert_image_embedding_for_image(db_session, image, *, model_name, model_re
                 vector_json=vector_json,
                 vector_dim=vector_dim,
                 source_content_sha256=source_content_sha256,
+                compute_duration_ms=embedding_duration_ms,
                 updated_at=now,
             )
         )
@@ -473,6 +496,8 @@ def _refresh_image_embedding_with_retry(
     model_name,
     model_revision,
     model_key,
+    model_local_path,
+    local_files_only,
     allow_test_fallback,
     max_attempts=3,
 ):
@@ -488,6 +513,8 @@ def _refresh_image_embedding_with_retry(
                 model_name=model_name,
                 model_revision=model_revision,
                 model_key=model_key,
+                model_local_path=model_local_path,
+                local_files_only=local_files_only,
                 allow_test_fallback=allow_test_fallback,
             )
         except OperationalError as error:
@@ -500,7 +527,7 @@ def _refresh_image_embedding_with_retry(
 def _process_image_embedding_job(app, job_id):
     with app.app_context():
         db_session = get_session()
-        model_name, model_revision, model_key = _get_embedding_model_config()
+        model_name, model_revision, model_key, model_local_path, local_files_only = _get_embedding_model_config()
         allow_test_fallback = _allow_image_embeddings_test_fallback()
 
         rows_updated = db_session.execute(
@@ -522,7 +549,19 @@ def _process_image_embedding_job(app, job_id):
         if job is None:
             return
 
-        image_ids = db_session.execute(select(JigsawImage.id).order_by(JigsawImage.id.asc())).scalars().all()
+        job_scope = str(getattr(job, "scope", IMAGE_EMBEDDING_BACKFILL_SCOPE_ALL) or IMAGE_EMBEDDING_BACKFILL_SCOPE_ALL)
+        if job_scope == IMAGE_EMBEDDING_BACKFILL_SCOPE_MISSING:
+            image_ids = db_session.execute(
+                select(JigsawImage.id)
+                .outerjoin(
+                    ImageEmbedding,
+                    (ImageEmbedding.image_id == JigsawImage.id) & (ImageEmbedding.model_key == model_key),
+                )
+                .where(ImageEmbedding.id.is_(None))
+                .order_by(JigsawImage.id.asc())
+            ).scalars().all()
+        else:
+            image_ids = db_session.execute(select(JigsawImage.id).order_by(JigsawImage.id.asc())).scalars().all()
         job.total_items = len(image_ids)
         job.processed_items = 0
         job.succeeded_items = 0
@@ -546,6 +585,8 @@ def _process_image_embedding_job(app, job_id):
                     model_name=model_name,
                     model_revision=model_revision,
                     model_key=model_key,
+                    model_local_path=model_local_path,
+                    local_files_only=local_files_only,
                     allow_test_fallback=allow_test_fallback,
                 )
                 if refreshed is None:
@@ -571,12 +612,13 @@ def _process_image_embedding_job(app, job_id):
         db_session.commit()
 
 
-def _create_image_embedding_backfill_job(db_session):
-    _model_name, _model_revision, model_key = _get_embedding_model_config()
+def _create_image_embedding_backfill_job(db_session, *, scope):
+    _model_name, _model_revision, model_key, _model_local_path, _local_files_only = _get_embedding_model_config()
 
     job = ImageEmbeddingJob(
         actor_user_id=getattr(g.current_user, "id", None),
         status=IMAGE_EMBEDDING_JOB_STATUS_QUEUED,
+        scope=scope,
         model_key=model_key,
         total_items=0,
         processed_items=0,
@@ -591,7 +633,7 @@ def _create_image_embedding_backfill_job(db_session):
         action="jigsaw.image_embeddings_backfill_queued",
         entity_type="image_embedding_job",
         entity_id=job.id,
-        payload={"model_key": model_key},
+        payload={"model_key": model_key, "scope": scope},
     )
     db_session.commit()
 
@@ -2361,7 +2403,7 @@ def _refresh_image_embedding_for_image_id(app, image_id):
             return
 
         db_session = get_session()
-        model_name, model_revision, model_key = _get_embedding_model_config()
+        model_name, model_revision, model_key, model_local_path, local_files_only = _get_embedding_model_config()
         allow_test_fallback = _allow_image_embeddings_test_fallback()
         refreshed = _refresh_image_embedding_with_retry(
             db_session,
@@ -2369,6 +2411,8 @@ def _refresh_image_embedding_for_image_id(app, image_id):
             model_name=model_name,
             model_revision=model_revision,
             model_key=model_key,
+            model_local_path=model_local_path,
+            local_files_only=local_files_only,
             allow_test_fallback=allow_test_fallback,
         )
         if refreshed is not None:
@@ -2499,6 +2543,134 @@ def _parse_embedding_vector(raw_vector_json):
         except (TypeError, ValueError):
             return None
     return values
+
+
+def _compute_percentile(values, percentile):
+    if not values:
+        return None
+    ordered = sorted(int(value) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = int(round((len(ordered) - 1) * float(percentile)))
+    rank = max(0, min(rank, len(ordered) - 1))
+    return ordered[rank]
+
+
+def _build_image_embedding_diagnostics_payload(db_session, *, missing_preview_limit=24):
+    model_name, model_revision, model_key, model_local_path, local_files_only = _get_embedding_model_config()
+
+    image_rows = db_session.execute(
+        select(
+            JigsawImage.id,
+            JigsawImage.jigsaw_id,
+            JigsawImage.uploaded_by_user_id,
+            JigsawImage.tag,
+            JigsawImage.filename,
+            JigsawImage.mime_type,
+            JigsawImage.content_version,
+            JigsawImage.captured_at,
+            JigsawImage.captured_at_source,
+            JigsawImage.user_comment,
+            JigsawImage.created_at,
+            JigsawImage.image_data,
+            ImageEmbedding.source_content_sha256,
+        )
+        .select_from(JigsawImage)
+        .outerjoin(
+            ImageEmbedding,
+            (ImageEmbedding.image_id == JigsawImage.id) & (ImageEmbedding.model_key == model_key),
+        )
+        .order_by(JigsawImage.id.asc())
+    ).all()
+
+    total_images = len(image_rows)
+    up_to_date = 0
+    stale = 0
+    missing = 0
+    missing_images = []
+
+    for (
+        image_id,
+        jigsaw_id,
+        uploaded_by_user_id,
+        tag,
+        filename,
+        mime_type,
+        content_version,
+        captured_at,
+        captured_at_source,
+        user_comment,
+        created_at,
+        image_data,
+        source_content_sha256,
+    ) in image_rows:
+        if not source_content_sha256:
+            missing += 1
+            if len(missing_images) < int(max(1, min(200, missing_preview_limit))):
+                missing_images.append(
+                    _serialize_jigsaw_image_fields(
+                        image_id=image_id,
+                        jigsaw_id=jigsaw_id,
+                        uploaded_by_user_id=uploaded_by_user_id,
+                        tag=tag,
+                        filename=filename,
+                        mime_type=mime_type,
+                        content_version=content_version,
+                        captured_at=captured_at,
+                        captured_at_source=captured_at_source,
+                        user_comment=user_comment,
+                        created_at=created_at,
+                    )
+                )
+            continue
+        computed_sha = compute_content_sha256(image_data)
+        if compare_digest(str(source_content_sha256), computed_sha):
+            up_to_date += 1
+        else:
+            stale += 1
+
+    duration_values = [
+        int(value)
+        for value in db_session.execute(
+            select(ImageEmbedding.compute_duration_ms)
+            .where(
+                ImageEmbedding.model_key == model_key,
+                ImageEmbedding.compute_duration_ms.is_not(None),
+            )
+            .order_by(ImageEmbedding.id.asc())
+        ).scalars().all()
+        if value is not None
+    ]
+
+    latest_job = db_session.execute(
+        select(ImageEmbeddingJob).where(ImageEmbeddingJob.model_key == model_key).order_by(ImageEmbeddingJob.id.desc()).limit(1)
+    ).scalar_one_or_none()
+
+    return {
+        "model": {
+            "name": model_name,
+            "revision": model_revision,
+            "model_key": model_key,
+            "local_path": model_local_path or None,
+            "local_files_only": local_files_only,
+        },
+        "health": {
+            "total_images": total_images,
+            "up_to_date_embeddings": up_to_date,
+            "stale_embeddings": stale,
+            "missing_embeddings": missing,
+            "all_images_up_to_date": total_images == up_to_date,
+        },
+        "missing_images": missing_images,
+        "performance": {
+            "samples": len(duration_values),
+            "min_ms": min(duration_values) if duration_values else None,
+            "avg_ms": int(round(sum(duration_values) / len(duration_values))) if duration_values else None,
+            "p95_ms": _compute_percentile(duration_values, 0.95),
+            "max_ms": max(duration_values) if duration_values else None,
+        },
+        "latest_backfill_job": _serialize_image_embedding_job(latest_job) if latest_job is not None else None,
+    }
 
 
 def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger, created_by_user_id):
@@ -3420,12 +3592,32 @@ def _apply_ai_metadata_to_jigsaw(*, jigsaw, normalized_payload, overwrite_existi
 
 @api_v1_bp.get("/health")
 def health_check():
+    image_embeddings_enabled = bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False))
+    image_embeddings_payload = {
+        "enabled": image_embeddings_enabled,
+    }
+    if image_embeddings_enabled:
+        model_name, model_revision, model_key, model_local_path, local_files_only = _get_embedding_model_config()
+        runtime_error = embedding_runtime_error()
+        image_embeddings_payload.update(
+            {
+                "model_name": model_name,
+                "model_revision": model_revision,
+                "model_key": model_key,
+                "local_model_path": model_local_path or None,
+                "local_files_only": local_files_only,
+                "runtime_ready": runtime_error is None,
+                "runtime_error": runtime_error,
+            }
+        )
+
     payload = {
         "status": "ok",
         "environment": current_app.config["APP_ENV"],
         "version": current_app.config.get("APP_VERSION", "0.0.0-dev"),
         "build_sha": current_app.config.get("APP_BUILD_SHA", "local"),
         "build_time": current_app.config.get("APP_BUILD_TIME", ""),
+        "image_embeddings": image_embeddings_payload,
     }
     return _success_response(payload)
 
@@ -4855,8 +5047,21 @@ def create_image_embedding_backfill_job():
             [{"field": "image_embeddings", "issue": runtime_error}],
         )
 
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    requested_scope = str(payload.get("scope") or IMAGE_EMBEDDING_BACKFILL_SCOPE_ALL).strip().lower()
+    if requested_scope not in {IMAGE_EMBEDDING_BACKFILL_SCOPE_ALL, IMAGE_EMBEDDING_BACKFILL_SCOPE_MISSING}:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "scope", "issue": "must be one of: all, missing"}],
+        )
+
     db_session = get_session()
-    job = _create_image_embedding_backfill_job(db_session)
+    job = _create_image_embedding_backfill_job(db_session, scope=requested_scope)
     return _success_response({"job": _serialize_image_embedding_job(job)}, status_code=202)
 
 
@@ -4877,6 +5082,32 @@ def get_image_embedding_backfill_job(job_id):
         job = db_session.get(ImageEmbeddingJob, job_id)
 
     return _success_response({"job": _serialize_image_embedding_job(job)})
+
+
+@api_v1_bp.get("/image-embeddings/diagnostics")
+@require_role("administrator")
+def get_image_embedding_diagnostics():
+    raw_missing_limit = request.args.get("missing_limit", "24")
+    try:
+        missing_limit = int(raw_missing_limit)
+    except ValueError:
+        return _error_response(
+            "validation_error",
+            "Invalid request query.",
+            422,
+            [{"field": "missing_limit", "issue": "must be an integer"}],
+        )
+    if missing_limit < 1 or missing_limit > 200:
+        return _error_response(
+            "validation_error",
+            "Invalid request query.",
+            422,
+            [{"field": "missing_limit", "issue": "must be between 1 and 200"}],
+        )
+
+    db_session = get_session()
+    payload = _build_image_embedding_diagnostics_payload(db_session, missing_preview_limit=missing_limit)
+    return _success_response(payload)
 
 
 @api_v1_bp.get("/image-library/images/<int:image_id>/match-suggestions")
@@ -4932,7 +5163,7 @@ def get_image_match_suggestions(image_id):
     if image_jigsaw_id is not None:
         return _error_response("conflict", "Image is already assigned to a jigsaw.", 409)
 
-    model_name, model_revision, model_key = _get_embedding_model_config()
+    model_name, model_revision, model_key, model_local_path, local_files_only = _get_embedding_model_config()
     allow_test_fallback = _allow_image_embeddings_test_fallback()
 
     query_embedding = db_session.execute(
@@ -4951,6 +5182,8 @@ def get_image_match_suggestions(image_id):
                 model_name=model_name,
                 model_revision=model_revision,
                 model_key=model_key,
+                model_local_path=model_local_path,
+                local_files_only=local_files_only,
                 allow_test_fallback=allow_test_fallback,
             )
             db_session.commit()

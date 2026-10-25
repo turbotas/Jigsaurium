@@ -88,7 +88,15 @@ def _make_png_bytes(color=(64, 64, 64), size=(24, 24)):
 def embedding_test_fallback(monkeypatch):
     monkeypatch.setattr(routes, "embedding_runtime_error", lambda: None)
 
-    def _compute(image_bytes, *, model_name, model_revision, allow_test_fallback=False):
+    def _compute(
+        image_bytes,
+        *,
+        model_name,
+        model_revision,
+        model_local_path=None,
+        local_files_only=False,
+        allow_test_fallback=False,
+    ):
         return image_embeddings_module._compute_test_fallback_embedding(image_bytes)
 
     monkeypatch.setattr(routes, "compute_image_embedding", _compute)
@@ -109,6 +117,7 @@ def embedding_test_fallback(monkeypatch):
         ("DELETE", "/api/v1/image-library/images/1", None, None),
         ("POST", "/api/v1/image-embeddings/backfill", None, {}),
         ("GET", "/api/v1/image-embeddings/backfill/1", None, None),
+        ("GET", "/api/v1/image-embeddings/diagnostics", None, None),
         ("GET", "/api/v1/image-library/images/1/match-suggestions", None, None),
         ("GET", "/api/v1/images/1/content", None, None),
     ],
@@ -227,6 +236,9 @@ def test_image_library_upload_rejects_svg_files(client, seeded_image_library_dat
     backfill_job_response = client.get("/api/v1/image-embeddings/backfill/1")
     assert backfill_job_response.status_code == 403
 
+    embedding_diagnostics_response = client.get("/api/v1/image-embeddings/diagnostics")
+    assert embedding_diagnostics_response.status_code == 403
+
     suggest_response = client.get("/api/v1/image-library/images/1/match-suggestions")
     assert suggest_response.status_code in {403, 409}
 
@@ -261,11 +273,13 @@ def test_admin_can_run_image_embedding_backfill_job(client, seeded_image_library
     assert create_response.status_code == 202
     job = create_response.get_json()["data"]["job"]
     assert job["id"]
+    assert job["scope"] == "all"
 
     status_response = client.get(f"/api/v1/image-embeddings/backfill/{job['id']}")
     assert status_response.status_code == 200
     status_payload = status_response.get_json()["data"]["job"]
     assert status_payload["status"] == "completed"
+    assert status_payload["scope"] == "all"
     assert status_payload["succeeded_items"] >= 2
 
     with app.app_context():
@@ -315,13 +329,15 @@ def test_refresh_image_embedding_retries_retryable_db_errors(
 
     with app.app_context():
         db_session = get_session()
-        model_name, model_revision, model_key = routes._get_embedding_model_config()
+        model_name, model_revision, model_key, model_local_path, local_files_only = routes._get_embedding_model_config()
         refreshed = routes._refresh_image_embedding_with_retry(
             db_session,
             image_id=image_id,
             model_name=model_name,
             model_revision=model_revision,
             model_key=model_key,
+            model_local_path=model_local_path,
+            local_files_only=local_files_only,
             allow_test_fallback=True,
             max_attempts=3,
         )
@@ -335,6 +351,111 @@ def test_refresh_image_embedding_retries_retryable_db_errors(
             .one_or_none()
         )
         assert embedding is not None
+
+
+@pytest.mark.functional
+def test_admin_can_get_image_embedding_diagnostics(client, seeded_image_library_data, app, embedding_test_fallback):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    app.config["IMAGE_EMBEDDINGS_ENABLED"] = True
+    app.config["IMAGE_EMBEDDINGS_INLINE"] = True
+    app.config["IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK"] = True
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "tag": "Completed",
+            "files": [(BytesIO(_make_png_bytes(color=(90, 120, 140))), "diag-emb.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image_id = int(upload_response.get_json()["data"]["created"][0]["id"])
+
+    first_response = client.get("/api/v1/image-embeddings/diagnostics")
+    assert first_response.status_code == 200
+    first_payload = first_response.get_json()["data"]
+    assert first_payload["health"]["total_images"] >= 1
+    assert first_payload["health"]["up_to_date_embeddings"] >= 1
+    assert first_payload["health"]["missing_embeddings"] == 0
+    assert first_payload["performance"]["samples"] >= 1
+
+    with app.app_context():
+        db_session = get_session()
+        image = db_session.get(JigsawImage, image_id)
+        image.image_data = _make_png_bytes(color=(10, 10, 220))
+        db_session.commit()
+
+    second_response = client.get("/api/v1/image-embeddings/diagnostics")
+    assert second_response.status_code == 200
+    second_payload = second_response.get_json()["data"]
+    assert second_payload["health"]["stale_embeddings"] >= 1
+    assert second_payload["health"]["all_images_up_to_date"] is False
+
+
+@pytest.mark.functional
+def test_admin_can_backfill_missing_embeddings_only(client, seeded_image_library_data, app, embedding_test_fallback):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    app.config["IMAGE_EMBEDDINGS_ENABLED"] = False
+    app.config["IMAGE_EMBEDDINGS_INLINE"] = True
+    app.config["IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK"] = True
+
+    first_upload = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={"files": [(BytesIO(_make_png_bytes(color=(10, 20, 30))), "first.png", "image/png")]},
+        content_type="multipart/form-data",
+    )
+    assert first_upload.status_code == 201
+
+    app.config["IMAGE_EMBEDDINGS_ENABLED"] = True
+
+    second_upload = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={"files": [(BytesIO(_make_png_bytes(color=(30, 20, 10))), "second.png", "image/png")]},
+        content_type="multipart/form-data",
+    )
+    assert second_upload.status_code == 201
+
+    backfill_response = client.post(
+        "/api/v1/image-embeddings/backfill",
+        headers=_csrf_headers(),
+        json={"scope": "missing"},
+    )
+    assert backfill_response.status_code == 202
+    job_id = int(backfill_response.get_json()["data"]["job"]["id"])
+
+    status_response = client.get(f"/api/v1/image-embeddings/backfill/{job_id}")
+    assert status_response.status_code == 200
+    job = status_response.get_json()["data"]["job"]
+    assert job["scope"] == "missing"
+    assert job["total_items"] == 1
+
+
+@pytest.mark.functional
+def test_embedding_diagnostics_include_missing_image_thumbnails(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    app.config["IMAGE_EMBEDDINGS_ENABLED"] = False
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={"files": [(BytesIO(_make_png_bytes(color=(120, 30, 30))), "missing-thumb.png", "image/png")]},
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+
+    app.config["IMAGE_EMBEDDINGS_ENABLED"] = True
+    diagnostics_response = client.get("/api/v1/image-embeddings/diagnostics?missing_limit=10")
+    assert diagnostics_response.status_code == 200
+    payload = diagnostics_response.get_json()["data"]
+    assert payload["health"]["missing_embeddings"] >= 1
+    missing_images = payload.get("missing_images") or []
+    assert len(missing_images) >= 1
+    first = missing_images[0]
+    assert first.get("thumbnail_url")
+    assert first.get("content_url")
 
 
 @pytest.mark.functional

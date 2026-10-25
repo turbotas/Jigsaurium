@@ -118,6 +118,9 @@
         <button id="admin-tab-ai" class="app-section-tab" type="button" role="tab" aria-selected="false" aria-controls="ai-usage-section" tabindex="-1" data-admin-tab="ai">AI Spend</button>
       </li>
       <li class="app-section-tabs__item" role="presentation">
+        <button id="admin-tab-embeddings" class="app-section-tab" type="button" role="tab" aria-selected="false" aria-controls="embeddings-section" tabindex="-1" data-admin-tab="embeddings">Embeddings</button>
+      </li>
+      <li class="app-section-tabs__item" role="presentation">
         <button id="admin-tab-ip-blocks" class="app-section-tab" type="button" role="tab" aria-selected="false" aria-controls="ip-blocks-section" tabindex="-1" data-admin-tab="ip-blocks">IP Blocks</button>
       </li>
     </ul>
@@ -490,14 +493,6 @@
       <p class="govuk-body">Upload one or more image files, or a zip containing image files. Choose an initial tag and optionally link uploads to a jigsaw now.</p>
       <a href="/mobile-capture" class="govuk-button govuk-button--secondary" data-module="govuk-button">Open mobile capture page</a>
       <button id="image-library-bulk-create-unassigned-box" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">AI create all unassigned Box images</button>
-      <div class="govuk-inset-text govuk-!-margin-top-2 govuk-!-margin-bottom-4">
-        <h4 class="govuk-heading-s govuk-!-margin-bottom-2">Visual matching setup</h4>
-        <p class="govuk-body govuk-!-margin-bottom-2">
-          Run this once after enabling embeddings, and again whenever the embedding model changes.
-        </p>
-        <button id="image-embedding-backfill-start" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-1" data-module="govuk-button">Backfill image embeddings</button>
-        <div id="image-embedding-backfill-status" class="govuk-hint govuk-!-margin-bottom-0"></div>
-      </div>
       <form id="image-library-upload-form" class="govuk-!-margin-bottom-4">
         <div class="govuk-grid-row">
           <div class="govuk-grid-column-one-third">
@@ -946,6 +941,51 @@
         <button id="ai-usage-detail-close" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Close details</button>
       </div>
     </div>
+  </section>
+
+  <section id="embeddings-section" class="govuk-!-margin-top-8" aria-labelledby="embeddings-heading" hidden>
+    <h2 id="embeddings-heading" class="govuk-heading-l">Embeddings</h2>
+    <p class="govuk-body">Embedding diagnostics report model health and performance across the image library.</p>
+    <button id="image-embedding-backfill-missing" type="button" class="govuk-button govuk-button--secondary" data-embedding-backfill-scope="missing" data-module="govuk-button">Backfill missing embeddings</button>
+    <button id="image-embedding-backfill-start" type="button" class="govuk-button govuk-button--secondary" data-embedding-backfill-scope="all" data-module="govuk-button">Recalculate all embeddings</button>
+    <div id="image-embedding-backfill-status" class="govuk-hint govuk-!-margin-bottom-4"></div>
+
+    <h3 class="govuk-heading-m">Current model</h3>
+    <dl class="govuk-summary-list govuk-!-margin-bottom-6">
+      <div class="govuk-summary-list__row">
+        <dt class="govuk-summary-list__key">Model key</dt>
+        <dd class="govuk-summary-list__value" id="embeddings-model-key">-</dd>
+      </div>
+      <div class="govuk-summary-list__row">
+        <dt class="govuk-summary-list__key">Source</dt>
+        <dd class="govuk-summary-list__value" id="embeddings-model-source">-</dd>
+      </div>
+      <div class="govuk-summary-list__row">
+        <dt class="govuk-summary-list__key">Local only mode</dt>
+        <dd class="govuk-summary-list__value" id="embeddings-local-only">-</dd>
+      </div>
+    </dl>
+
+    <h3 class="govuk-heading-m">Health</h3>
+    <ul class="govuk-list govuk-list--bullet">
+      <li>Total images: <span id="embeddings-health-total-images">0</span></li>
+      <li>Up to date: <span id="embeddings-health-up-to-date">0</span></li>
+      <li>Stale: <span id="embeddings-health-stale">0</span></li>
+      <li>Missing: <span id="embeddings-health-missing">0</span></li>
+      <li>Status: <span id="embeddings-health-status">Unknown</span></li>
+    </ul>
+
+    <h3 class="govuk-heading-m">Performance</h3>
+    <ul class="govuk-list govuk-list--bullet">
+      <li>Samples: <span id="embeddings-perf-samples">0</span></li>
+      <li>Average compute time: <span id="embeddings-perf-avg-ms">-</span></li>
+      <li>P95 compute time: <span id="embeddings-perf-p95-ms">-</span></li>
+      <li>Min/Max compute time: <span id="embeddings-perf-min-max-ms">-</span></li>
+    </ul>
+
+    <h3 class="govuk-heading-m">Missing embeddings preview</h3>
+    <p class="govuk-hint">Shows images currently missing embeddings for the active model key.</p>
+    <div id="embeddings-missing-grid" class="app-thumbnail-grid"></div>
   </section>
 
   <section id="ip-blocks-section" class="govuk-!-margin-top-8" aria-labelledby="ip-blocks-heading">
