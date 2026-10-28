@@ -1,0 +1,64 @@
+name: Promote Pointer Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Source image tag or digest (for example v1.2.3 or sha256:...)"
+        required: true
+        type: string
+      target_pointer:
+        description: "Pointer tag to update"
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image references
+        id: refs
+        run: |
+          OWNER_LOWER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          IMAGE_NAME="ghcr.io/${OWNER_LOWER}/jigsaurium"
+          SOURCE_REF="${{ inputs.source_ref }}"
+
+          if [[ "$SOURCE_REF" == sha256:* ]]; then
+            SOURCE_IMAGE="${IMAGE_NAME}@${SOURCE_REF}"
+          else
+            SOURCE_IMAGE="${IMAGE_NAME}:${SOURCE_REF}"
+          fi
+
+          echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "source_image=${SOURCE_IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Promote pointer
+        run: |
+          docker buildx imagetools create \
+            --tag "${{ steps.refs.outputs.image_name }}:${{ inputs.target_pointer }}" \
+            "${{ steps.refs.outputs.source_image }}"
+
+      - name: Show promoted digest
+        run: |
+          INSPECT_OUTPUT="$(docker buildx imagetools inspect "${{ steps.refs.outputs.image_name }}:${{ inputs.target_pointer }}")"
+          DIGEST="$(printf '%s\n' "$INSPECT_OUTPUT" | sed -n 's/^Digest: //p' | head -n 1)"
+          echo "Promoted ${{ inputs.target_pointer }} -> ${DIGEST}"
