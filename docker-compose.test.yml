@@ -9,7 +9,7 @@ services:
       - path: ./environments/test.env.local
         required: false
       - path: ./environments/test.env.example
-        required: true
+        required: false
     ports:
       - "${JIGSAURIUM_TEST_PORT:-15000}:5000"
     volumes:

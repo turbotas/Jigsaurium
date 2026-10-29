@@ -92,9 +92,11 @@ gh run list --workflow "Promote Pointer Tag" --limit 5
 2. Start from `docker-compose.test.yml`.
 3. Set image to `ghcr.io/<owner>/jigsaurium:test`.
 4. Replace volume host path with your TrueNAS dataset path.
-5. In environment section, paste values from `environments/test.env.local`.
+5. Do not rely on `env_file` paths in TrueNAS. In environment section, paste values from `environments/test.env.local`.
 6. Deploy and wait for Running.
 7. Verify `GET /api/v1/health` through test URL.
+
+If image pull fails and your package is private, add GHCR registry credentials in TrueNAS (`ghcr.io`, GitHub username, PAT with `read:packages`) and attach that pull secret to the app.
 
 Expected key values:
 
@@ -116,7 +118,7 @@ gh workflow run promote-pointer-tag.yml -f source_ref=v0.1.0 -f target_pointer=p
 2. Start from `docker-compose.prod.yml`.
 3. Set image to `ghcr.io/<owner>/jigsaurium:prod`.
 4. Use prod dataset mount path.
-5. Paste prod runtime env values from `environments/prod.env.local`.
+5. Paste prod runtime env values from `environments/prod.env.local` under `environment:`.
 6. Deploy and verify `/api/v1/health` on prod URL.
 
 ## 8) Next releases
@@ -142,4 +144,5 @@ Rollback is pointer-only:
 - `/api/v1/health` returns 500 on empty DB
   - Confirm `AUTO_MIGRATE=1` is present in runtime environment.
 - Image pull denied in TrueNAS
+  - Configure GHCR pull credentials in TrueNAS (`ghcr.io` + GitHub username + PAT `read:packages`).
   - Confirm package visibility/permissions for `ghcr.io/<owner>/jigsaurium`.
