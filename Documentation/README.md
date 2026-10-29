@@ -12,7 +12,7 @@ This folder defines the product, architecture, and delivery rules for Jigsaurium
 - `decisions.md`: ADR-style decision log.
 - `release-and-versioning.md`: SemVer tags, environment pointers, and release/promotion flow.
 - `truenas-compose-import.md`: production compose baseline and TrueNAS YAML import notes.
-- `truenas-first-test-and-prod-deploy.md`: one-shot runbook to build, tag, smoke-test, and deploy first test/prod app versions.
+- `truenas-first-test-and-prod-deploy.md`: single-path runbook to release via GitHub Actions and deploy first test/prod app versions in TrueNAS.
 
 ## Working Agreement
 

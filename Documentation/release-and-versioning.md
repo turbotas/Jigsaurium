@@ -42,16 +42,14 @@ This metadata is visible in two places:
 
 ## GitHub Release Workflows
 
+This project's standard release path is GitHub Actions only.
+
 ### Build and publish release image
 
-- Trigger by creating and pushing a tag that matches `v*` (for example `v1.2.3`).
+- First push release commits to default branch: `git push origin master`.
+- Then create and push a tag that matches `v*` (for example `v1.2.3`).
 - Workflow builds a container image and publishes it to GHCR.
 - Release tags are published as immutable image tags.
-
-Local equivalents are available for operators:
-
-- Windows: `scripts\\build_release_image.bat`
-- Linux/macOS: `./scripts/build_release_image.sh`
 
 ### Promote environment pointers
 
@@ -59,18 +57,15 @@ Local equivalents are available for operators:
 - Input the source release reference (`v1.2.3` by tag or `sha256:...` digest).
 - Input the target pointer (`dev`, `test`, or `prod`).
 - Workflow updates the pointer tag to point to the same image.
+- Use the workflow filename for CLI dispatch consistency:
+  - `gh workflow run promote-pointer-tag.yml -f source_ref=v1.2.3 -f target_pointer=test`
 
-Local equivalents are available for operators:
-
-- Windows: `scripts\\promote_pointer_tag.bat`
-- Linux/macOS: `./scripts/promote_pointer_tag.sh`
-
-This avoids rebuilding during promotion.
+This avoids rebuilding during promotion and avoids local GHCR auth drift.
 
 ## Recommended Promotion Sequence
 
-1. Build and publish release image for `vX.Y.Z`.
-2. Promote `dev` pointer to `vX.Y.Z` and run smoke tests.
+1. Push `master` to remote.
+2. Build and publish immutable release image for `vX.Y.Z`.
 3. Promote `test` pointer to `vX.Y.Z` and run acceptance tests.
 4. Promote `prod` pointer to `vX.Y.Z` after approval.
 
