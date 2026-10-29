@@ -21,6 +21,11 @@ case "$POINTER" in
     ;;
 esac
 
+echo "$OWNER" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9-]*$' || {
+  echo "ERROR: owner must be a GitHub username or organization (not a domain name)."
+  exit 1
+}
+
 OWNER_LOWER="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
 IMAGE="ghcr.io/${OWNER_LOWER}/${IMAGE_NAME}"
 
@@ -31,7 +36,14 @@ esac
 
 echo "Promoting ${SOURCE_IMAGE} -> ${IMAGE}:${POINTER}"
 
-docker login ghcr.io
+if [ "${GHCR_SKIP_LOGIN:-0}" = "1" ]; then
+  echo "Skipping docker login because GHCR_SKIP_LOGIN=1."
+elif [ -n "${GHCR_TOKEN:-}" ]; then
+  LOGIN_USER="${GHCR_USERNAME:-$OWNER}"
+  printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$LOGIN_USER" --password-stdin
+else
+  echo "GHCR_TOKEN not set. Using existing Docker credential store session for ghcr.io."
+fi
 docker buildx imagetools create -t "${IMAGE}:${POINTER}" "${SOURCE_IMAGE}"
 
 echo "Promotion completed: ${IMAGE}:${POINTER}"

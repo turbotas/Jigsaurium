@@ -17,6 +17,7 @@ The compose file loads `environments/prod.env.local` when present, then falls ba
 At minimum, set:
 
 - `APP_ENV=prod`
+- `AUTO_MIGRATE=1`
 - `DATABASE_URL=...`
 - `SECRET_KEY=...`
 
@@ -41,5 +42,6 @@ And for AI/embeddings-enabled production:
 ## Notes
 
 - The healthcheck uses `GET /api/v1/health`.
+- Container startup runs `alembic upgrade head` when `AUTO_MIGRATE=1`, which supports empty databases.
 - Vendored model files are expected inside the container image at `/opt/models/clip-vit-base-patch32`.
 - Keep outbound egress restricted to required AI/model endpoints where possible.

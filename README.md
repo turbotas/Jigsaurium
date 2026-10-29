@@ -159,6 +159,7 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
 - Promote pointer tags (`dev`, `test`, `prod`) to a release tag or digest:
   - Windows: `scripts\promote_pointer_tag.bat YOUR_ORG test v0.1.0`
   - Linux/macOS: `./scripts/promote_pointer_tag.sh YOUR_ORG test v0.1.0`
+- Container startup can auto-run schema migrations with `AUTO_MIGRATE=1` (recommended for empty test/prod databases).
 
 ## Dependency files
 

@@ -39,6 +39,8 @@ RUN python -m pip install --upgrade pip \
 
 COPY . .
 
+RUN chmod +x ./scripts/docker_entrypoint.sh
+
 RUN python - <<'PY'
 import os
 import shutil
@@ -67,4 +69,5 @@ PY
 
 EXPOSE 5000
 
+ENTRYPOINT ["./scripts/docker_entrypoint.sh"]
 CMD ["python", "-m", "flask", "run"]

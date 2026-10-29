@@ -16,6 +16,11 @@ echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || {
   exit 1
 }
 
+echo "$OWNER" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9-]*$' || {
+  echo "ERROR: owner must be a GitHub username or organization (not a domain name)."
+  exit 1
+}
+
 SHORT_SHA="$(git rev-parse --short=12 HEAD)"
 FULL_SHA="$(git rev-parse HEAD)"
 BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
@@ -28,7 +33,14 @@ echo "Commit  : ${FULL_SHA}"
 echo "Built at: ${BUILD_TIME}"
 echo
 
-docker login ghcr.io
+if [ "${GHCR_SKIP_LOGIN:-0}" = "1" ]; then
+  echo "Skipping docker login because GHCR_SKIP_LOGIN=1."
+elif [ -n "${GHCR_TOKEN:-}" ]; then
+  LOGIN_USER="${GHCR_USERNAME:-$OWNER}"
+  printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$LOGIN_USER" --password-stdin
+else
+  echo "GHCR_TOKEN not set. Using existing Docker credential store session for ghcr.io."
+fi
 
 docker buildx build --platform linux/amd64 \
   --build-arg APP_VERSION="$VERSION" \

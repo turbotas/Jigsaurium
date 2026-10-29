@@ -18,7 +18,5 @@ instance
 environments/*.local
 .env
 tests
-migrations
 Documentation
-scripts
 *.log

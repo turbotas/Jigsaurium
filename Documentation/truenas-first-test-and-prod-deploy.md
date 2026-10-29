@@ -13,6 +13,14 @@ You are currently running the local dev app process, not a release container. Th
 
 You do **not** need to type these manually. The new build scripts calculate them automatically and bake them into the image.
 
+## Why does it ask for GitHub login?
+
+Only the **push/promote** steps need GHCR authentication, because they write image tags to `ghcr.io`.
+
+- Local build + local smoke test does **not** require GHCR login.
+- Use a GitHub personal access token for packages, not your account password.
+- If your Docker credential store is already authenticated for `ghcr.io`, set `GHCR_SKIP_LOGIN=1` and scripts will not prompt login.
+
 ## Prerequisites
 
 - Docker is installed on this machine.
@@ -20,7 +28,8 @@ You do **not** need to type these manually. The new build scripts calculate them
 - You already have:
   - empty `test` and `prod` databases
   - reverse proxies and certificates ready
-  - TrueNAS Apps service running
+- TrueNAS Apps service running
+- Your GHCR owner value is your GitHub username/org (for example `turbotas`), not your domain name.
 
 ## Step 1: Prepare test/prod env files
 
@@ -32,6 +41,7 @@ Create and fill local env files:
 Minimum required values for each:
 
 - `APP_ENV` (`test` or `prod`)
+- `AUTO_MIGRATE=1` (runs Alembic migrations on container startup)
 - `DATABASE_URL`
 - `SECRET_KEY`
 - AI/embedding values (because your app requires them):
@@ -99,17 +109,25 @@ Expected keys include:
 
 If this works, move on to registry and TrueNAS.
 
+If the database is empty, startup should still succeed because `AUTO_MIGRATE=1` runs `alembic upgrade head` before Flask starts.
+
 ## Step 4: Build and push first release image
 
 ### Windows (batch script)
 
 ```bat
+set GHCR_SKIP_LOGIN=1
+set GHCR_USERNAME=your-github-username
+set GHCR_TOKEN=ghp_xxx
 scripts\build_release_image.bat v0.1.0 YOUR_ORG
 ```
 
 ### Linux/macOS (shell script)
 
 ```sh
+export GHCR_SKIP_LOGIN=1
+export GHCR_USERNAME=your-github-username
+export GHCR_TOKEN=ghp_xxx
 ./scripts/build_release_image.sh v0.1.0 YOUR_ORG
 ```
 
