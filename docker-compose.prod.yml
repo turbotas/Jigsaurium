@@ -2,7 +2,7 @@ name: jigsaurium
 
 services:
   web:
-    image: ghcr.io/YOUR_ORG/jigsaurium:prod
+    image: ghcr.io/turbotas/jigsaurium:prod
     container_name: jigsaurium-web
     restart: unless-stopped
     env_file:
