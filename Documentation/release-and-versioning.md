@@ -48,12 +48,22 @@ This metadata is visible in two places:
 - Workflow builds a container image and publishes it to GHCR.
 - Release tags are published as immutable image tags.
 
+Local equivalents are available for operators:
+
+- Windows: `scripts\\build_release_image.bat`
+- Linux/macOS: `./scripts/build_release_image.sh`
+
 ### Promote environment pointers
 
 - Trigger manually with `workflow_dispatch`.
 - Input the source release reference (`v1.2.3` by tag or `sha256:...` digest).
 - Input the target pointer (`dev`, `test`, or `prod`).
 - Workflow updates the pointer tag to point to the same image.
+
+Local equivalents are available for operators:
+
+- Windows: `scripts\\promote_pointer_tag.bat`
+- Linux/macOS: `./scripts/promote_pointer_tag.sh`
 
 This avoids rebuilding during promotion.
 

@@ -1,0 +1,22 @@
+name: jigsaurium-test
+
+services:
+  web:
+    image: ghcr.io/YOUR_ORG/jigsaurium:test
+    container_name: jigsaurium-test-web
+    restart: unless-stopped
+    env_file:
+      - path: ./environments/test.env.local
+        required: false
+      - path: ./environments/test.env.example
+        required: true
+    ports:
+      - "${JIGSAURIUM_TEST_PORT:-15000}:5000"
+    volumes:
+      - "${JIGSAURIUM_TEST_INSTANCE_PATH:-./instance-test}:/app/instance"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:5000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

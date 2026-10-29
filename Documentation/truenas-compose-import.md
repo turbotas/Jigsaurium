@@ -17,11 +17,10 @@ The compose file loads `environments/prod.env.local` when present, then falls ba
 At minimum, set:
 
 - `APP_ENV=prod`
-- `APP_VERSION=vX.Y.Z`
-- `APP_BUILD_SHA=<git sha>`
-- `APP_BUILD_TIME=<UTC ISO-8601>`
 - `DATABASE_URL=...`
 - `SECRET_KEY=...`
+
+`APP_VERSION`, `APP_BUILD_SHA`, and `APP_BUILD_TIME` are normally baked into the image by the build scripts and do not need runtime overrides.
 
 And for AI/embeddings-enabled production:
 
@@ -36,7 +35,8 @@ And for AI/embeddings-enabled production:
 - `IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY=1`
 - `IMAGE_EMBEDDINGS_WARM_ON_STARTUP=1`
 - `IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR=1`
-- `HF_TOKEN=...` (optional for build-time model fetches)
+
+`HF_TOKEN` is only needed at image build time if model download requires authenticated Hugging Face access.
 
 ## Notes
 

@@ -151,6 +151,15 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
   - Optional custom gate example: `scripts\update_python_dependencies.bat --test-cmd "-m pytest -p no:cacheprovider -q"`
   - Prod profile option: `scripts\update_python_dependencies.bat --profile prod PyMySQL==1.1.1`
 
+## Container release helpers
+
+- Build and push a SemVer release image:
+  - Windows: `scripts\build_release_image.bat v0.1.0 YOUR_ORG`
+  - Linux/macOS: `./scripts/build_release_image.sh v0.1.0 YOUR_ORG`
+- Promote pointer tags (`dev`, `test`, `prod`) to a release tag or digest:
+  - Windows: `scripts\promote_pointer_tag.bat YOUR_ORG test v0.1.0`
+  - Linux/macOS: `./scripts/promote_pointer_tag.sh YOUR_ORG test v0.1.0`
+
 ## Dependency files
 
 - `requirements/base.txt`: shared runtime dependencies.
