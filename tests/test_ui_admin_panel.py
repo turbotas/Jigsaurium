@@ -399,6 +399,15 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#collection-tab-diary")
         page.wait_for_selector("#collection-diary-panel:not([hidden])")
         page.select_option("#diary-jigsaw-id", jigsaw_option_value)
+        calendar_completion_value = page.evaluate(
+            """() => {
+                const now = new Date();
+                const year = String(now.getFullYear());
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                return `${year}-${month}-15T12:00`;
+            }"""
+        )
+        page.fill("#diary-completed-at", calendar_completion_value)
         page.select_option("#diary-difficulty", "4")
         page.fill("#diary-notes", "UI diary entry")
         page.click("#diary-entry-form button[type='submit']")
@@ -416,6 +425,15 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("#diary-calendar-region:not([hidden])")
         assert page.locator("#diary-calendar-grid .app-diary-calendar-day").count() == 42
         assert page.locator("#diary-calendar-grid .app-diary-calendar-day--has-entry").count() >= 1
+        day_15_with_entry = page.locator(
+            "#diary-calendar-grid .app-diary-calendar-day.app-diary-calendar-day--has-entry:not(.app-diary-calendar-day--outside-month)",
+            has=page.locator(".app-diary-calendar-day__number", has_text="15"),
+        )
+        assert day_15_with_entry.count() >= 1
+        assert day_15_with_entry.first.locator(".app-thumbnail-trigger").count() >= 1
+        assert day_15_with_entry.first.locator(".app-diary-calendar-day__meta", has_text="UI Smoke Puzzle").count() >= 1
+        diary_calendar_summary = (page.locator("#diary-calendar-summary").text_content() or "").strip().lower()
+        assert "completion" in diary_calendar_summary
         initial_month_label = (page.locator("#diary-calendar-month-label").text_content() or "").strip()
         page.click("#diary-calendar-next")
         next_month_label = (page.locator("#diary-calendar-month-label").text_content() or "").strip()

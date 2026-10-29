@@ -1,6 +1,6 @@
 # Auto-generated known-good dependency lock.
 # Refresh with scripts/update_python_dependencies.(bat|sh).
-alembic==1.20.0
+alembic==1.20.1
 annotated-doc==0.0.5
 anyio==4.15.1
 blinker==1.9.0
@@ -14,9 +14,9 @@ fsspec==2026.9.0
 greenlet==3.5.6
 h11==0.16.0
 hf-xet==1.7.0
-httpcore2==2.14.0
-httpx2==2.14.0
-huggingface_hub==2.2.0
+httpcore2==2.16.0
+httpx2==2.16.0
+huggingface_hub==2.3.0
 idna==3.20
 iniconfig==2.3.1
 itsdangerous==2.2.0
@@ -30,10 +30,11 @@ networkx==3.7
 numpy==2.5.4
 packaging==26.3
 pillow==13.0.0
-playwright==1.64.0
+playwright==1.64.1
 pluggy==1.7.0
 pyee==14.0.0
 Pygments==2.21.0
+PyJWT==2.15.1
 PyMySQL==1.2.3
 pytest==9.1.1
 python-dotenv==1.2.4
@@ -42,14 +43,14 @@ regex==2026.9.29
 requests==2.34.2
 rich==15.0.0
 safetensors==0.8.0
-setuptools==84.0.0
+setuptools==84.2.1
 shellingham==1.5.4
-SQLAlchemy==2.1.5
+SQLAlchemy==2.1.6
 sympy==1.14.0
 tokenizers==0.23.3
 torch==2.14.1
 tqdm==4.70.1
-transformers==5.20.1
+transformers==5.20.2
 truststore==0.10.5
 typer==0.27.3
 typing_extensions==4.16.0
