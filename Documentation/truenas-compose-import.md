@@ -8,10 +8,10 @@ Use `docker-compose.prod.yml` as the starting point for TrueNAS **Install via YA
    - `ghcr.io/your-org/jigsaurium:v1.2.3`
 2. Replace bind mounts with TrueNAS host paths:
     - `/mnt/<pool>/apps/jigsaurium/prod/instance:/app/instance`
-3. Replace `env_file` with explicit `environment:` entries in TrueNAS.
+3. Set `env_file` to absolute NAS paths that TrueNAS can read (for example `/mnt/NAS1Pool1/.../environments/test.env.local`), or replace with explicit `environment:` entries.
 4. If the image is private, configure a GHCR pull secret/registry credential in TrueNAS and attach it to the app.
 
-The compose file includes optional `env_file` paths for local Docker Compose usage. In TrueNAS, those repo-relative paths usually do not exist in the app sandbox, so set variables directly under `environment:` in the YAML/import UI.
+TrueNAS cannot resolve repo-relative `env_file` paths like `./environments/test.env.local` during YAML import. Use absolute `/mnt/...` paths for env files stored on the NAS.
 
 ## Private GHCR images
 

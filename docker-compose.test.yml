@@ -6,10 +6,8 @@ services:
     container_name: jigsaurium-test-web
     restart: unless-stopped
     env_file:
-      - path: ./environments/test.env.local
-        required: false
-      - path: ./environments/test.env.example
-        required: false
+      - path: /mnt/NAS1Pool1/documents/Projects/GitProjects/Jigsaurium/environments/test.env.local
+        required: true
     ports:
       - "${JIGSAURIUM_TEST_PORT:-15000}:5000"
     volumes:

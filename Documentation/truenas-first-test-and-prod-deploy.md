@@ -92,7 +92,7 @@ gh run list --workflow "Promote Pointer Tag" --limit 5
 2. Start from `docker-compose.test.yml`.
 3. Set image to `ghcr.io/<owner>/jigsaurium:test`.
 4. Replace volume host path with your TrueNAS dataset path.
-5. Do not rely on `env_file` paths in TrueNAS. In environment section, paste values from `environments/test.env.local`.
+5. In TrueNAS, use an absolute NAS path for `env_file` (for example `/mnt/NAS1Pool1/documents/Projects/GitProjects/Jigsaurium/environments/test.env.local`) or paste values under `environment:`.
 6. Deploy and wait for Running.
 7. Verify `GET /api/v1/health` through test URL.
 
@@ -118,7 +118,7 @@ gh workflow run promote-pointer-tag.yml -f source_ref=v0.1.0 -f target_pointer=p
 2. Start from `docker-compose.prod.yml`.
 3. Set image to `ghcr.io/<owner>/jigsaurium:prod`.
 4. Use prod dataset mount path.
-5. Paste prod runtime env values from `environments/prod.env.local` under `environment:`.
+5. Use absolute NAS `env_file` path `/mnt/NAS1Pool1/documents/Projects/GitProjects/Jigsaurium/environments/prod.env.local` or paste values under `environment:`.
 6. Deploy and verify `/api/v1/health` on prod URL.
 
 ## 8) Next releases
