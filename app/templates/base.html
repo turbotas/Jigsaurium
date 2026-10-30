@@ -12,6 +12,23 @@
       document.body.className += " js-enabled";
     </script>
     <a href="#main-content" class="govuk-skip-link" data-module="govuk-skip-link">Skip to main content</a>
+    {% if app_environment in ["dev", "test"] %}
+      <div class="app-env-flash" role="status" aria-label="Environment and build metadata">
+        <div class="govuk-width-container app-main-container">
+          <p class="govuk-body-s govuk-!-margin-bottom-0">
+            <strong>Environment:</strong> {{ app_environment }}
+            <span class="app-env-flash__divider">|</span>
+            <strong>Version:</strong> {{ app_version }}
+            <span class="app-env-flash__divider">|</span>
+            <strong>Build:</strong> {{ app_build_sha }}
+            {% if app_build_time %}
+              <span class="app-env-flash__divider">|</span>
+              <strong>Built:</strong> {{ app_build_time }}
+            {% endif %}
+          </p>
+        </div>
+      </div>
+    {% endif %}
     <main class="govuk-main-wrapper" id="main-content">
       <div class="govuk-width-container app-main-container">
         {% block content %}{% endblock %}

@@ -10,6 +10,26 @@
   max-width: 1240px;
 }
 
+.app-env-flash {
+  background: #1d70b8;
+  border-bottom: 2px solid #003078;
+  padding: 10px 0;
+  position: sticky;
+  top: 0;
+  z-index: 900;
+}
+
+.app-env-flash .govuk-body-s,
+.app-env-flash strong,
+.app-env-flash__divider {
+  color: #ffdd00;
+  font-weight: 700;
+}
+
+.app-env-flash__divider {
+  margin: 0 8px;
+}
+
 .app-build-meta {
   border-top: 1px solid #b1b4b6;
   margin-top: 24px;
