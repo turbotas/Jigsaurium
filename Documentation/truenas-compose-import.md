@@ -17,11 +17,20 @@ TrueNAS cannot resolve repo-relative `env_file` paths like `./environments/test.
 
 For private `ghcr.io/<owner>/jigsaurium:*` tags, TrueNAS must authenticate to GHCR.
 
-- Registry: `ghcr.io`
+Create a GitHub token first:
+
+- Fine-grained token: grant read access to Packages for the owner/repo scope used by this image.
+- Classic token fallback: `read:packages` (and `repo` if required by package visibility rules).
+
+Then configure TrueNAS registry credentials:
+
+- TrueNAS path: `Apps` -> `Configuration` -> `Container Registries` -> `Add`
+- Registry URI: `https://ghcr.io`
+
 - Username: your GitHub username (or machine user)
 - Password: GitHub PAT with at least `read:packages`
 
-Also ensure the package permissions in GitHub allow that account/token to read the `jigsaurium` container package.
+Also ensure the package permissions in GitHub allow that account/token to read the `jigsaurium` container package, and attach this credential to the app during install/update.
 
 ## Required runtime variables
 

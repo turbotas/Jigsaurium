@@ -17,6 +17,19 @@ Do not use local build/push scripts for first deploy.
 - You have DNS/proxy/TLS ready for test and prod hostnames.
 - You have two databases ready (`test` and `prod`).
 
+## 0) Configure GHCR pull credentials in TrueNAS (private images)
+
+If `ghcr.io/<owner>/jigsaurium:*` is private, do this once before deploy:
+
+1. In GitHub, create a PAT for image pull:
+   - Fine-grained token: grant read access to Packages for this repo owner.
+   - Classic token fallback: `read:packages` (and `repo` if package visibility requires it).
+2. In TrueNAS: `Apps` -> `Configuration` -> `Container Registries` -> `Add`.
+3. Registry URI: `https://ghcr.io`.
+4. Username: your GitHub username (for this project: `turbotas`).
+5. Password: the PAT.
+6. Save, then attach/select this registry credential when installing the app.
+
 ## 1) Prepare runtime env files
 
 Create:
@@ -96,7 +109,7 @@ gh run list --workflow "Promote Pointer Tag" --limit 5
 6. Deploy and wait for Running.
 7. Verify `GET /api/v1/health` through test URL.
 
-If image pull fails and your package is private, add GHCR registry credentials in TrueNAS (`ghcr.io`, GitHub username, PAT with `read:packages`) and attach that pull secret to the app.
+If image pull fails and your package is private, confirm the GHCR registry credential is attached to the app and the token still has package-read access.
 
 Expected key values:
 
@@ -144,5 +157,6 @@ Rollback is pointer-only:
 - `/api/v1/health` returns 500 on empty DB
   - Confirm `AUTO_MIGRATE=1` is present in runtime environment.
 - Image pull denied in TrueNAS
-  - Configure GHCR pull credentials in TrueNAS (`ghcr.io` + GitHub username + PAT `read:packages`).
+  - Configure GHCR pull credentials in TrueNAS (`https://ghcr.io` + GitHub username + PAT `read:packages`).
+  - Confirm the registry credential is attached to this app in TrueNAS.
   - Confirm package visibility/permissions for `ghcr.io/<owner>/jigsaurium`.
