@@ -2,7 +2,7 @@ name: jigsaurium-test
 
 services:
   web:
-    image: ghcr.io/YOUR_ORG/jigsaurium:test
+    image: ghcr.io/turbotas/jigsaurium:test
     container_name: jigsaurium-test-web
     restart: unless-stopped
     env_file:
