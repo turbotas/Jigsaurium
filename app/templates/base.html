@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Jigsaurium</title>
+    <title>Jigsaurium{% if app_environment == "dev" %}-DEV{% elif app_environment == "test" %}-TEST{% endif %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/govuk/govuk-frontend.min.css', v=static_asset_version) }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v=static_asset_version) }}">
   </head>
