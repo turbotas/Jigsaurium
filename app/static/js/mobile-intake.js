@@ -325,13 +325,79 @@
     syncLoginUiForAuthMode();
   }
 
-  async function consumeStfdTokenFromUrl() {
-    if (!state.stfdAuthEnabled) {
-      return null;
+  function extractStfdTokenFromUrl(url) {
+    const parameterNames = ["token", "jwt", "assertion"];
+    for (const parameterName of parameterNames) {
+      const value = String(url.searchParams.get(parameterName) || "").trim();
+      if (value) {
+        return value;
+      }
     }
 
+    const rawHash = String(url.hash || "").replace(/^#/, "").trim();
+    if (!rawHash) {
+      return "";
+    }
+
+    const hashSegments = [rawHash];
+    const questionMarkIndex = rawHash.indexOf("?");
+    if (questionMarkIndex >= 0 && questionMarkIndex + 1 < rawHash.length) {
+      hashSegments.push(rawHash.slice(questionMarkIndex + 1));
+    }
+
+    for (const segment of hashSegments) {
+      const params = new URLSearchParams(segment);
+      for (const parameterName of parameterNames) {
+        const value = String(params.get(parameterName) || "").trim();
+        if (value) {
+          return value;
+        }
+      }
+    }
+
+    return "";
+  }
+
+  function removeStfdTokenFromUrl(url) {
+    const parameterNames = ["token", "jwt", "assertion"];
+    parameterNames.forEach((parameterName) => {
+      url.searchParams.delete(parameterName);
+    });
+
+    const rawHash = String(url.hash || "").replace(/^#/, "").trim();
+    if (!rawHash) {
+      return;
+    }
+
+    const questionMarkIndex = rawHash.indexOf("?");
+    if (questionMarkIndex >= 0) {
+      const hashPath = rawHash.slice(0, questionMarkIndex);
+      const query = rawHash.slice(questionMarkIndex + 1);
+      const params = new URLSearchParams(query);
+      parameterNames.forEach((parameterName) => {
+        params.delete(parameterName);
+      });
+      const nextQuery = params.toString();
+      url.hash = nextQuery ? `#${hashPath}?${nextQuery}` : hashPath ? `#${hashPath}` : "";
+      return;
+    }
+
+    if (rawHash.includes("=") || rawHash.includes("&")) {
+      const params = new URLSearchParams(rawHash);
+      const hadToken = parameterNames.some((parameterName) => params.has(parameterName));
+      if (hadToken) {
+        parameterNames.forEach((parameterName) => {
+          params.delete(parameterName);
+        });
+        const nextHash = params.toString();
+        url.hash = nextHash ? `#${nextHash}` : "";
+      }
+    }
+  }
+
+  async function consumeStfdTokenFromUrl() {
     const url = new URL(window.location.href);
-    const token = String(url.searchParams.get("token") || "").trim();
+    const token = extractStfdTokenFromUrl(url);
     if (!token) {
       return null;
     }
@@ -346,7 +412,7 @@
       body: JSON.stringify({ token }),
     });
     const payload = await parseJsonSafe(response);
-    url.searchParams.delete("token");
+    removeStfdTokenFromUrl(url);
     window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
     if (!response.ok) {
       const message = payload?.error?.message || "Sign in failed.";
