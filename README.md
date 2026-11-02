@@ -102,9 +102,14 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
 - Run GUI tests only:
   - Windows: `.venv\Scripts\python.exe -m pytest -m ui -p no:cacheprovider`
   - Linux/macOS: `.venv/bin/python -m pytest -m ui -p no:cacheprovider`
+- Run embedding runtime tests only (requires optional embedding dependencies):
+  - Windows: `.venv\Scripts\python.exe -m pip install -r requirements/embeddings.txt && .venv\Scripts\python.exe -m pytest -m embedding -p no:cacheprovider`
+  - Linux/macOS: `.venv/bin/python -m pip install -r requirements/embeddings.txt && .venv/bin/python -m pytest -m embedding -p no:cacheprovider`
 - CI runs automatically with GitHub Actions:
-  - `API and Core Tests` runs `pytest -m "not ui"` on pushes and pull requests.
+  - `API and Core Tests` runs `pytest -m "not ui and not embedding"` on pushes and pull requests.
   - `UI Smoke Tests` runs `pytest -m ui` on pull requests and pushes to `main`.
+  - `Embedding Runtime Tests` runs separately (manual/weekly) to avoid default CI runner disk pressure.
+  - Workflows include a package guard that fails if any `nvidia-*` or `cuda-*` pip dependency is installed.
 - Note: test scripts disable pytest cache provider (`-p no:cacheprovider`) to avoid Windows network-share permission issues at test finalization.
 - Troubleshooting:
   - If `ModuleNotFoundError: No module named 'flask'` appears in tests, Python is not using this repo's virtual environment.
@@ -166,6 +171,7 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
 - `requirements/base.txt`: shared runtime dependencies.
 - `requirements/prod.txt`: production install set (no pytest).
 - `requirements/dev.txt`: developer/test install set (includes pytest).
+- `requirements/embeddings.txt`: optional embedding runtime dependencies, pinned to CPU-only PyTorch wheel index (no CUDA/NVIDIA packages).
 - `requirements/known-good-dev.txt`: exact tested dependency lock for dev/test installs.
 - `requirements/known-good-prod.txt`: exact tested dependency lock for production profile installs.
 - `requirements.txt`: compatibility alias to production dependencies.

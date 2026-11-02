@@ -2,10 +2,14 @@ from io import BytesIO
 import sys
 from types import ModuleType, SimpleNamespace
 
-import torch
+import pytest
 from PIL import Image
 
 from app import image_embeddings
+
+
+pytestmark = pytest.mark.embedding
+torch = pytest.importorskip("torch")
 
 
 def _make_png_bytes(color=(10, 20, 30), size=(12, 12)):

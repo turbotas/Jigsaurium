@@ -41,8 +41,9 @@ This folder defines the product, architecture, and delivery rules for Jigsaurium
 ## Delivery Automation Notes
 
 - CI workflows are defined in `.github/workflows/`.
-- `API and Core Tests` runs on pushes and pull requests.
+- `API and Core Tests` runs on pushes and pull requests (excluding `ui` and `embedding` markers).
 - `UI Smoke Tests` runs on pull requests and pushes to `main` and `master`.
+- `Embedding Runtime Tests` runs separately (manual + weekly schedule).
 - Developer operational scripts are documented in `README.md`, including:
   - test execution (`scripts/run_tests.bat`, `scripts/run_tests.sh`)
   - direct interpreter test execution (`.venv\\Scripts\\python.exe -m pytest` on Windows, `.venv/bin/python -m pytest` on Linux/macOS)

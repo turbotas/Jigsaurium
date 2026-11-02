@@ -1,0 +1,38 @@
+name: Embedding Runtime Tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 0"
+
+jobs:
+  embedding-tests:
+    name: Embedding Runtime Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install core test dependencies
+        run: python -m pip install --no-cache-dir -r requirements/dev.txt
+
+      - name: Install embedding dependencies
+        run: python -m pip install --no-cache-dir -r requirements/embeddings.txt
+
+      - name: Guard against GPU dependency installs
+        run: |
+          python -c "import subprocess, sys; lines = subprocess.check_output([sys.executable, '-m', 'pip', 'freeze'], text=True).splitlines(); names = [line.split('==', 1)[0].strip().lower() for line in lines if '==' in line]; blocked = sorted({name for name in names if name.startswith('nvidia-') or name.startswith('cuda-')});
+          if blocked:
+              print('Blocked GPU package(s) detected in pip environment:');
+              [print(f'- {name}') for name in blocked];
+              raise SystemExit(1)
+          print('GPU dependency guard passed: no nvidia-* or cuda-* pip packages found.')"
+
+      - name: Run embedding pytest suite
+        run: python -m pytest -m embedding
