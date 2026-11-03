@@ -255,3 +255,10 @@
 - Why: operations need direct remediation for suspicious or stale sessions without waiting for user action.
 - Decision: enforce inactivity expiry at 120 minutes by default (configurable via `SESSION_IDLE_TIMEOUT_MINUTES`) and record session origin using resolved client IP from trusted forwarded headers.
 - Why: this aligns with low-sensitivity app posture while preserving accurate client attribution behind reverse proxies.
+
+## 2026-11-03 - Capability Catalogue Documentation Before Runtime Role-Capability Editing
+
+- Decision: defer runtime role-capability management UI/API (issue #8 scope) and first publish a canonical role capability catalogue in documentation.
+- Why: current capability mapping is static and operationally stable; documenting defaults addresses immediate support/troubleshooting needs with lower delivery risk.
+- Decision: explicitly include public unauthenticated browse scope in authorization documentation (`GET /api/v1/jigsaws`, `GET /api/v1/jigsaws/thumbnail-images`, and constrained non-retired preview/thumbnail image access).
+- Why: the security posture now intentionally includes guest read-only data access and must be clearly documented alongside role capabilities.

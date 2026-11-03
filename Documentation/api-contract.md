@@ -197,10 +197,8 @@
 - In STFD mode with `STFD_ALLOW_LOCAL_LOGIN=1`, login requests may use either STFD token or local email/password.
 - In STFD mode, local account edits via `PATCH /api/v1/auth/me` are rejected with `403`; profile/password are managed by STFD.
 - Auth payload user objects include a derived `capabilities` array to support SPA feature-gating without hardcoding role names.
-- Current role capability defaults:
-  - `administrator`: full administrative capabilities, including user/loan/AI management and destructive actions.
-  - `member`: shared-collection capabilities for jigsaw create/read/update/enrich, diary create/read/update-own, image upload/library/tag/assign/delete, and audit read.
-  - `borrower`: legacy compatibility role that currently maps to the same capabilities as `member`.
+- Current role capability defaults are documented in `Documentation/domain-rules.md` under "Role Capability Catalogue (Current Default Mapping)".
+- v1 does not yet provide runtime role-capability management endpoints; mapping changes currently require code + deploy.
 - `PATCH /api/v1/auth/me` allows users to update their own `display_name` (username) and change password with `current_password` + `new_password`.
 - `PATCH /api/v1/auth/me` rejects email changes.
 - Repeated failed login attempts for the same client/IP + email are rate-limited; blocked attempts return `429` and include `Retry-After`.

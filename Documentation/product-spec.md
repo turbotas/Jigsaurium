@@ -11,12 +11,15 @@ Build a personal jigsaw collection application centered on inventory management 
   - Manage jigsaw inventory (create, update, retire, restore).
   - View and manage lending records.
   - View and terminate active application sessions.
+- Member
+  - Participate in shared collection workflows (create/update jigsaws, upload/tag/assign images, add diary entries, edit own diary entries).
+  - View shared collection and activity according to assigned capabilities.
 - Borrower
-  - View available jigsaws.
-  - View own borrowing status and history.
-  - Borrow and return jigsaws (subject to policy and implementation phase).
+  - Legacy compatibility role; currently capability-equivalent to `member`.
+  - Preserved to avoid breaking existing assignments and STFD mappings during transition.
 - Guest (unauthenticated)
   - Browse non-retired jigsaws in the catalog.
+  - Browse non-retired jigsaw thumbnails.
   - Sign in.
 
 ## Delivery Phases
@@ -48,6 +51,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 
 - Authentication and authorization.
 - Public browse access for jigsaw catalog listing (read-only, non-retired records only).
+- Public browse access for non-retired jigsaw thumbnails.
 - Role management with at least `administrator`, `member`, and legacy `borrower` support during transition.
 - Jigsaw management:
   - Add (quick-add: title + piece count), edit, archive/retire, restore.

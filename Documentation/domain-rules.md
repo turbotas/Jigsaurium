@@ -8,6 +8,59 @@
 - `borrower` remains supported as a legacy compatibility role and currently maps to member-style capabilities.
 - Borrowers cannot mutate user/role data.
 
+### Role Capability Catalogue (Current Default Mapping)
+
+- Current capability mapping source is static code in `app/api/v1/routes.py` (`ROLE_CAPABILITIES`).
+- v1 does not yet provide an admin API/UI to mutate role-capability mappings at runtime.
+- Effective defaults:
+  - `administrator`:
+    - `ai.manage`
+    - `audit.read`
+    - `diary.create`
+    - `diary.delete_any`
+    - `diary.read`
+    - `diary.update_any`
+    - `diary.update_own`
+    - `image.assign`
+    - `image.delete`
+    - `image.manage_library`
+    - `image.tag`
+    - `image.upload`
+    - `jigsaw.create`
+    - `jigsaw.enrich`
+    - `jigsaw.read`
+    - `jigsaw.update`
+    - `loan.manage`
+    - `user.manage`
+  - `member`:
+    - `audit.read`
+    - `diary.create`
+    - `diary.read`
+    - `diary.update_own`
+    - `image.assign`
+    - `image.delete`
+    - `image.manage_library`
+    - `image.tag`
+    - `image.upload`
+    - `jigsaw.create`
+    - `jigsaw.enrich`
+    - `jigsaw.read`
+    - `jigsaw.update`
+  - `borrower` (legacy compatibility):
+    - `audit.read`
+    - `diary.create`
+    - `diary.read`
+    - `diary.update_own`
+    - `image.assign`
+    - `image.delete`
+    - `image.manage_library`
+    - `image.tag`
+    - `image.upload`
+    - `jigsaw.create`
+    - `jigsaw.enrich`
+    - `jigsaw.read`
+    - `jigsaw.update`
+
 ## Identity Rules
 
 - STFD UNI (`sub`) is persisted in `users.auth_subject` and is the primary identity link for JIT sign-in.
@@ -36,6 +89,8 @@
 - Retired jigsaws are hidden from non-admin browse views by default, including unauthenticated catalog browse.
 - Admins can permanently delete a jigsaw even when it has loan history.
 - Permanent delete removes the jigsaw row and hard-deletes its associated images, diary entries, and loans (active or historic).
+- Public (unauthenticated) browse includes `GET /api/v1/jigsaws` and `GET /api/v1/jigsaws/thumbnail-images` for non-retired records only.
+- Public image-content access is limited to `thumbnail` and `preview` variants for non-retired, jigsaw-linked images.
 
 ## Jigsaw Image Rules
 
