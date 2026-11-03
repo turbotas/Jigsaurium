@@ -4,6 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Jigsaurium{% if app_environment == "dev" %}-DEV{% elif app_environment == "test" %}-TEST{% endif %}</title>
+    <link rel="icon" href="{{ url_for('main.favicon') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='branding/icons/favicon-32.png', v=static_asset_version) }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='branding/icons/favicon-16.png', v=static_asset_version) }}">
+    <link rel="shortcut icon" href="{{ url_for('main.favicon') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('main.apple_touch_icon') }}">
+    <link rel="manifest" href="{{ url_for('main.site_webmanifest') }}">
+    <meta name="theme-color" content="#1d70b8">
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/govuk/govuk-frontend.min.css', v=static_asset_version) }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v=static_asset_version) }}">
   </head>
