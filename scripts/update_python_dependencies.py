@@ -17,8 +17,8 @@ KNOWN_GOOD_FILES = {
 }
 
 PROFILE_FILES = {
-    "dev": [Path("requirements/base.txt"), Path("requirements/dev.txt")],
-    "prod": [Path("requirements/base.txt")],
+    "dev": [Path("requirements/base.txt"), Path("requirements/embeddings.txt"), Path("requirements/dev.txt")],
+    "prod": [Path("requirements/base.txt"), Path("requirements/embeddings.txt")],
 }
 
 PROFILE_REQUIREMENTS = {
@@ -112,6 +112,7 @@ def update_requirement_line_with_version(line: str, installed_versions: dict[str
     installed_version = installed_versions.get(canonicalize_name(package_name))
     if not installed_version:
         return line, False
+    lower_bound_version = installed_version.split("+", 1)[0]
 
     specifiers = requirement[len(package_name) :].strip()
     tokens = [token.strip() for token in specifiers.split(",") if token.strip()]
@@ -124,15 +125,15 @@ def update_requirement_line_with_version(line: str, installed_versions: dict[str
             lower_or_pin_updated = True
             continue
         if token.startswith(">=") or token.startswith(">"):
-            updated_tokens.append(f">={installed_version}")
+            updated_tokens.append(f">={lower_bound_version}")
             lower_or_pin_updated = True
             continue
         updated_tokens.append(token)
 
     if not tokens:
-        updated_tokens = [f">={installed_version}"]
+        updated_tokens = [f">={lower_bound_version}"]
     elif not lower_or_pin_updated:
-        updated_tokens.insert(0, f">={installed_version}")
+        updated_tokens.insert(0, f">={lower_bound_version}")
 
     updated_requirement = f"{package_name}{','.join(updated_tokens)}"
     updated_line = updated_requirement

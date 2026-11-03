@@ -35,7 +35,7 @@ RUN apt-get update \
 
 COPY requirements ./requirements
 RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements/prod.txt
+    && python -m pip install -r requirements/prod.txt -c requirements/known-good-prod.txt
 
 COPY . .
 

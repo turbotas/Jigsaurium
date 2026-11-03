@@ -16,7 +16,7 @@
 
 - Use `requirements/prod.txt` for production/runtime-only installs.
 - Use `requirements/dev.txt` for developer environments and test execution.
-- Use `requirements/embeddings.txt` for optional embedding runtime dependencies (`torch`, `transformers`).
+- Use `requirements/embeddings.txt` for core embedding runtime dependencies (`torch`, `transformers`).
 - Production/test deployment target is CPU-only; install PyTorch from the CPU wheel index only and do not install CUDA/NVIDIA runtime packages.
 - Use `requirements/known-good-dev.txt` and `requirements/known-good-prod.txt` as constraints files for reproducible installs.
 - `requirements.txt` points to production dependencies for compatibility.
@@ -74,6 +74,7 @@
 
 ## Embedding Model Provisioning
 
+- Container images are CPU-only and include embedding dependencies/model vendoring by default.
 - For deterministic embedding startup, prefetch the pinned model revision into `IMAGE_EMBEDDING_MODEL_LOCAL_PATH` before enabling embeddings.
 - Example (run from repo root):
   - Windows: `.venv\Scripts\python.exe scripts\prefetch_embedding_model.py`
@@ -145,7 +146,7 @@
 
 ## CI/Test Execution Notes
 
-- CI runs API/core tests on pushes and pull requests (excluding `ui` and `embedding` markers).
+- CI runs API/core tests on pushes and pull requests (excluding `ui` marker).
 - CI runs UI smoke tests on pull requests and pushes to `main`/`master`.
 - Embedding runtime tests run in a separate manual/weekly workflow.
 - CI workflows enforce a GPU package guard: fail when pip resolves any `nvidia-*` or `cuda-*` package.
