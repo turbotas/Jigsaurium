@@ -5,7 +5,20 @@ import pytest
 import jwt
 
 from app.db import get_session
-from app.models import AuditEvent, Jigsaw, Loan, Role, User, UserRole
+from app.models import (
+    AiUsageEvent,
+    AuditEvent,
+    BulkAiCreateJob,
+    BulkAiCreateJobItem,
+    Jigsaw,
+    JigsawDiaryEntry,
+    JigsawImage,
+    Loan,
+    Role,
+    User,
+    UserRole,
+    UserSession,
+)
 from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
 
@@ -158,6 +171,7 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
         ("POST", "/api/v1/security/blocked-ips", {"ip_address": "203.0.113.5", "duration_hours": 24}),
         ("POST", "/api/v1/loans/1/return", {}),
         ("PATCH", "/api/v1/jigsaws/1", {"title": "Updated title"}),
+        ("DELETE", "/api/v1/users/1", None),
         ("DELETE", "/api/v1/security/blocked-ips/1", None),
         ("DELETE", "/api/v1/security/sessions/1", None),
         ("DELETE", "/api/v1/jigsaws/1", None),
@@ -176,6 +190,20 @@ def test_api_users_forbidden_for_borrower_role(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["borrower_user_id"])
 
     response = client.get("/api/v1/users")
+
+    assert response.status_code == 403
+    payload = response.get_json()
+    assert payload["error"]["code"] == "forbidden"
+
+
+@pytest.mark.functional
+def test_delete_user_forbidden_for_borrower_role(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["borrower_user_id"])
+
+    response = client.delete(
+        f"/api/v1/users/{seeded_identity_data['member_user_id']}",
+        headers=_csrf_headers(),
+    )
 
     assert response.status_code == 403
     payload = response.get_json()
@@ -1859,6 +1887,143 @@ def test_update_user_rejects_self_deactivation(client, seeded_identity_data):
 
     assert response.status_code == 409
     assert response.get_json()["error"]["code"] == "conflict"
+
+
+@pytest.mark.functional
+def test_delete_user_rejects_active_user(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    response = client.delete(
+        f"/api/v1/users/{seeded_identity_data['borrower_user_id']}",
+        headers=_csrf_headers(),
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "conflict"
+
+
+@pytest.mark.functional
+def test_delete_user_rejects_when_active_session_exists(app, client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    with app.app_context():
+        db_session = get_session()
+        borrower_user = db_session.get(User, seeded_identity_data["borrower_user_id"])
+        borrower_user.is_active = False
+        db_session.add(
+            UserSession(
+                user_id=borrower_user.id,
+                session_identifier="active-delete-guard",
+                auth_provider="local",
+                last_activity_at=datetime.now(timezone.utc),
+            )
+        )
+        db_session.commit()
+
+    response = client.delete(
+        f"/api/v1/users/{seeded_identity_data['borrower_user_id']}",
+        headers=_csrf_headers(),
+    )
+
+    assert response.status_code == 409
+    payload = response.get_json()
+    assert payload["error"]["code"] == "conflict"
+
+    with app.app_context():
+        db_session = get_session()
+        assert db_session.get(User, seeded_identity_data["borrower_user_id"]) is not None
+
+
+@pytest.mark.functional
+def test_admin_can_delete_inactive_user_and_cleanup_linked_data(app, client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    with app.app_context():
+        db_session = get_session()
+        borrower_user = db_session.get(User, seeded_identity_data["borrower_user_id"])
+        borrower_user.is_active = False
+
+        db_session.add(
+            Loan(
+                borrower_user_id=borrower_user.id,
+                jigsaw_id=seeded_identity_data["available_jigsaw_id"],
+                due_at=datetime.now(timezone.utc) + timedelta(days=28),
+                status=LoanStatus.ACTIVE,
+            )
+        )
+        db_session.add(
+            JigsawDiaryEntry(
+                jigsaw_id=seeded_identity_data["available_jigsaw_id"],
+                created_by_user_id=borrower_user.id,
+                completed_at=datetime.now(timezone.utc),
+                notes="Cleanup test",
+            )
+        )
+        image = JigsawImage(
+            jigsaw_id=seeded_identity_data["available_jigsaw_id"],
+            tag="Completed",
+            filename="cleanup.png",
+            mime_type="image/png",
+            image_data=b"png-bytes",
+            uploaded_by_user_id=borrower_user.id,
+        )
+        db_session.add(image)
+
+        db_session.add(
+            AuditEvent(
+                actor_user_id=borrower_user.id,
+                action="test.cleanup",
+                entity_type="user",
+                entity_id=str(borrower_user.id),
+            )
+        )
+        db_session.add(
+            AiUsageEvent(
+                actor_user_id=borrower_user.id,
+                operation="image_to_jigsaw",
+                status="success",
+                final_cost_usd=0,
+            )
+        )
+        bulk_job = BulkAiCreateJob(actor_user_id=borrower_user.id, status="queued")
+        db_session.add(bulk_job)
+        db_session.flush()
+        db_session.add(BulkAiCreateJobItem(job_id=bulk_job.id, status="queued", image_id=image.id))
+        db_session.commit()
+
+    response = client.delete(
+        f"/api/v1/users/{seeded_identity_data['borrower_user_id']}",
+        headers=_csrf_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["data"]["deleted"] is True
+    assert payload["data"]["id"] == seeded_identity_data["borrower_user_id"]
+
+    with app.app_context():
+        db_session = get_session()
+        assert db_session.get(User, seeded_identity_data["borrower_user_id"]) is None
+        assert db_session.query(Loan).filter_by(borrower_user_id=seeded_identity_data["borrower_user_id"]).count() == 0
+        assert (
+            db_session.query(JigsawDiaryEntry)
+            .filter_by(created_by_user_id=seeded_identity_data["borrower_user_id"])
+            .count()
+            == 0
+        )
+        assert db_session.query(AuditEvent).filter_by(actor_user_id=seeded_identity_data["borrower_user_id"]).count() == 0
+        assert db_session.query(AiUsageEvent).filter_by(actor_user_id=seeded_identity_data["borrower_user_id"]).count() == 0
+        assert db_session.query(BulkAiCreateJob).filter_by(actor_user_id=seeded_identity_data["borrower_user_id"]).count() == 0
+
+        image_row = db_session.query(JigsawImage).filter_by(filename="cleanup.png").one()
+        assert image_row.uploaded_by_user_id is None
+
+        deletion_audit = (
+            db_session.query(AuditEvent)
+            .filter_by(action="user.deleted", entity_type="user", entity_id=str(seeded_identity_data["borrower_user_id"]))
+            .one_or_none()
+        )
+        assert deletion_audit is not None
 
 
 @pytest.mark.functional

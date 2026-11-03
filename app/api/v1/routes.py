@@ -4455,6 +4455,129 @@ def update_user(user_id):
     return _success_response(_serialize_user(user, updated_roles))
 
 
+@api_v1_bp.delete("/users/<int:user_id>")
+@require_role("administrator")
+def delete_user(user_id):
+    db_session = get_session()
+    user = db_session.get(User, user_id)
+    if user is None:
+        return _error_response("not_found", "User was not found.", 404)
+
+    if user.is_active:
+        return _error_response("conflict", "Active users must be deactivated before deletion.", 409)
+
+    now = datetime.now(timezone.utc)
+    cutoff = _get_session_inactivity_cutoff(now)
+    active_session_count = int(
+        db_session.execute(
+            select(func.count())
+            .select_from(UserSession)
+            .where(
+                UserSession.user_id == user.id,
+                UserSession.terminated_at.is_(None),
+                UserSession.last_activity_at > cutoff,
+            )
+        ).scalar_one()
+        or 0
+    )
+    if active_session_count > 0:
+        return _error_response("conflict", "Cannot delete a user with an active session.", 409)
+
+    deleted_role_count = int(
+        db_session.execute(sa_delete(UserRole).where(UserRole.user_id == user.id)).rowcount or 0
+    )
+    deleted_session_count = int(
+        db_session.execute(sa_delete(UserSession).where(UserSession.user_id == user.id)).rowcount or 0
+    )
+    deleted_loan_count = int(db_session.execute(sa_delete(Loan).where(Loan.borrower_user_id == user.id)).rowcount or 0)
+
+    nullified_diary_updated_count = int(
+        db_session.execute(
+            sa_update(JigsawDiaryEntry)
+            .where(JigsawDiaryEntry.updated_by_user_id == user.id)
+            .values(updated_by_user_id=None)
+        ).rowcount
+        or 0
+    )
+    deleted_diary_entry_count = int(
+        db_session.execute(sa_delete(JigsawDiaryEntry).where(JigsawDiaryEntry.created_by_user_id == user.id)).rowcount or 0
+    )
+    nullified_uploaded_image_count = int(
+        db_session.execute(
+            sa_update(JigsawImage).where(JigsawImage.uploaded_by_user_id == user.id).values(uploaded_by_user_id=None)
+        ).rowcount
+        or 0
+    )
+
+    deleted_audit_event_count = int(
+        db_session.execute(
+            sa_delete(AuditEvent).where(
+                or_(
+                    AuditEvent.actor_user_id == user.id,
+                    (AuditEvent.entity_type == "user") & (AuditEvent.entity_id == str(user.id)),
+                )
+            )
+        ).rowcount
+        or 0
+    )
+    deleted_ai_usage_event_count = int(
+        db_session.execute(sa_delete(AiUsageEvent).where(AiUsageEvent.actor_user_id == user.id)).rowcount or 0
+    )
+
+    bulk_job_ids = db_session.execute(
+        select(BulkAiCreateJob.id).where(BulkAiCreateJob.actor_user_id == user.id)
+    ).scalars().all()
+    deleted_bulk_job_item_count = 0
+    if bulk_job_ids:
+        deleted_bulk_job_item_count = int(
+            db_session.execute(sa_delete(BulkAiCreateJobItem).where(BulkAiCreateJobItem.job_id.in_(bulk_job_ids))).rowcount or 0
+        )
+    deleted_bulk_job_count = int(
+        db_session.execute(sa_delete(BulkAiCreateJob).where(BulkAiCreateJob.actor_user_id == user.id)).rowcount or 0
+    )
+
+    nullified_embedding_job_count = int(
+        db_session.execute(
+            sa_update(ImageEmbeddingJob)
+            .where(ImageEmbeddingJob.actor_user_id == user.id)
+            .values(actor_user_id=None)
+        ).rowcount
+        or 0
+    )
+    nullified_blocked_ip_count = int(
+        db_session.execute(sa_update(BlockedIp).where(BlockedIp.created_by_user_id == user.id).values(created_by_user_id=None)).rowcount
+        or 0
+    )
+
+    deleted_user_id = int(user.id)
+    deleted_user_email = user.email
+    db_session.delete(user)
+
+    _record_audit_event(
+        action="user.deleted",
+        entity_type="user",
+        entity_id=deleted_user_id,
+        payload={
+            "email": deleted_user_email,
+            "deleted_role_count": deleted_role_count,
+            "deleted_session_count": deleted_session_count,
+            "deleted_loan_count": deleted_loan_count,
+            "deleted_diary_entry_count": deleted_diary_entry_count,
+            "nullified_diary_updated_count": nullified_diary_updated_count,
+            "nullified_uploaded_image_count": nullified_uploaded_image_count,
+            "deleted_audit_event_count": deleted_audit_event_count,
+            "deleted_ai_usage_event_count": deleted_ai_usage_event_count,
+            "deleted_bulk_job_count": deleted_bulk_job_count,
+            "deleted_bulk_job_item_count": deleted_bulk_job_item_count,
+            "nullified_embedding_job_count": nullified_embedding_job_count,
+            "nullified_blocked_ip_count": nullified_blocked_ip_count,
+        },
+    )
+    db_session.commit()
+
+    return _success_response({"id": deleted_user_id, "deleted": True})
+
+
 @api_v1_bp.get("/jigsaws")
 def list_jigsaws():
     _load_current_user()

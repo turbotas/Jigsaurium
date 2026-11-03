@@ -14,6 +14,10 @@
 - STFD role UNI values are mapped to local role rows via `roles.uni`.
 - In STFD mode, successful sign-in performs JIT user provisioning/sync and refreshes local role assignments from token role UNI claims.
 - In STFD mode, profile/password edits are managed externally and `PATCH /api/v1/auth/me` is disabled.
+- Admin user lifecycle allows create, deactivate, and reactivate through user-management APIs.
+- Permanent user deletion is admin-only and requires the target account to be inactive.
+- Permanent user deletion is blocked while the target has any active app session.
+- Permanent user deletion performs cleanup of user-linked records that cannot safely remain without the account (for example loans, created diary entries, and actor-linked audit/AI job history), while nullable attribution links are cleared where applicable.
 
 ## Jigsaw Rules
 

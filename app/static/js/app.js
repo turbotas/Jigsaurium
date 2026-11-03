@@ -2603,6 +2603,17 @@
       actionButton.textContent = toggleText;
       controlsWrap.appendChild(actionButton);
 
+      if (!isActive) {
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "govuk-button govuk-button--warning app-inline-button";
+        deleteButton.setAttribute("data-module", "govuk-button");
+        deleteButton.dataset.userDelete = String(user.id);
+        deleteButton.dataset.userEmail = String(user.email || "");
+        deleteButton.textContent = "Delete";
+        controlsWrap.appendChild(deleteButton);
+      }
+
       actionCell.appendChild(controlsWrap);
 
       row.appendChild(actionCell);
@@ -7330,6 +7341,38 @@
         await apiRequest(`/api/v1/security/blocked-ips/${blockedIpId}`, { method: "DELETE" });
         showFeedback("IP block removed.");
         await Promise.all([loadBlockedIps(), loadAuditEvents()]);
+      } catch (error) {
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
+    const deleteUserButton = event.target.closest("[data-user-delete]");
+    if (deleteUserButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const userId = Number(deleteUserButton.getAttribute("data-user-delete") || "0");
+      const userEmail = String(deleteUserButton.getAttribute("data-user-email") || "").trim();
+      if (!userId) {
+        showFeedback("Could not determine user to delete.", true);
+        return;
+      }
+
+      const confirmationMessage = userEmail
+        ? `Permanently delete ${userEmail}? This also removes user-related data and cannot be undone.`
+        : "Permanently delete this user? This also removes user-related data and cannot be undone.";
+      if (!window.confirm(confirmationMessage)) {
+        return;
+      }
+
+      try {
+        await apiRequest(`/api/v1/users/${userId}`, { method: "DELETE" });
+        if (Number(elements.editUserId?.value || "0") === userId) {
+          closeUserEditor();
+        }
+        showFeedback("User deleted permanently.");
+        await Promise.all([loadUsers(), loadLoans(), loadAuditEvents()]);
       } catch (error) {
         showFeedback(error.message, true);
       }

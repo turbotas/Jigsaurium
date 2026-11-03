@@ -110,6 +110,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 - Admin can log, edit, and delete completion diary entries with difficulty ratings and notes per jigsaw.
 - Diary tab supports list and month-calendar modes, with month navigation in calendar mode.
 - Admin can create users and assign one of the supported roles.
+- Admin can deactivate/reactivate users, and can permanently delete only inactive users that do not have an active app session.
 - Borrower cannot access admin-only API endpoints.
 - Unauthenticated users can browse non-retired jigsaws and cannot access authenticated-only features.
 - All create/update/delete actions write an audit event.

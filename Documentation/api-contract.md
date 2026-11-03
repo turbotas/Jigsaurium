@@ -42,6 +42,7 @@
 - `GET /api/v1/users`
 - `POST /api/v1/users`
 - `PATCH /api/v1/users/{id}`
+- `DELETE /api/v1/users/{id}`
 - `GET /api/v1/roles`
 - `GET /api/v1/audit-events`
 - `GET /api/v1/security/blocked-ips`
@@ -213,6 +214,10 @@
   - `PATCH /api/v1/users/{id}` can reset a user's password via optional `password` field (same constraints).
   - Login `password` must be non-empty, `<= 256` chars, and must not contain control chars.
   - Administrators cannot deactivate their own account (`PATCH /api/v1/users/{id}` returns `409` for self-deactivation).
+  - `DELETE /api/v1/users/{id}` is administrator-only and permanently deletes one inactive user.
+  - Active users cannot be deleted (`409` conflict); deactivate first via `PATCH /api/v1/users/{id}`.
+  - Users with an active app session cannot be deleted (`409` conflict).
+  - User deletion hard-deletes user-owned rows that cannot safely outlive the account (for example loans, created diary entries, user-role links, user sessions, and actor-linked audit/AI bulk-job history) and nulls nullable attribution references where supported (for example image uploader attribution).
 
 - Audit endpoint notes:
   - `GET /api/v1/audit-events` requires `audit.read` capability.
