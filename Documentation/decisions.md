@@ -246,3 +246,12 @@
 - Why: first embedding request previously absorbed model load latency and could time out; startup warm-load moves that cost out of user request paths.
 - Decision: add admin diagnostics API/UI for embeddings health and performance (`GET /api/v1/image-embeddings/diagnostics`).
 - Why: operators need visibility into stale/missing embeddings and observed per-image compute timings to manage backfills and runtime readiness.
+
+## 2026-11-03 - Admin Session Registry and Termination Controls
+
+- Decision: add a server-side `user_sessions` registry and require authenticated app requests to map to an active session row.
+- Why: administrators need visibility/control over active app sessions, and API-level enforcement must support forced sign-out.
+- Decision: add admin-only endpoints and UI for active-session listing and per-session termination (`GET /api/v1/security/sessions`, `DELETE /api/v1/security/sessions/{id}`).
+- Why: operations need direct remediation for suspicious or stale sessions without waiting for user action.
+- Decision: enforce inactivity expiry at 120 minutes by default (configurable via `SESSION_IDLE_TIMEOUT_MINUTES`) and record session origin using resolved client IP from trusted forwarded headers.
+- Why: this aligns with low-sensitivity app posture while preserving accurate client attribution behind reverse proxies.

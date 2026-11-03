@@ -45,6 +45,7 @@ from app.models import (
     Loan,
     Role,
     User,
+    UserSession,
     UserRole,
 )
 from app.models.jigsaw import JigsawStatus
@@ -124,6 +125,11 @@ IP_BLOCK_REASON_MAX_LENGTH = 255
 IP_BLOCK_NOTES_MAX_LENGTH = 4000
 IP_BLOCK_MAX_DURATION_HOURS = 24 * 30
 STFD_JWT_ALGORITHM = "HS256"
+SESSION_IDENTIFIER_KEY = "session_identifier"
+SESSION_TERMINATION_REASON_LOGOUT = "logout"
+SESSION_TERMINATION_REASON_EXPIRED = "expired"
+SESSION_TERMINATION_REASON_ADMIN_TERMINATED = "admin_terminated"
+SESSION_ACTIVITY_TOUCH_INTERVAL_SECONDS = 30
 
 ROLE_CAPABILITIES = {
     "borrower": {
@@ -1799,9 +1805,12 @@ def _auth_login_via_stfd_token(token):
 
     csrf_token = token_urlsafe(24)
     session.clear()
+    user_session = _create_user_session_record(db_session, user_id=user.id, auth_provider="stfd")
     session["user_id"] = user.id
     session["csrf_token"] = csrf_token
     session["auth_provider"] = "stfd"
+    session[SESSION_IDENTIFIER_KEY] = user_session.session_identifier
+    session.permanent = True
     g.current_user = user
     g.current_user_roles = target_role_names
     g.current_user_auth_provider = "stfd"
@@ -1840,6 +1849,7 @@ def _auth_login_via_stfd_token(token):
             "auth_provider": "stfd",
             "auth_subject": auth_subject,
             "roles": target_role_names,
+            "session_record_id": user_session.id,
         },
         actor_user_id=user.id,
     )
@@ -1850,6 +1860,7 @@ def _auth_login_via_stfd_token(token):
             "user": _serialize_user(user, target_role_names),
             "csrf_token": csrf_token,
             "auth_provider": "stfd",
+            "session_identifier": user_session.session_identifier,
         }
     )
 
@@ -1859,6 +1870,7 @@ def _load_current_user():
         return g.current_user
 
     user_id = session.get("user_id")
+    session_identifier = str(session.get(SESSION_IDENTIFIER_KEY) or "").strip()
     auth_provider = str(session.get("auth_provider") or "local").strip().lower() or "local"
     if user_id is None:
         g.current_user = None
@@ -1869,10 +1881,78 @@ def _load_current_user():
     db_session = get_session()
     user = db_session.get(User, user_id)
     if user is None or not user.is_active:
+        session.clear()
         g.current_user = None
         g.current_user_roles = []
         g.current_user_auth_provider = auth_provider
         return None
+
+    if not session_identifier:
+        if bool(current_app.config.get("TESTING", False)):
+            role_names = _get_role_names_for_user_id(user.id)
+            g.current_user = user
+            g.current_user_roles = role_names
+            g.current_user_auth_provider = auth_provider
+            return user
+
+        session.clear()
+        g.current_user = None
+        g.current_user_roles = []
+        g.current_user_auth_provider = auth_provider
+        return None
+
+    user_session = db_session.execute(
+        select(UserSession).where(
+            UserSession.user_id == user.id,
+            UserSession.session_identifier == session_identifier,
+        )
+    ).scalar_one_or_none()
+    if user_session is None or user_session.terminated_at is not None:
+        session.clear()
+        g.current_user = None
+        g.current_user_roles = []
+        g.current_user_auth_provider = auth_provider
+        return None
+
+    now = datetime.now(timezone.utc)
+    cutoff = _get_session_inactivity_cutoff(now)
+    last_activity_at = _normalize_utc_datetime(user_session.last_activity_at)
+    if last_activity_at is None or last_activity_at <= cutoff:
+        _terminate_user_session_record(
+            db_session,
+            user_session,
+            reason=SESSION_TERMINATION_REASON_EXPIRED,
+            terminated_by_user_id=None,
+        )
+        db_session.commit()
+        session.clear()
+        g.current_user = None
+        g.current_user_roles = []
+        g.current_user_auth_provider = auth_provider
+        return None
+
+    should_touch_last_activity = (
+        last_activity_at is None
+        or (now - last_activity_at).total_seconds() >= SESSION_ACTIVITY_TOUCH_INTERVAL_SECONDS
+    )
+    if should_touch_last_activity:
+        try:
+            db_session.execute(
+                sa_update(UserSession)
+                .where(UserSession.id == user_session.id)
+                .values(last_activity_at=now)
+            )
+            db_session.commit()
+        except OperationalError:
+            db_session.rollback()
+            current_app.logger.warning(
+                "user_session_touch_conflict",
+                extra={
+                    "session_id": user_session.id,
+                    "user_id": user.id,
+                    "request_id": getattr(g, "request_id", None),
+                },
+            )
 
     role_names = _get_role_names_for_user_id(user.id)
 
@@ -2671,6 +2751,69 @@ def _build_image_embedding_diagnostics_payload(db_session, *, missing_preview_li
         },
         "latest_backfill_job": _serialize_image_embedding_job(latest_job) if latest_job is not None else None,
     }
+
+
+def _normalize_utc_datetime(value):
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _serialize_user_session(user_session, user):
+    return {
+        "id": user_session.id,
+        "session_identifier": user_session.session_identifier,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+        }
+        if user is not None
+        else None,
+        "origin_ip_address": user_session.origin_ip_address,
+        "auth_provider": user_session.auth_provider,
+        "created_at": _normalize_utc_datetime(user_session.created_at).isoformat() if user_session.created_at else None,
+        "last_activity_at": _normalize_utc_datetime(user_session.last_activity_at).isoformat()
+        if user_session.last_activity_at
+        else None,
+    }
+
+
+def _get_session_inactivity_cutoff(now=None):
+    resolved_now = now or datetime.now(timezone.utc)
+    timeout_minutes = int(current_app.config.get("SESSION_IDLE_TIMEOUT_MINUTES", 120) or 120)
+    if timeout_minutes < 1:
+        timeout_minutes = 120
+    return resolved_now - timedelta(minutes=timeout_minutes)
+
+
+def _create_user_session_record(db_session, *, user_id, auth_provider):
+    now = datetime.now(timezone.utc)
+    user_session = UserSession(
+        user_id=user_id,
+        session_identifier=token_urlsafe(32),
+        origin_ip_address=getattr(g, "client_ip_resolved", request.remote_addr),
+        auth_provider=str(auth_provider or "local").strip().lower() or "local",
+        created_at=now,
+        last_activity_at=now,
+    )
+    db_session.add(user_session)
+    db_session.flush()
+    return user_session
+
+
+def _terminate_user_session_record(db_session, user_session, *, reason, terminated_by_user_id=None):
+    if user_session is None:
+        return False
+    if user_session.terminated_at is not None:
+        return False
+    user_session.terminated_at = datetime.now(timezone.utc)
+    user_session.termination_reason = str(reason or "terminated").strip()[:64] or "terminated"
+    user_session.terminated_by_user_id = terminated_by_user_id
+    db_session.flush()
+    return True
 
 
 def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger, created_by_user_id):
@@ -3695,9 +3838,12 @@ def auth_login():
     csrf_token = token_urlsafe(24)
 
     session.clear()
+    user_session = _create_user_session_record(db_session, user_id=user.id, auth_provider="local")
     session["user_id"] = user.id
     session["csrf_token"] = csrf_token
     session["auth_provider"] = "local"
+    session[SESSION_IDENTIFIER_KEY] = user_session.session_identifier
+    session.permanent = True
     g.current_user = user
     g.current_user_roles = role_names
     g.current_user_auth_provider = "local"
@@ -3706,7 +3852,7 @@ def auth_login():
         action="auth.login",
         entity_type="user",
         entity_id=user.id,
-        payload={"roles": sorted(role_names)},
+        payload={"roles": sorted(role_names), "session_record_id": user_session.id},
     )
     db_session.commit()
 
@@ -3715,6 +3861,7 @@ def auth_login():
             "user": _serialize_user(user, role_names),
             "csrf_token": csrf_token,
             "auth_provider": "local",
+            "session_identifier": user_session.session_identifier,
         }
     )
 
@@ -3732,6 +3879,7 @@ def auth_me():
             "user": _serialize_user(g.current_user, g.current_user_roles),
             "csrf_token": csrf_token,
             "auth_provider": getattr(g, "current_user_auth_provider", "local"),
+            "session_identifier": str(session.get(SESSION_IDENTIFIER_KEY) or "") or None,
         }
     )
 
@@ -3814,6 +3962,7 @@ def update_auth_me():
             "user": _serialize_user(g.current_user, g.current_user_roles),
             "csrf_token": csrf_token,
             "auth_provider": getattr(g, "current_user_auth_provider", "local"),
+            "session_identifier": str(session.get(SESSION_IDENTIFIER_KEY) or "") or None,
         }
     )
 
@@ -3822,6 +3971,21 @@ def update_auth_me():
 @require_auth
 def auth_logout():
     db_session = get_session()
+    session_identifier = str(session.get(SESSION_IDENTIFIER_KEY) or "").strip()
+    if session_identifier:
+        user_session = db_session.execute(
+            select(UserSession).where(
+                UserSession.user_id == g.current_user.id,
+                UserSession.session_identifier == session_identifier,
+            )
+        ).scalar_one_or_none()
+        _terminate_user_session_record(
+            db_session,
+            user_session,
+            reason=SESSION_TERMINATION_REASON_LOGOUT,
+            terminated_by_user_id=g.current_user.id,
+        )
+
     _record_audit_event(
         action="auth.logout",
         entity_type="user",
@@ -3995,6 +4159,64 @@ def delete_blocked_ip(blocked_ip_id):
     )
     db_session.commit()
     return _success_response({"removed": True, "id": blocked_ip_id, "ip_address": ip_address})
+
+
+@api_v1_bp.get("/security/sessions")
+@require_role("administrator")
+def list_active_user_sessions():
+    db_session = get_session()
+    now = datetime.now(timezone.utc)
+    cutoff = _get_session_inactivity_cutoff(now)
+
+    sessions = db_session.execute(
+        select(UserSession, User)
+        .join(User, User.id == UserSession.user_id)
+        .where(
+            UserSession.terminated_at.is_(None),
+            UserSession.last_activity_at > cutoff,
+        )
+        .order_by(UserSession.last_activity_at.desc(), UserSession.id.desc())
+    ).all()
+    payload = [_serialize_user_session(user_session, user) for user_session, user in sessions]
+    return _success_response(payload)
+
+
+@api_v1_bp.delete("/security/sessions/<int:user_session_id>")
+@require_role("administrator")
+def terminate_user_session(user_session_id):
+    db_session = get_session()
+    user_session = db_session.get(UserSession, user_session_id)
+    if user_session is None:
+        return _error_response("not_found", "Session entry was not found.", 404)
+
+    if user_session.terminated_at is not None:
+        return _error_response("conflict", "Session is already terminated.", 409)
+
+    target_user = db_session.get(User, user_session.user_id)
+    _terminate_user_session_record(
+        db_session,
+        user_session,
+        reason=SESSION_TERMINATION_REASON_ADMIN_TERMINATED,
+        terminated_by_user_id=g.current_user.id,
+    )
+    _record_audit_event(
+        action="security.session_terminated",
+        entity_type="user_session",
+        entity_id=user_session.id,
+        payload={
+            "terminated_user_id": user_session.user_id,
+            "terminated_user_email": getattr(target_user, "email", None),
+            "origin_ip_address": user_session.origin_ip_address,
+        },
+    )
+    db_session.commit()
+
+    if str(session.get(SESSION_IDENTIFIER_KEY) or "").strip() == user_session.session_identifier:
+        session.clear()
+        g.current_user = None
+        g.current_user_roles = []
+
+    return _success_response({"terminated": True, "id": user_session.id})
 
 
 @api_v1_bp.get("/ai-usage/diagnostics")

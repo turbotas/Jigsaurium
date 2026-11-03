@@ -10,6 +10,7 @@ Build a personal jigsaw collection application centered on inventory management 
   - Manage users and roles.
   - Manage jigsaw inventory (create, update, retire, restore).
   - View and manage lending records.
+  - View and terminate active application sessions.
 - Borrower
   - View available jigsaws.
   - View own borrowing status and history.

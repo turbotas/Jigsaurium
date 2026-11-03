@@ -123,6 +123,9 @@
       <li class="app-section-tabs__item" role="presentation">
         <button id="admin-tab-ip-blocks" class="app-section-tab" type="button" role="tab" aria-selected="false" aria-controls="ip-blocks-section" tabindex="-1" data-admin-tab="ip-blocks">IP Blocks</button>
       </li>
+      <li class="app-section-tabs__item" role="presentation">
+        <button id="admin-tab-sessions" class="app-section-tab" type="button" role="tab" aria-selected="false" aria-controls="sessions-section" tabindex="-1" data-admin-tab="sessions">Sessions</button>
+      </li>
     </ul>
   </nav>
   <section id="users-section" class="govuk-!-margin-bottom-8" aria-labelledby="users-heading">
@@ -1030,6 +1033,29 @@
           </tr>
         </thead>
         <tbody class="govuk-table__body" id="ip-blocks-table-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="sessions-section" class="govuk-!-margin-top-8" aria-labelledby="sessions-heading" hidden>
+    <h2 id="sessions-heading" class="govuk-heading-l">Active sessions</h2>
+    <p class="govuk-body">Active signed-in app sessions across all users.</p>
+
+    <div class="table-scroll-wrap">
+      <table class="govuk-table" id="sessions-table">
+        <caption class="govuk-table__caption govuk-table__caption--m">Current active sessions</caption>
+        <thead class="govuk-table__head">
+          <tr class="govuk-table__row">
+            <th class="govuk-table__header">Session ID</th>
+            <th class="govuk-table__header">Signed in user</th>
+            <th class="govuk-table__header">Origin IP</th>
+            <th class="govuk-table__header">Provider</th>
+            <th class="govuk-table__header">Created</th>
+            <th class="govuk-table__header">Last activity</th>
+            <th class="govuk-table__header">Action</th>
+          </tr>
+        </thead>
+        <tbody class="govuk-table__body" id="sessions-table-body"></tbody>
       </table>
     </div>
   </section>

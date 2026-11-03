@@ -65,6 +65,8 @@
   - actor, action, entity type/id, timestamp, payload
 - `blocked_ips`
   - blocked client IPs (manual and auto 404-streak), expiry timestamp, source/reason, and hit counters
+- `user_sessions`
+  - server-side app session registry (session identifier, user, origin IP, auth provider, activity/termination timestamps)
 
 ## Data and Migration Rules
 

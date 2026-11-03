@@ -217,6 +217,14 @@
   overflow-x: auto;
 }
 
+.app-current-session-row {
+  background: #eaf4ff;
+}
+
+.app-current-session-row td:first-child {
+  border-left: 4px solid #1d70b8;
+}
+
 #app-feedback {
   margin-bottom: 24px;
 }

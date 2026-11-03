@@ -47,6 +47,8 @@
 - `GET /api/v1/security/blocked-ips`
 - `POST /api/v1/security/blocked-ips`
 - `DELETE /api/v1/security/blocked-ips/{id}`
+- `GET /api/v1/security/sessions`
+- `DELETE /api/v1/security/sessions/{id}`
 - `GET /api/v1/ai-usage/diagnostics`
 - `GET /api/v1/loans`
 - `POST /api/v1/loans`
@@ -167,7 +169,8 @@
       "capabilities": ["audit.read", "diary.create", "diary.update_any"]
     },
     "csrf_token": "generated-token",
-    "auth_provider": "local"
+    "auth_provider": "local",
+    "session_identifier": "opaque-session-id"
   },
   "meta": {
     "request_id": "req_abc123"
@@ -176,6 +179,7 @@
 ```
 
 - `GET /api/v1/auth/me` also returns `csrf_token` so SPA clients can recover CSRF state after page reload.
+- Auth responses (`POST /api/v1/auth/login`, `GET /api/v1/auth/me`, `PATCH /api/v1/auth/me`) include `session_identifier` for current app-session identification.
 - Auth responses (`POST /api/v1/auth/login`, `GET /api/v1/auth/me`, `PATCH /api/v1/auth/me`) include `auth_provider` (`local` or `stfd`).
 - STFD mode login request body:
 
@@ -228,6 +232,18 @@
     - `reason` (optional string, max `255` chars)
     - `notes` (optional string, max `4000` chars)
   - `DELETE /api/v1/security/blocked-ips/{id}` removes a block row and unblocks that IP immediately.
+
+- Session admin endpoint notes:
+  - `GET /api/v1/security/sessions` is administrator-only and lists currently active app sessions.
+  - Session rows include:
+    - session row id (`id`)
+    - app session identifier (`session_identifier`)
+    - signed-in user summary (`user.id`, `user.email`, `user.display_name`)
+    - origin IP (`origin_ip_address`) resolved from trusted forwarded headers
+    - `auth_provider`, `created_at`, and `last_activity_at`
+  - `DELETE /api/v1/security/sessions/{id}` is administrator-only and terminates one active app session.
+  - After termination, the next authenticated API request made with that terminated session returns `401`.
+  - App sessions expire after 120 minutes of inactivity by default; timeout is configurable via `SESSION_IDLE_TIMEOUT_MINUTES`.
 
 - AI diagnostics endpoint notes:
   - `GET /api/v1/ai-usage/diagnostics` is admin-only.

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 import urllib.parse
 
@@ -139,6 +139,13 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK", bool(app.config.get("TESTING", False)))
     app.config.setdefault("IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES", ["box", "reference"])
     app.config.setdefault("MAX_CONTENT_LENGTH", 32 * 1024 * 1024)
+    app.config.setdefault("SESSION_IDLE_TIMEOUT_MINUTES", 120)
+    session_idle_timeout_minutes = int(app.config.get("SESSION_IDLE_TIMEOUT_MINUTES", 120) or 120)
+    if session_idle_timeout_minutes < 1:
+        session_idle_timeout_minutes = 120
+    app.config["SESSION_IDLE_TIMEOUT_MINUTES"] = session_idle_timeout_minutes
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=session_idle_timeout_minutes)
+    app.config.setdefault("SESSION_REFRESH_EACH_REQUEST", True)
     app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
     app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
     app.config.setdefault("STFD_ENABLED", False)

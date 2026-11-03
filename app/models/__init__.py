@@ -11,6 +11,7 @@ from app.models.jigsaw_image import JigsawImage
 from app.models.loan import Loan
 from app.models.role import Role
 from app.models.user import User
+from app.models.user_session import UserSession
 from app.models.user_role import UserRole
 
 __all__ = [
@@ -27,5 +28,6 @@ __all__ = [
     "Loan",
     "Role",
     "User",
+    "UserSession",
     "UserRole",
 ]

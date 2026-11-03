@@ -165,6 +165,23 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#workspace-tab-admin")
         page.wait_for_selector("#users-section:not([hidden])")
 
+        admin_tab_order = page.evaluate(
+            """() => Array.from(document.querySelectorAll('#admin-subtabs [data-admin-tab]')).map((node) => node.dataset.adminTab)"""
+        )
+        ip_blocks_index = admin_tab_order.index("ip-blocks")
+        sessions_index = admin_tab_order.index("sessions")
+        assert ip_blocks_index >= 0
+        assert sessions_index == ip_blocks_index + 1
+
+        page.click("#admin-tab-sessions")
+        page.wait_for_selector("#sessions-section:not([hidden])")
+        page.wait_for_selector("#sessions-table-body tr")
+        assert page.locator("#sessions-table-body button[data-user-session-terminate]").count() >= 1
+        assert page.locator("#sessions-table-body tr.app-current-session-row").count() >= 1
+
+        page.click("#admin-tab-users")
+        page.wait_for_selector("#users-section:not([hidden])")
+
         long_email = f"{'a' * 250}@example.com"
         page.fill("#user-email", long_email)
         page.fill("#user-display-name", "Too Long Email")

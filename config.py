@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 
 
 def _parse_csv(value):
@@ -63,6 +64,9 @@ class Config:
         os.getenv("IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES", "box,reference")
     )
     MAX_CONTENT_LENGTH = _parse_optional_int(os.getenv("MAX_CONTENT_LENGTH_BYTES")) or (32 * 1024 * 1024)
+    SESSION_IDLE_TIMEOUT_MINUTES = _parse_optional_int(os.getenv("SESSION_IDLE_TIMEOUT_MINUTES")) or 120
+    PERMANENT_SESSION_LIFETIME = timedelta(minutes=SESSION_IDLE_TIMEOUT_MINUTES)
+    SESSION_REFRESH_EACH_REQUEST = True
     SESSION_COOKIE_SECURE = APP_ENV != "dev"
     REMEMBER_COOKIE_SECURE = APP_ENV != "dev"
     SESSION_COOKIE_HTTPONLY = True

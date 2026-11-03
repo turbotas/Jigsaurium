@@ -39,6 +39,7 @@
 
   const state = {
     csrfToken: null,
+    currentSessionIdentifier: null,
     user: null,
     authProvider: null,
     stfdAuthEnabled: false,
@@ -67,6 +68,7 @@
       ai: false,
       embeddings: false,
       "ip-blocks": false,
+      sessions: false,
     },
     workspaceSectionAccess: {
       account: false,
@@ -82,6 +84,7 @@
     jigsawFilterWithoutDiaryEntries: false,
     loans: [],
     blockedIps: [],
+    userSessions: [],
     auditEvents: [],
     auditEventsMeta: null,
     jigsawThumbnailImages: [],
@@ -189,6 +192,7 @@
     loansSection: document.getElementById("loans-section"),
     auditSection: document.getElementById("audit-section"),
     ipBlocksSection: document.getElementById("ip-blocks-section"),
+    sessionsSection: document.getElementById("sessions-section"),
     logoutButton: document.getElementById("logout-button"),
     userCreateForm: document.getElementById("user-create-form"),
     userEditForm: document.getElementById("user-edit-form"),
@@ -334,6 +338,7 @@
     ipBlockCreateForm: document.getElementById("ip-block-create-form"),
     ipBlockHours: document.getElementById("ip-block-hours"),
     ipBlocksTableBody: document.getElementById("ip-blocks-table-body"),
+    sessionsTableBody: document.getElementById("sessions-table-body"),
     auditTableBody: document.getElementById("audit-table-body"),
     aiUsageTodayCost: document.getElementById("ai-usage-today-cost"),
     aiUsageTodayCalls: document.getElementById("ai-usage-today-calls"),
@@ -2003,7 +2008,7 @@
   }
 
   function getFirstVisibleAdminTab() {
-    const tabOrder = ["users", "ai", "embeddings", "ip-blocks"];
+    const tabOrder = ["users", "ai", "embeddings", "ip-blocks", "sessions"];
     return tabOrder.find((tabName) => state.adminTabVisibility[tabName]) || null;
   }
 
@@ -2140,6 +2145,9 @@
       if (elements.ipBlocksSection) {
         elements.ipBlocksSection.hidden = true;
       }
+      if (elements.sessionsSection) {
+        elements.sessionsSection.hidden = true;
+      }
       return;
     }
 
@@ -2156,6 +2164,9 @@
     }
     if (elements.ipBlocksSection) {
       elements.ipBlocksSection.hidden = !(state.adminTabVisibility["ip-blocks"] && activeAdminTab === "ip-blocks");
+    }
+    if (elements.sessionsSection) {
+      elements.sessionsSection.hidden = !(state.adminTabVisibility.sessions && activeAdminTab === "sessions");
     }
   }
 
@@ -2277,6 +2288,7 @@
     if (!state.user) {
       resetDiaryEntryFormEditingState({ keepJigsawSelection: false });
       state.authProvider = null;
+      state.currentSessionIdentifier = null;
       elements.sessionSummary.textContent = "Not signed in.";
       setWorkspaceSectionAccess("account", false);
       setWorkspaceSectionAccess("collection", true);
@@ -2297,6 +2309,7 @@
       state.adminTabVisibility.ai = false;
       state.adminTabVisibility.embeddings = false;
       state.adminTabVisibility["ip-blocks"] = false;
+      state.adminTabVisibility.sessions = false;
       state.editorScrollPositions.user = null;
       state.editorScrollPositions.jigsaw = null;
       state.editorScrollPositions.diary = null;
@@ -2360,7 +2373,9 @@
     const canAccessAdminAi = canManageAi;
     const canAccessAdminEmbeddings = isAdministrator;
     const canAccessAdminIpBlocks = canManageSecurity;
-    const canAccessAdmin = canAccessAdminUsers || canAccessAdminAi || canAccessAdminEmbeddings || canAccessAdminIpBlocks;
+    const canAccessAdminSessions = canManageSecurity;
+    const canAccessAdmin =
+      canAccessAdminUsers || canAccessAdminAi || canAccessAdminEmbeddings || canAccessAdminIpBlocks || canAccessAdminSessions;
     const canAccessActivityLog = canReadAudit;
     const canAccessLoans = Boolean(isAdministrator && canManageLoans);
 
@@ -2386,6 +2401,7 @@
     state.adminTabVisibility.ai = canAccessAdminAi;
     state.adminTabVisibility.embeddings = canAccessAdminEmbeddings;
     state.adminTabVisibility["ip-blocks"] = canAccessAdminIpBlocks;
+    state.adminTabVisibility.sessions = canAccessAdminSessions;
 
     setActiveCollectionTab(state.activeCollectionTab);
     setActiveAdminTab(state.activeAdminTab);
@@ -2877,6 +2893,52 @@
       removeButton.setAttribute("data-ip-block-remove", String(entry.id));
       removeButton.textContent = "Unblock";
       actionCell.appendChild(removeButton);
+
+      row.appendChild(actionCell);
+      tableBody.appendChild(row);
+    });
+  }
+
+  function renderUserSessions(userSessions) {
+    const tableBody = elements.sessionsTableBody;
+    clearTableBody(tableBody);
+
+    if (!Array.isArray(userSessions) || userSessions.length === 0) {
+      appendEmptyRow(tableBody, 7, "No active sessions found.");
+      return;
+    }
+
+    userSessions.forEach((entry) => {
+      const row = document.createElement("tr");
+      row.className = "govuk-table__row";
+      const isCurrentSession =
+        typeof state.currentSessionIdentifier === "string"
+        && state.currentSessionIdentifier.length > 0
+        && state.currentSessionIdentifier === String(entry.session_identifier || "");
+      if (isCurrentSession) {
+        row.classList.add("app-current-session-row");
+      }
+      const userSummary = entry?.user?.email
+        ? `${entry.user.email}${entry?.user?.display_name ? ` (${entry.user.display_name})` : ""}`
+        : "-";
+
+      row.appendChild(buildCell(isCurrentSession ? `${String(entry.session_identifier || "-")} (current)` : String(entry.session_identifier || "-")));
+      row.appendChild(buildCell(userSummary));
+      row.appendChild(buildCell(String(entry.origin_ip_address || "-")));
+      row.appendChild(buildCell(String(entry.auth_provider || "-")));
+      row.appendChild(buildCell(entry.created_at ? new Date(entry.created_at).toLocaleString() : "-"));
+      row.appendChild(buildCell(entry.last_activity_at ? new Date(entry.last_activity_at).toLocaleString() : "-"));
+
+      const actionCell = document.createElement("td");
+      actionCell.className = "govuk-table__cell";
+
+      const terminateButton = document.createElement("button");
+      terminateButton.type = "button";
+      terminateButton.className = "govuk-button govuk-button--warning govuk-!-margin-bottom-0";
+      terminateButton.setAttribute("data-module", "govuk-button");
+      terminateButton.setAttribute("data-user-session-terminate", String(entry.id));
+      terminateButton.textContent = "Terminate";
+      actionCell.appendChild(terminateButton);
 
       row.appendChild(actionCell);
       tableBody.appendChild(row);
@@ -5165,6 +5227,7 @@
       state.user = payload.data.user;
       state.csrfToken = payload.data.csrf_token || null;
       state.authProvider = String(payload.data.auth_provider || "local").toLowerCase();
+      state.currentSessionIdentifier = typeof payload.data.session_identifier === "string" ? payload.data.session_identifier : null;
       closeAuthDialog();
       setSessionSummary();
       return true;
@@ -5172,6 +5235,7 @@
       state.user = null;
       state.csrfToken = null;
       state.authProvider = null;
+      state.currentSessionIdentifier = null;
       state.roleDefinitions = [];
       renderUserRoleSelectors();
       setSessionSummary();
@@ -5284,6 +5348,7 @@
       state.user = payload.data.user;
       state.csrfToken = payload.data.csrf_token;
       state.authProvider = String(payload.data.auth_provider || "stfd").toLowerCase();
+      state.currentSessionIdentifier = typeof payload.data.session_identifier === "string" ? payload.data.session_identifier : null;
       closeAuthDialog();
       setSessionSummary();
 
@@ -5954,6 +6019,34 @@
     }
   }
 
+  async function loadUserSessions() {
+    if (!state.user) {
+      state.userSessions = [];
+      renderUserSessions([]);
+      return;
+    }
+
+    const isAdministrator = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
+    if (!isAdministrator) {
+      state.userSessions = [];
+      renderUserSessions([]);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest("/api/v1/security/sessions");
+      state.userSessions = Array.isArray(payload.data) ? payload.data : [];
+      renderUserSessions(state.userSessions);
+    } catch (error) {
+      if (error.status === 403) {
+        state.userSessions = [];
+        renderUserSessions([]);
+        return;
+      }
+      showFeedback(error.message, true);
+    }
+  }
+
   async function loadImageEmbeddingDiagnostics() {
     if (!state.user) {
       state.imageEmbeddingDiagnostics = null;
@@ -6007,6 +6100,7 @@
       state.user = payload.data.user;
       state.csrfToken = payload.data.csrf_token;
       state.authProvider = String(payload.data.auth_provider || "local").toLowerCase();
+      state.currentSessionIdentifier = typeof payload.data.session_identifier === "string" ? payload.data.session_identifier : null;
       closeAuthDialog();
       setSessionSummary();
       showFeedback("Signed in successfully.");
@@ -6017,6 +6111,7 @@
         loadLoans(),
         loadAuditEvents(),
         loadBlockedIps(),
+        loadUserSessions(),
         loadAiUsageDiagnostics(),
         loadImageEmbeddingDiagnostics(),
         loadImageLibraryImages(),
@@ -6052,6 +6147,7 @@
       state.user = null;
       state.csrfToken = null;
       state.authProvider = null;
+      state.currentSessionIdentifier = null;
       closeAuthDialog();
       setSessionSummary();
       state.users = [];
@@ -6059,6 +6155,7 @@
       state.jigsaws = [];
       state.loans = [];
       state.blockedIps = [];
+      state.userSessions = [];
       state.auditEvents = [];
       state.auditEventsMeta = null;
       state.jigsawThumbnailImages = [];
@@ -7239,6 +7336,33 @@
       return;
     }
 
+    const terminateSessionButton = event.target.closest("[data-user-session-terminate]");
+    if (terminateSessionButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const userSessionId = Number(terminateSessionButton.getAttribute("data-user-session-terminate") || "0");
+      if (!userSessionId) {
+        showFeedback("Invalid session selection.", true);
+        return;
+      }
+
+      try {
+        await apiRequest(`/api/v1/security/sessions/${userSessionId}`, { method: "DELETE" });
+        showFeedback("Session terminated.");
+        await Promise.all([loadUserSessions(), loadAuditEvents()]);
+      } catch (error) {
+        if (error.status === 401) {
+          state.user = null;
+          state.csrfToken = null;
+          state.authProvider = null;
+          setSessionSummary();
+        }
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
     const retireButton = event.target.closest("[data-jigsaw-retire]");
     if (retireButton) {
       event.preventDefault();
@@ -8361,6 +8485,10 @@
       elements.ipBlocksTableBody.addEventListener("click", handleTableActions);
     }
 
+    if (elements.sessionsTableBody) {
+      elements.sessionsTableBody.addEventListener("click", handleTableActions);
+    }
+
     if (elements.jigsawEditForm) {
       elements.jigsawEditForm.addEventListener("submit", handleEditJigsaw);
     }
@@ -8439,6 +8567,7 @@
         loadLoans(),
         loadAuditEvents(),
         loadBlockedIps(),
+        loadUserSessions(),
         loadAiUsageDiagnostics(),
         loadImageEmbeddingDiagnostics(),
       ]);
@@ -8456,6 +8585,7 @@
       renderUserRoleSelectors();
       renderLoans([]);
       renderBlockedIps([]);
+      renderUserSessions([]);
       renderJigsawImages([]);
       renderImageLibraryImages([]);
       renderDiaryEntries([]);

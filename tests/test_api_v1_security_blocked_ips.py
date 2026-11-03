@@ -105,6 +105,14 @@ def test_borrower_cannot_manage_blocked_ips(client, seeded_security_identity_dat
 
 
 @pytest.mark.functional
+def test_borrower_cannot_manage_security_sessions(client, seeded_security_identity_data):
+    _set_user_session(client, seeded_security_identity_data["borrower_user_id"])
+
+    assert client.get("/api/v1/security/sessions").status_code == 403
+    assert client.delete("/api/v1/security/sessions/1", headers=_csrf_headers()).status_code == 403
+
+
+@pytest.mark.functional
 def test_auto_404_streak_ban_is_persisted_in_database(client, app):
     reset_request_security_state()
     app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.51.0/24"]
