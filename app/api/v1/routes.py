@@ -12,6 +12,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
+from pathlib import Path
 from secrets import compare_digest, token_urlsafe
 from functools import wraps
 
@@ -24,6 +25,18 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import DataError, OperationalError
 
 from app.db import get_session
+from app.database_backups import (
+    BACKUP_COMPRESSION_BZIP2,
+    BACKUP_COMPRESSION_GZIP,
+    BACKUP_COMPRESSION_NONE,
+    DEFAULT_BACKUP_APP_NAME,
+    build_backup_filename,
+    build_mysql_compatible_backup_sql,
+    compress_backup_payload,
+    normalize_environment_label,
+    normalize_backup_compression,
+    resolve_backup_root_path,
+)
 from app.image_embeddings import (
     build_model_key,
     compute_content_sha256,
@@ -35,6 +48,7 @@ from app.models import (
     AiUsageEvent,
     AuditEvent,
     BlockedIp,
+    DatabaseBackup,
     BulkAiCreateJob,
     BulkAiCreateJobItem,
     ImageEmbedding,
@@ -130,6 +144,11 @@ SESSION_TERMINATION_REASON_LOGOUT = "logout"
 SESSION_TERMINATION_REASON_EXPIRED = "expired"
 SESSION_TERMINATION_REASON_ADMIN_TERMINATED = "admin_terminated"
 SESSION_ACTIVITY_TOUCH_INTERVAL_SECONDS = 30
+DATABASE_BACKUP_STATUS_QUEUED = "queued"
+DATABASE_BACKUP_STATUS_RUNNING = "running"
+DATABASE_BACKUP_STATUS_COMPLETED = "completed"
+DATABASE_BACKUP_STATUS_FAILED = "failed"
+DATABASE_BACKUP_FORMAT_MYSQL_SQL = "mysql_sql"
 
 ROLE_CAPABILITIES = {
     "borrower": {
@@ -2819,6 +2838,200 @@ def _serialize_user_session(user_session, user):
     }
 
 
+def _serialize_database_backup(database_backup):
+    status = str(database_backup.status or "").strip().lower()
+    is_downloadable = status == DATABASE_BACKUP_STATUS_COMPLETED
+    filename = str(database_backup.filename or "")
+    compression = BACKUP_COMPRESSION_NONE
+    if filename.endswith(".sql.gz"):
+        compression = BACKUP_COMPRESSION_GZIP
+    elif filename.endswith(".sql.bz2"):
+        compression = BACKUP_COMPRESSION_BZIP2
+    return {
+        "id": database_backup.id,
+        "initiated_by_user_id": database_backup.initiated_by_user_id,
+        "filename": filename,
+        "file_format": database_backup.file_format,
+        "compression": compression,
+        "status": status,
+        "app_environment": database_backup.app_environment,
+        "app_environment_label": normalize_environment_label(database_backup.app_environment),
+        "app_version": database_backup.app_version,
+        "file_size_bytes": int(database_backup.file_size_bytes) if database_backup.file_size_bytes is not None else None,
+        "file_sha256": database_backup.file_sha256,
+        "error_message": database_backup.error_message,
+        "created_at": _normalize_utc_datetime(database_backup.created_at).isoformat() if database_backup.created_at else None,
+        "started_at": _normalize_utc_datetime(database_backup.started_at).isoformat() if database_backup.started_at else None,
+        "completed_at": _normalize_utc_datetime(database_backup.completed_at).isoformat()
+        if database_backup.completed_at
+        else None,
+        "download_url": f"/api/v1/system/database-backups/{database_backup.id}/download" if is_downloadable else None,
+        "delete_url": f"/api/v1/system/database-backups/{database_backup.id}",
+    }
+
+
+def _resolve_database_backup_root_path():
+    return resolve_backup_root_path(
+        app_instance_path=current_app.instance_path,
+        configured_path=current_app.config.get("DB_BACKUP_STORAGE_PATH", ""),
+    )
+
+
+def _resolve_database_backup_file_path(backup_record):
+    backup_root = _resolve_database_backup_root_path()
+    candidate_path = Path(str(backup_record.storage_path or "")).resolve()
+    if backup_root != candidate_path and backup_root not in candidate_path.parents:
+        raise RuntimeError("Backup storage path is outside the configured backup root.")
+    return candidate_path
+
+
+def _resolve_database_backup_compression():
+    configured = str(current_app.config.get("DB_BACKUP_COMPRESSION", BACKUP_COMPRESSION_GZIP) or "")
+    return normalize_backup_compression(configured, default=BACKUP_COMPRESSION_GZIP)
+
+
+def _resolve_database_backup_mime_type(filename):
+    normalized = str(filename or "").strip().lower()
+    if normalized.endswith(".sql.gz"):
+        return "application/gzip"
+    if normalized.endswith(".sql.bz2"):
+        return "application/x-bzip2"
+    return "application/sql"
+
+
+def _build_unique_backup_filename(*, backup_root, generated_at, app_env, app_version, compression):
+    base_filename = build_backup_filename(
+        app_name=DEFAULT_BACKUP_APP_NAME,
+        app_env=app_env,
+        app_version=app_version,
+        generated_at=generated_at,
+        compression=compression,
+    )
+    candidate_filename = base_filename
+    suffix = 1
+    while (backup_root / candidate_filename).exists():
+        if base_filename.endswith(".sql.gz"):
+            candidate_filename = base_filename[: -len(".sql.gz")] + f"-{suffix}.sql.gz"
+        elif base_filename.endswith(".sql.bz2"):
+            candidate_filename = base_filename[: -len(".sql.bz2")] + f"-{suffix}.sql.bz2"
+        else:
+            candidate_filename = base_filename[: -len(".sql")] + f"-{suffix}.sql"
+        suffix += 1
+    return candidate_filename
+
+
+def _execute_database_backup_job(app, backup_id):
+    with app.app_context():
+        db_session = get_session()
+        backup_record = db_session.get(DatabaseBackup, int(backup_id))
+        if backup_record is None:
+            db_session.remove()
+            return
+
+        started_at = datetime.now(timezone.utc)
+        backup_record.status = DATABASE_BACKUP_STATUS_RUNNING
+        backup_record.started_at = started_at
+        backup_record.completed_at = None
+        backup_record.file_size_bytes = None
+        backup_record.file_sha256 = None
+        backup_record.error_message = None
+        db_session.commit()
+
+        try:
+            backup_path = _resolve_database_backup_file_path(backup_record)
+            backup_root = _resolve_database_backup_root_path()
+            backup_root.mkdir(parents=True, exist_ok=True)
+            backup_compression = _resolve_database_backup_compression()
+
+            backup_sql = build_mysql_compatible_backup_sql(
+                engine=db_session.get_bind(),
+                app_name=DEFAULT_BACKUP_APP_NAME,
+                app_env=backup_record.app_environment,
+                app_version=backup_record.app_version,
+                generated_at=started_at,
+                blob_chunk_bytes=int(current_app.config.get("DB_BACKUP_BLOB_CHUNK_BYTES", 32 * 1024) or 32 * 1024),
+                max_statement_bytes=int(
+                    current_app.config.get("DB_BACKUP_MAX_STATEMENT_BYTES", 4 * 1024 * 1024) or (4 * 1024 * 1024)
+                ),
+            )
+            encoded_sql = backup_sql.encode("utf-8")
+            backup_bytes = compress_backup_payload(encoded_sql, compression=backup_compression)
+            sql_sha = hashlib.sha256(backup_bytes).hexdigest()
+
+            temp_path = backup_path.with_suffix(backup_path.suffix + ".tmp")
+            with temp_path.open("wb") as backup_stream:
+                backup_stream.write(backup_bytes)
+            temp_path.replace(backup_path)
+
+            backup_record.status = DATABASE_BACKUP_STATUS_COMPLETED
+            backup_record.completed_at = datetime.now(timezone.utc)
+            backup_record.file_size_bytes = int(len(backup_bytes))
+            backup_record.file_sha256 = sql_sha
+            backup_record.error_message = None
+            db_session.add(
+                AuditEvent(
+                    actor_user_id=backup_record.initiated_by_user_id,
+                    action="system.database_backup_completed",
+                    entity_type="database_backup",
+                    entity_id=str(backup_record.id),
+                    request_id=None,
+                    remote_addr=None,
+                    client_ip_resolved=None,
+                    forwarded_chain=None,
+                    scheme=None,
+                    host=None,
+                    payload_json=json.dumps(
+                        {
+                            "filename": backup_record.filename,
+                            "file_size_bytes": backup_record.file_size_bytes,
+                            "file_sha256": backup_record.file_sha256,
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            )
+            db_session.commit()
+        except Exception as error:
+            backup_record.status = DATABASE_BACKUP_STATUS_FAILED
+            backup_record.completed_at = datetime.now(timezone.utc)
+            backup_record.error_message = str(error)[:2000]
+            db_session.add(
+                AuditEvent(
+                    actor_user_id=backup_record.initiated_by_user_id,
+                    action="system.database_backup_failed",
+                    entity_type="database_backup",
+                    entity_id=str(backup_record.id),
+                    request_id=None,
+                    remote_addr=None,
+                    client_ip_resolved=None,
+                    forwarded_chain=None,
+                    scheme=None,
+                    host=None,
+                    payload_json=json.dumps(
+                        {
+                            "filename": backup_record.filename,
+                            "error_message": backup_record.error_message,
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            )
+            db_session.commit()
+        finally:
+            db_session.remove()
+
+
+def _start_database_backup_job(backup_id):
+    app = current_app._get_current_object()
+    worker = threading.Thread(
+        target=_execute_database_backup_job,
+        args=(app, int(backup_id)),
+        daemon=True,
+        name=f"database-backup-{int(backup_id)}",
+    )
+    worker.start()
+
+
 def _get_session_inactivity_cutoff(now=None):
     resolved_now = now or datetime.now(timezone.utc)
     timeout_minutes = int(current_app.config.get("SESSION_IDLE_TIMEOUT_MINUTES", 120) or 120)
@@ -4255,6 +4468,143 @@ def terminate_user_session(user_session_id):
         g.current_user_roles = []
 
     return _success_response({"terminated": True, "id": user_session.id})
+
+
+@api_v1_bp.get("/system/database-backups")
+@require_role("administrator")
+def list_database_backups():
+    db_session = get_session()
+    backups = db_session.execute(select(DatabaseBackup).order_by(DatabaseBackup.id.desc())).scalars().all()
+    return _success_response([_serialize_database_backup(entry) for entry in backups])
+
+
+@api_v1_bp.post("/system/database-backups")
+@require_role("administrator")
+def create_database_backup():
+    db_session = get_session()
+    now = datetime.now(timezone.utc)
+    backup_root = _resolve_database_backup_root_path()
+    backup_root.mkdir(parents=True, exist_ok=True)
+
+    app_env = str(current_app.config.get("APP_ENV", "dev") or "dev").strip() or "dev"
+    app_version = str(current_app.config.get("APP_VERSION", "0.0.0") or "0.0.0").strip() or "0.0.0"
+    compression = _resolve_database_backup_compression()
+    filename = _build_unique_backup_filename(
+        backup_root=backup_root,
+        generated_at=now,
+        app_env=app_env,
+        app_version=app_version,
+        compression=compression,
+    )
+    storage_path = (backup_root / filename).resolve()
+
+    backup_record = DatabaseBackup(
+        initiated_by_user_id=g.current_user.id,
+        filename=filename,
+        storage_path=str(storage_path),
+        file_format=DATABASE_BACKUP_FORMAT_MYSQL_SQL,
+        status=DATABASE_BACKUP_STATUS_QUEUED,
+        app_environment=app_env,
+        app_version=app_version,
+        created_at=now,
+    )
+    db_session.add(backup_record)
+    db_session.flush()
+
+    _record_audit_event(
+        action="system.database_backup_requested",
+        entity_type="database_backup",
+        entity_id=backup_record.id,
+        payload={
+            "filename": backup_record.filename,
+            "app_environment": normalize_environment_label(app_env),
+            "app_version": app_version,
+        },
+    )
+    db_session.commit()
+
+    _start_database_backup_job(backup_record.id)
+    return _success_response(_serialize_database_backup(backup_record), status_code=202)
+
+
+@api_v1_bp.get("/system/database-backups/<int:backup_id>/download")
+@require_role("administrator")
+def download_database_backup(backup_id):
+    db_session = get_session()
+    backup_record = db_session.get(DatabaseBackup, backup_id)
+    if backup_record is None:
+        return _error_response("not_found", "Database backup entry was not found.", 404)
+
+    if str(backup_record.status or "").strip().lower() != DATABASE_BACKUP_STATUS_COMPLETED:
+        return _error_response("conflict", "Database backup is not ready for download.", 409)
+
+    try:
+        backup_path = _resolve_database_backup_file_path(backup_record)
+    except RuntimeError as error:
+        return _error_response("conflict", str(error), 409)
+
+    if not backup_path.exists() or not backup_path.is_file():
+        return _error_response("not_found", "Backup file is missing from storage.", 404)
+
+    backup_content = backup_path.read_bytes()
+    _record_audit_event(
+        action="system.database_backup_downloaded",
+        entity_type="database_backup",
+        entity_id=backup_record.id,
+        payload={
+            "filename": backup_record.filename,
+            "file_size_bytes": len(backup_content),
+        },
+    )
+    db_session.commit()
+
+    response = current_app.response_class(backup_content, mimetype=_resolve_database_backup_mime_type(backup_record.filename))
+    response.headers["Content-Disposition"] = f'attachment; filename="{backup_record.filename}"'
+    response.headers["Content-Length"] = str(len(backup_content))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@api_v1_bp.delete("/system/database-backups/<int:backup_id>")
+@require_role("administrator")
+def delete_database_backup(backup_id):
+    db_session = get_session()
+    backup_record = db_session.get(DatabaseBackup, backup_id)
+    if backup_record is None:
+        return _error_response("not_found", "Database backup entry was not found.", 404)
+
+    status = str(backup_record.status or "").strip().lower()
+    if status in {DATABASE_BACKUP_STATUS_QUEUED, DATABASE_BACKUP_STATUS_RUNNING}:
+        return _error_response("conflict", "Database backup is still running and cannot be deleted yet.", 409)
+
+    backup_path = None
+    path_error = None
+    try:
+        backup_path = _resolve_database_backup_file_path(backup_record)
+    except RuntimeError as error:
+        path_error = str(error)
+
+    if backup_path is not None:
+        temp_path = backup_path.with_suffix(backup_path.suffix + ".tmp")
+        if temp_path.exists() and temp_path.is_file():
+            temp_path.unlink()
+        if backup_path.exists() and backup_path.is_file():
+            backup_path.unlink()
+
+    deleted_filename = str(backup_record.filename or "")
+    deleted_id = int(backup_record.id)
+    db_session.delete(backup_record)
+    _record_audit_event(
+        action="system.database_backup_deleted",
+        entity_type="database_backup",
+        entity_id=deleted_id,
+        payload={
+            "filename": deleted_filename,
+            "path_warning": path_error,
+        },
+    )
+    db_session.commit()
+    return _success_response({"deleted": True, "id": deleted_id, "filename": deleted_filename})
 
 
 @api_v1_bp.get("/ai-usage/diagnostics")

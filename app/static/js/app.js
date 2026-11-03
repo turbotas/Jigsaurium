@@ -69,6 +69,7 @@
       embeddings: false,
       "ip-blocks": false,
       sessions: false,
+      backups: false,
     },
     workspaceSectionAccess: {
       account: false,
@@ -85,6 +86,7 @@
     loans: [],
     blockedIps: [],
     userSessions: [],
+    databaseBackups: [],
     auditEvents: [],
     auditEventsMeta: null,
     jigsawThumbnailImages: [],
@@ -108,6 +110,7 @@
     bulkCreateJobPollTimer: null,
     imageEmbeddingBackfillJobId: null,
     imageEmbeddingBackfillPollTimer: null,
+    databaseBackupPollTimer: null,
     jigsawExpandedImageRowsById: {},
     editorScrollPositions: {
       user: null,
@@ -193,6 +196,7 @@
     auditSection: document.getElementById("audit-section"),
     ipBlocksSection: document.getElementById("ip-blocks-section"),
     sessionsSection: document.getElementById("sessions-section"),
+    databaseBackupsSection: document.getElementById("database-backups-section"),
     logoutButton: document.getElementById("logout-button"),
     userCreateForm: document.getElementById("user-create-form"),
     userEditForm: document.getElementById("user-edit-form"),
@@ -339,6 +343,8 @@
     ipBlockHours: document.getElementById("ip-block-hours"),
     ipBlocksTableBody: document.getElementById("ip-blocks-table-body"),
     sessionsTableBody: document.getElementById("sessions-table-body"),
+    databaseBackupCreateButton: document.getElementById("database-backup-create"),
+    databaseBackupsTableBody: document.getElementById("database-backups-table-body"),
     auditTableBody: document.getElementById("audit-table-body"),
     aiUsageTodayCost: document.getElementById("ai-usage-today-cost"),
     aiUsageTodayCalls: document.getElementById("ai-usage-today-calls"),
@@ -2008,7 +2014,7 @@
   }
 
   function getFirstVisibleAdminTab() {
-    const tabOrder = ["users", "ai", "embeddings", "ip-blocks", "sessions"];
+    const tabOrder = ["users", "ai", "embeddings", "ip-blocks", "sessions", "backups"];
     return tabOrder.find((tabName) => state.adminTabVisibility[tabName]) || null;
   }
 
@@ -2148,6 +2154,9 @@
       if (elements.sessionsSection) {
         elements.sessionsSection.hidden = true;
       }
+      if (elements.databaseBackupsSection) {
+        elements.databaseBackupsSection.hidden = true;
+      }
       return;
     }
 
@@ -2167,6 +2176,9 @@
     }
     if (elements.sessionsSection) {
       elements.sessionsSection.hidden = !(state.adminTabVisibility.sessions && activeAdminTab === "sessions");
+    }
+    if (elements.databaseBackupsSection) {
+      elements.databaseBackupsSection.hidden = !(state.adminTabVisibility.backups && activeAdminTab === "backups");
     }
   }
 
@@ -2286,6 +2298,9 @@
     }
 
     if (!state.user) {
+      clearDatabaseBackupPollTimer();
+      state.databaseBackups = [];
+      renderDatabaseBackups([]);
       resetDiaryEntryFormEditingState({ keepJigsawSelection: false });
       state.authProvider = null;
       state.currentSessionIdentifier = null;
@@ -2310,6 +2325,7 @@
       state.adminTabVisibility.embeddings = false;
       state.adminTabVisibility["ip-blocks"] = false;
       state.adminTabVisibility.sessions = false;
+      state.adminTabVisibility.backups = false;
       state.editorScrollPositions.user = null;
       state.editorScrollPositions.jigsaw = null;
       state.editorScrollPositions.diary = null;
@@ -2374,8 +2390,14 @@
     const canAccessAdminEmbeddings = isAdministrator;
     const canAccessAdminIpBlocks = canManageSecurity;
     const canAccessAdminSessions = canManageSecurity;
+    const canAccessAdminBackups = canManageSecurity;
     const canAccessAdmin =
-      canAccessAdminUsers || canAccessAdminAi || canAccessAdminEmbeddings || canAccessAdminIpBlocks || canAccessAdminSessions;
+      canAccessAdminUsers
+      || canAccessAdminAi
+      || canAccessAdminEmbeddings
+      || canAccessAdminIpBlocks
+      || canAccessAdminSessions
+      || canAccessAdminBackups;
     const canAccessActivityLog = canReadAudit;
     const canAccessLoans = Boolean(isAdministrator && canManageLoans);
 
@@ -2402,6 +2424,7 @@
     state.adminTabVisibility.embeddings = canAccessAdminEmbeddings;
     state.adminTabVisibility["ip-blocks"] = canAccessAdminIpBlocks;
     state.adminTabVisibility.sessions = canAccessAdminSessions;
+    state.adminTabVisibility.backups = canAccessAdminBackups;
 
     setActiveCollectionTab(state.activeCollectionTab);
     setActiveAdminTab(state.activeAdminTab);
@@ -2950,6 +2973,79 @@
       terminateButton.setAttribute("data-user-session-terminate", String(entry.id));
       terminateButton.textContent = "Terminate";
       actionCell.appendChild(terminateButton);
+
+      row.appendChild(actionCell);
+      tableBody.appendChild(row);
+    });
+  }
+
+  function renderDatabaseBackups(backups) {
+    const tableBody = elements.databaseBackupsTableBody;
+    clearTableBody(tableBody);
+
+    if (!Array.isArray(backups) || backups.length === 0) {
+      appendEmptyRow(tableBody, 8, "No database backups yet.");
+      return;
+    }
+
+    backups.forEach((entry) => {
+      const row = document.createElement("tr");
+      row.className = "govuk-table__row";
+
+      row.appendChild(buildCell(String(entry.filename || "-")));
+      row.appendChild(buildCell(String(entry.app_environment_label || entry.app_environment || "-")));
+      row.appendChild(buildCell(String(entry.app_version || "-")));
+      row.appendChild(buildCell(String(entry.status || "-")));
+      row.appendChild(buildCell(entry.created_at ? new Date(entry.created_at).toLocaleString() : "-"));
+      row.appendChild(buildCell(entry.completed_at ? new Date(entry.completed_at).toLocaleString() : "-"));
+      row.appendChild(buildCell(Number.isFinite(Number(entry.file_size_bytes)) ? `${toIntegerLabel(entry.file_size_bytes)} bytes` : "-"));
+
+      const actionCell = document.createElement("td");
+      actionCell.className = "govuk-table__cell";
+      const statusText = String(entry.status || "").toLowerCase();
+      const backupId = Number(entry.id || 0);
+
+      if (statusText === "completed" && typeof entry.download_url === "string" && entry.download_url) {
+        const downloadButton = document.createElement("button");
+        downloadButton.type = "button";
+        downloadButton.className = "govuk-button govuk-button--secondary govuk-!-margin-bottom-0";
+        downloadButton.setAttribute("data-module", "govuk-button");
+        downloadButton.setAttribute("data-backup-download", String(backupId));
+        downloadButton.setAttribute("data-backup-download-url", String(entry.download_url));
+        downloadButton.textContent = "Download";
+        actionCell.appendChild(downloadButton);
+      }
+
+      if (statusText === "failed") {
+        const errorText = String(entry.error_message || "Backup failed").trim();
+        const errorLine = document.createElement("div");
+        errorLine.textContent = errorText || "Backup failed";
+        actionCell.appendChild(errorLine);
+      }
+
+      if (statusText === "queued" || statusText === "running") {
+        const progressLine = document.createElement("div");
+        progressLine.textContent = "In progress";
+        actionCell.appendChild(progressLine);
+      }
+
+      if (backupId > 0 && statusText !== "queued" && statusText !== "running") {
+        if (actionCell.childNodes.length > 0) {
+          actionCell.appendChild(document.createTextNode(" "));
+        }
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "govuk-button govuk-button--warning govuk-!-margin-bottom-0";
+        deleteButton.setAttribute("data-module", "govuk-button");
+        deleteButton.setAttribute("data-backup-delete", String(backupId));
+        deleteButton.setAttribute("data-backup-filename", String(entry.filename || ""));
+        deleteButton.textContent = "Delete";
+        actionCell.appendChild(deleteButton);
+      }
+
+      if (actionCell.childNodes.length === 0) {
+        actionCell.textContent = "-";
+      }
 
       row.appendChild(actionCell);
       tableBody.appendChild(row);
@@ -6058,6 +6154,60 @@
     }
   }
 
+  function clearDatabaseBackupPollTimer() {
+    if (state.databaseBackupPollTimer) {
+      window.clearTimeout(state.databaseBackupPollTimer);
+      state.databaseBackupPollTimer = null;
+    }
+  }
+
+  function scheduleDatabaseBackupRefresh(delayMs = 2000) {
+    clearDatabaseBackupPollTimer();
+    state.databaseBackupPollTimer = window.setTimeout(() => {
+      loadDatabaseBackups().catch(() => {
+        // Loader surfaces feedback on error.
+      });
+    }, delayMs);
+  }
+
+  async function loadDatabaseBackups() {
+    clearDatabaseBackupPollTimer();
+
+    if (!state.user) {
+      state.databaseBackups = [];
+      renderDatabaseBackups([]);
+      return;
+    }
+
+    const isAdministrator = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
+    if (!isAdministrator) {
+      state.databaseBackups = [];
+      renderDatabaseBackups([]);
+      return;
+    }
+
+    try {
+      const payload = await apiRequest("/api/v1/system/database-backups");
+      state.databaseBackups = Array.isArray(payload.data) ? payload.data : [];
+      renderDatabaseBackups(state.databaseBackups);
+
+      const hasPendingBackup = state.databaseBackups.some((entry) => {
+        const status = String(entry?.status || "").toLowerCase();
+        return status === "queued" || status === "running";
+      });
+      if (hasPendingBackup) {
+        scheduleDatabaseBackupRefresh();
+      }
+    } catch (error) {
+      if (error.status === 403) {
+        state.databaseBackups = [];
+        renderDatabaseBackups([]);
+        return;
+      }
+      showFeedback(error.message, true);
+    }
+  }
+
   async function loadImageEmbeddingDiagnostics() {
     if (!state.user) {
       state.imageEmbeddingDiagnostics = null;
@@ -6123,6 +6273,7 @@
         loadAuditEvents(),
         loadBlockedIps(),
         loadUserSessions(),
+        loadDatabaseBackups(),
         loadAiUsageDiagnostics(),
         loadImageEmbeddingDiagnostics(),
         loadImageLibraryImages(),
@@ -6167,6 +6318,7 @@
       state.loans = [];
       state.blockedIps = [];
       state.userSessions = [];
+      state.databaseBackups = [];
       state.auditEvents = [];
       state.auditEventsMeta = null;
       state.jigsawThumbnailImages = [];
@@ -6197,6 +6349,7 @@
       closeJigsawEditor();
       renderLoans([]);
       renderBlockedIps([]);
+      renderDatabaseBackups([]);
       renderJigsawImages([]);
       renderImageLibraryImages([]);
       renderDiaryEntries([]);
@@ -6206,6 +6359,7 @@
       clearBulkUploadFiles();
       clearBulkCreateProgress();
       closeImageBrowser();
+      clearDatabaseBackupPollTimer();
       if (elements.jigsawSearchInput) {
         elements.jigsawSearchInput.value = "";
       }
@@ -7057,6 +7211,28 @@
     }
   }
 
+  async function handleCreateDatabaseBackup() {
+    clearFeedback();
+    if (elements.databaseBackupCreateButton) {
+      elements.databaseBackupCreateButton.disabled = true;
+    }
+
+    try {
+      await apiRequest("/api/v1/system/database-backups", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      showFeedback("Database backup started.");
+      await Promise.all([loadDatabaseBackups(), loadAuditEvents()]);
+    } catch (error) {
+      showFeedback(error.message, true);
+    } finally {
+      if (elements.databaseBackupCreateButton) {
+        elements.databaseBackupCreateButton.disabled = false;
+      }
+    }
+  }
+
   function openJigsawEditor(jigsawId, { scrollToForm = true } = {}) {
     const selectedJigsaw = state.jigsaws.find((entry) => Number(entry.id) === Number(jigsawId));
     if (!selectedJigsaw || !elements.jigsawEditForm) {
@@ -7220,6 +7396,18 @@
   }
 
   async function handleTableActions(event) {
+    const backupDownloadButton = event.target.closest("[data-backup-download]");
+    if (backupDownloadButton) {
+      event.preventDefault();
+      const downloadUrl = String(backupDownloadButton.getAttribute("data-backup-download-url") || "").trim();
+      if (!downloadUrl) {
+        showFeedback("Download link is unavailable for this backup.", true);
+        return;
+      }
+      window.location.assign(downloadUrl);
+      return;
+    }
+
     const aiUsageDetailButton = event.target.closest("[data-ai-usage-detail]");
     if (aiUsageDetailButton) {
       event.preventDefault();
@@ -7402,6 +7590,37 @@
           state.authProvider = null;
           setSessionSummary();
         }
+        showFeedback(error.message, true);
+      }
+      return;
+    }
+
+    const deleteBackupButton = event.target.closest("[data-backup-delete]");
+    if (deleteBackupButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      const backupId = Number(deleteBackupButton.getAttribute("data-backup-delete") || "0");
+      const backupFilename = String(deleteBackupButton.getAttribute("data-backup-filename") || "").trim();
+      if (!backupId) {
+        showFeedback("Invalid backup selection.", true);
+        return;
+      }
+
+      const confirmed = window.confirm(
+        backupFilename
+          ? `Delete backup ${backupFilename}? This removes the stored file and cannot be undone.`
+          : "Delete this backup? This removes the stored file and cannot be undone.",
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        await apiRequest(`/api/v1/system/database-backups/${backupId}`, { method: "DELETE" });
+        showFeedback("Backup deleted.");
+        await Promise.all([loadDatabaseBackups(), loadAuditEvents()]);
+      } catch (error) {
         showFeedback(error.message, true);
       }
       return;
@@ -8533,6 +8752,16 @@
       elements.sessionsTableBody.addEventListener("click", handleTableActions);
     }
 
+    if (elements.databaseBackupsTableBody) {
+      elements.databaseBackupsTableBody.addEventListener("click", handleTableActions);
+    }
+
+    if (elements.databaseBackupCreateButton) {
+      elements.databaseBackupCreateButton.addEventListener("click", () => {
+        handleCreateDatabaseBackup();
+      });
+    }
+
     if (elements.jigsawEditForm) {
       elements.jigsawEditForm.addEventListener("submit", handleEditJigsaw);
     }
@@ -8612,6 +8841,7 @@
         loadAuditEvents(),
         loadBlockedIps(),
         loadUserSessions(),
+        loadDatabaseBackups(),
         loadAiUsageDiagnostics(),
         loadImageEmbeddingDiagnostics(),
       ]);
@@ -8630,6 +8860,7 @@
       renderLoans([]);
       renderBlockedIps([]);
       renderUserSessions([]);
+      renderDatabaseBackups([]);
       renderJigsawImages([]);
       renderImageLibraryImages([]);
       renderDiaryEntries([]);
@@ -8639,6 +8870,7 @@
       closeAiUsageDetailModal();
       renderBulkUploadFiles();
       clearBulkCreateProgress();
+      clearDatabaseBackupPollTimer();
       populateLoanFormOptions();
       populateJigsawImageOptions();
       populateDiaryJigsawOptions();

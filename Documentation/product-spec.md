@@ -11,6 +11,7 @@ Build a personal jigsaw collection application centered on inventory management 
   - Manage jigsaw inventory (create, update, retire, restore).
   - View and manage lending records.
   - View and terminate active application sessions.
+  - Trigger, review, download, and delete in-app database backups.
 - Member
   - Participate in shared collection workflows (create/update jigsaws, upload/tag/assign images, add diary entries, edit own diary entries).
   - View shared collection and activity according to assigned capabilities.

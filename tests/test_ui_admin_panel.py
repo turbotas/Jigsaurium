@@ -170,8 +170,10 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         )
         ip_blocks_index = admin_tab_order.index("ip-blocks")
         sessions_index = admin_tab_order.index("sessions")
+        backups_index = admin_tab_order.index("backups")
         assert ip_blocks_index >= 0
         assert sessions_index == ip_blocks_index + 1
+        assert backups_index == sessions_index + 1
 
         page.click("#admin-tab-sessions")
         page.wait_for_selector("#sessions-section:not([hidden])")

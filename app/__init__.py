@@ -157,6 +157,20 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("STFD_ROLE_UNI_ADMINISTRATOR", "")
     app.config.setdefault("STFD_ROLE_UNI_MEMBER", "")
     app.config.setdefault("STFD_ROLE_UNI_BORROWER", "")
+    app.config.setdefault("DB_BACKUP_STORAGE_PATH", "")
+    app.config.setdefault("DB_BACKUP_COMPRESSION", "gzip")
+    app.config.setdefault("DB_BACKUP_BLOB_CHUNK_BYTES", 32 * 1024)
+    app.config.setdefault("DB_BACKUP_MAX_STATEMENT_BYTES", 4 * 1024 * 1024)
+
+    backup_blob_chunk_bytes = int(app.config.get("DB_BACKUP_BLOB_CHUNK_BYTES", 32 * 1024) or 32 * 1024)
+    if backup_blob_chunk_bytes < 1024:
+        backup_blob_chunk_bytes = 32 * 1024
+    app.config["DB_BACKUP_BLOB_CHUNK_BYTES"] = backup_blob_chunk_bytes
+
+    backup_statement_bytes = int(app.config.get("DB_BACKUP_MAX_STATEMENT_BYTES", 4 * 1024 * 1024) or 4 * 1024 * 1024)
+    if backup_statement_bytes < 16 * 1024:
+        backup_statement_bytes = 4 * 1024 * 1024
+    app.config["DB_BACKUP_MAX_STATEMENT_BYTES"] = backup_statement_bytes
 
     if app.config.get("APP_ENV") == "dev" or bool(app.config.get("TESTING", False)):
         app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0

@@ -61,6 +61,10 @@
 - `IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK`: optional boolean to allow deterministic non-CLIP fallback embeddings in test-only environments.
 - `IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES`: comma-separated tag prefixes that count as visual-match references (default `box,reference`).
 - `HF_TOKEN`: optional Hugging Face access token for authenticated build-time downloads (runtime should not require this when vendored local model mode is enabled).
+- `DB_BACKUP_STORAGE_PATH`: optional absolute/relative directory for in-app SQL backups (defaults to Flask `instance/backups`).
+- `DB_BACKUP_COMPRESSION`: backup file compression mode (`gzip` default, `bzip2`, or `none`).
+- `DB_BACKUP_BLOB_CHUNK_BYTES`: blob chunk size used when exporting large binary fields as MySQL-compatible SQL variable assembly (default `32768`).
+- `DB_BACKUP_MAX_STATEMENT_BYTES`: guardrail maximum SQL statement size for generated backup output (default `4194304`).
 
 ## Canonical Hosts
 

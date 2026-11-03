@@ -50,6 +50,10 @@
 - `DELETE /api/v1/security/blocked-ips/{id}`
 - `GET /api/v1/security/sessions`
 - `DELETE /api/v1/security/sessions/{id}`
+- `GET /api/v1/system/database-backups`
+- `POST /api/v1/system/database-backups`
+- `GET /api/v1/system/database-backups/{id}/download`
+- `DELETE /api/v1/system/database-backups/{id}`
 - `GET /api/v1/ai-usage/diagnostics`
 - `GET /api/v1/loans`
 - `POST /api/v1/loans`
@@ -248,6 +252,17 @@
   - `DELETE /api/v1/security/sessions/{id}` is administrator-only and terminates one active app session.
   - After termination, the next authenticated API request made with that terminated session returns `401`.
   - App sessions expire after 120 minutes of inactivity by default; timeout is configurable via `SESSION_IDLE_TIMEOUT_MINUTES`.
+
+- Database backup endpoint notes:
+  - `GET /api/v1/system/database-backups` is administrator-only and returns backup history newest-first.
+  - `POST /api/v1/system/database-backups` is administrator-only and creates an async backup job.
+  - Backup rows include filename, environment label, app version, status (`queued`, `running`, `completed`, `failed`), created/start/completion timestamps, and optional failure message.
+- Backup output format is MySQL-compatible SQL (`file_format = mysql_sql`) and includes schema + data.
+- Backup files are compressed (`.sql.gz` by default, `.sql.bz2` when configured) and remain import-compatible after decompression.
+- Binary image/blob columns are emitted as `UNHEX(...)` SQL values, with chunked variable assembly for large blobs to reduce per-statement packet size.
+- Backup filename format: `jigsaurium-<env>-v<version>-<utc timestamp>.sql.gz` (or `.sql.bz2` / `.sql` depending on compression setting) where `prod` maps to `live` for the environment token.
+- `GET /api/v1/system/database-backups/{id}/download` is administrator-only and returns the SQL file when status is `completed`; non-completed rows return `409`.
+- `DELETE /api/v1/system/database-backups/{id}` is administrator-only, removes the backup row and deletes the stored file, and returns `409` for running backups.
 
 - AI diagnostics endpoint notes:
   - `GET /api/v1/ai-usage/diagnostics` is admin-only.

@@ -126,6 +126,9 @@
       <li class="app-section-tabs__item" role="presentation">
         <button id="admin-tab-sessions" class="app-section-tab" type="button" role="tab" aria-selected="false" aria-controls="sessions-section" tabindex="-1" data-admin-tab="sessions">Sessions</button>
       </li>
+      <li class="app-section-tabs__item" role="presentation">
+        <button id="admin-tab-backups" class="app-section-tab" type="button" role="tab" aria-selected="false" aria-controls="database-backups-section" tabindex="-1" data-admin-tab="backups">Backups</button>
+      </li>
     </ul>
   </nav>
   <section id="users-section" class="govuk-!-margin-bottom-8" aria-labelledby="users-heading">
@@ -1056,6 +1059,32 @@
           </tr>
         </thead>
         <tbody class="govuk-table__body" id="sessions-table-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="database-backups-section" class="govuk-!-margin-top-8" aria-labelledby="database-backups-heading" hidden>
+    <h2 id="database-backups-heading" class="govuk-heading-l">Database backups</h2>
+    <p class="govuk-body">Create and download SQL backups for restore in MySQL tools such as phpMyAdmin.</p>
+
+    <button id="database-backup-create" type="button" class="govuk-button" data-module="govuk-button">Create backup</button>
+
+    <div class="table-scroll-wrap">
+      <table class="govuk-table" id="database-backups-table">
+        <caption class="govuk-table__caption govuk-table__caption--m">Backup history</caption>
+        <thead class="govuk-table__head">
+          <tr class="govuk-table__row">
+            <th class="govuk-table__header">File</th>
+            <th class="govuk-table__header">Environment</th>
+            <th class="govuk-table__header">Version</th>
+            <th class="govuk-table__header">Status</th>
+            <th class="govuk-table__header">Created</th>
+            <th class="govuk-table__header">Completed</th>
+            <th class="govuk-table__header">Size</th>
+            <th class="govuk-table__header">Action</th>
+          </tr>
+        </thead>
+        <tbody class="govuk-table__body" id="database-backups-table-body"></tbody>
       </table>
     </div>
   </section>

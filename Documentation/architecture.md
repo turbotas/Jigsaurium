@@ -67,6 +67,8 @@
   - blocked client IPs (manual and auto 404-streak), expiry timestamp, source/reason, and hit counters
 - `user_sessions`
   - server-side app session registry (session identifier, user, origin IP, auth provider, activity/termination timestamps)
+- `database_backups`
+  - admin-triggered backup job/history rows (filename, format, status, environment/version tags, storage path, file checksum/size, timestamps)
 
 ## Data and Migration Rules
 

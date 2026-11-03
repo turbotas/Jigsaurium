@@ -262,3 +262,16 @@
 - Why: current capability mapping is static and operationally stable; documenting defaults addresses immediate support/troubleshooting needs with lower delivery risk.
 - Decision: explicitly include public unauthenticated browse scope in authorization documentation (`GET /api/v1/jigsaws`, `GET /api/v1/jigsaws/thumbnail-images`, and constrained non-retired preview/thumbnail image access).
 - Why: the security posture now intentionally includes guest read-only data access and must be clearly documented alongside role capabilities.
+
+## 2026-11-03 - In-App MySQL-Compatible Database Backups
+
+- Decision: add administrator-only in-app backup management endpoints and UI for creating, listing, and downloading database backups.
+- Why: operators need a built-in backup path that does not depend on external tools for routine exports.
+- Decision: emit backups as MySQL-compatible SQL (`mysql_sql`) even when runtime DB engine differs (for example SQLite dev environments).
+- Why: restore/import portability into MySQL tooling (including phpMyAdmin) is required across environments.
+- Decision: export binary/blob fields using `UNHEX(...)` SQL literals with chunked variable assembly for large blobs.
+- Why: image-heavy rows can exceed practical packet sizes if emitted as single oversized statements; chunked assembly reduces packet-size risk during import.
+- Decision: store backup files compressed by default (`gzip`), with optional `bzip2` or uncompressed output via configuration.
+- Why: full SQL dumps with image blobs are large; compression reduces storage and download overhead without changing restore compatibility (decompress then import).
+- Decision: allow administrators to delete completed/failed backups (file + history row) while blocking deletion of running jobs.
+- Why: operators need lifecycle control and disk-space management while preserving integrity of in-flight backup operations.

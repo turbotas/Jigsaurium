@@ -4,6 +4,7 @@
 
 - `administrator` can manage users, roles, lending records, AI operations, and destructive lifecycle actions.
 - `administrator` can view and terminate active application sessions.
+- `administrator` can trigger/list/download/delete in-app database backups.
 - `member` can use shared household collection workflows: jigsaw create/read/update/enrich, diary create/read/update-own, image upload/library/tag/assign, and audit read.
 - `borrower` remains supported as a legacy compatibility role and currently maps to member-style capabilities.
 - Borrowers cannot mutate user/role data.
