@@ -8,6 +8,7 @@ from app.db import get_session
 from app.models import (
     AiUsageEvent,
     AuditEvent,
+    BlockedIp,
     BulkAiCreateJob,
     BulkAiCreateJobItem,
     Jigsaw,
@@ -1565,7 +1566,7 @@ def test_auth_login_rejects_wrong_password(client, seeded_identity_data):
 
 
 @pytest.mark.functional
-def test_auth_login_rate_limits_repeated_failures(client, seeded_identity_data):
+def test_auth_login_rate_limits_repeated_failures(app, client, seeded_identity_data):
     for _ in range(10):
         response = client.post(
             "/api/v1/auth/login",
@@ -1582,6 +1583,16 @@ def test_auth_login_rate_limits_repeated_failures(client, seeded_identity_data):
     payload = throttled_response.get_json()
     assert payload["error"]["code"] == "too_many_requests"
     assert int(throttled_response.headers["Retry-After"]) > 0
+
+    with app.app_context():
+        db_session = get_session()
+        blocked_entry = db_session.query(BlockedIp).filter_by(ip_address="127.0.0.1").one_or_none()
+        assert blocked_entry is not None
+        assert blocked_entry.block_source == "auto_login_failures"
+
+    blocked_home_response = client.get("/")
+    assert blocked_home_response.status_code == 429
+    assert int(blocked_home_response.headers["Retry-After"]) > 0
 
 
 @pytest.mark.functional

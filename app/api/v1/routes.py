@@ -203,6 +203,7 @@ IMAGE_EMBEDDING_BACKFILL_SCOPE_MISSING = "missing"
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = 15 * 60
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 10
 LOGIN_RATE_LIMIT_BLOCK_SECONDS = 15 * 60
+LOGIN_RATE_LIMIT_BLOCK_SOURCE = "auto_login_failures"
 _failed_login_attempts = {}
 _failed_login_attempts_lock = threading.Lock()
 
@@ -2010,6 +2011,7 @@ def _check_login_rate_limit(email):
 def _record_failed_login_attempt(email):
     now = time.time()
     key = _login_rate_limit_key(email)
+    should_persist_ip_block = False
     with _failed_login_attempts_lock:
         state = _failed_login_attempts.get(key)
         if not state or now - float(state.get("window_started_at", 0) or 0) > LOGIN_RATE_LIMIT_WINDOW_SECONDS:
@@ -2020,8 +2022,44 @@ def _record_failed_login_attempt(email):
             state["blocked_until"] = now + LOGIN_RATE_LIMIT_BLOCK_SECONDS
             state["count"] = 0
             state["window_started_at"] = now
+            should_persist_ip_block = True
 
         _failed_login_attempts[key] = state
+
+    if should_persist_ip_block:
+        _persist_failed_login_ip_block()
+
+
+def _persist_failed_login_ip_block():
+    client_ip = normalize_ip_address(getattr(g, "client_ip_resolved", request.remote_addr))
+    if not client_ip:
+        return
+
+    db_session = get_session()
+    try:
+        blocked_until = datetime.now(timezone.utc) + timedelta(seconds=LOGIN_RATE_LIMIT_BLOCK_SECONDS)
+        upsert_blocked_ip(
+            db_session,
+            ip_address=client_ip,
+            blocked_until=blocked_until,
+            block_source=LOGIN_RATE_LIMIT_BLOCK_SOURCE,
+            block_reason="Repeated failed login attempts",
+            created_by_user_id=None,
+            add_hit=True,
+            exempt_cidrs=current_app.config.get("TRUSTED_CLIENT_CIDRS", []),
+        )
+        db_session.commit()
+    except ValueError:
+        db_session.rollback()
+    except Exception:
+        db_session.rollback()
+        current_app.logger.warning(
+            "failed_login_ip_block_persist_failed",
+            extra={
+                "client_ip_resolved": client_ip,
+                "request_id": getattr(g, "request_id", None),
+            },
+        )
 
 
 def _clear_failed_login_attempts(email):

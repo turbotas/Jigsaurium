@@ -7022,7 +7022,8 @@
     event.preventDefault();
     clearFeedback();
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const ipAddress = String(formData.get("ip_address") || "").trim();
     const durationHours = Number(formData.get("duration_hours") || "0");
     const reason = String(formData.get("reason") || "").trim();
@@ -7046,7 +7047,7 @@
         }),
       });
       showFeedback(`Blocked ${ipAddress}.`);
-      event.currentTarget.reset();
+      form.reset();
       if (elements.ipBlockHours) {
         elements.ipBlockHours.value = "24";
       }

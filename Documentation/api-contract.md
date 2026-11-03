@@ -204,6 +204,7 @@
 - `PATCH /api/v1/auth/me` allows users to update their own `display_name` (username) and change password with `current_password` + `new_password`.
 - `PATCH /api/v1/auth/me` rejects email changes.
 - Repeated failed login attempts for the same client/IP + email are rate-limited; blocked attempts return `429` and include `Retry-After`.
+- When login rate limiting trips, the resolved client IP is also inserted/extended in `blocked_ips` for the same block window so all routes are temporarily blocked for that client.
 - Repeated request probing that yields 5 consecutive `404` responses from the same client IP triggers a 24-hour temporary block; blocked requests return `429` and include `Retry-After`.
 - Active blocked IP entries are persisted in the `blocked_ips` table and can be managed by administrators.
 

@@ -125,7 +125,8 @@
 - Security response headers are applied to all responses (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and `Cross-Origin-Resource-Policy`).
 - Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` outside dev.
 - Server-side app sessions expire after the configured inactivity window (`SESSION_IDLE_TIMEOUT_MINUTES`, default 120 minutes).
-- Login endpoint enforces basic anti-brute-force throttling per client IP and email (15-minute block after repeated failures in the same window).
+- Login endpoint enforces anti-brute-force throttling per client IP and email (15-minute block after repeated failures in the same window).
+- When the login throttle trips, the resolved client IP is persisted in `blocked_ips` for the same block window so the client is blocked across all routes until expiry.
 - Runtime request shielding enforces a temporary client-IP ban when a caller produces 5 consecutive `404` responses; ban duration is 24 hours and uses resolved client IP from trusted proxy headers.
 - Blocked-IP entries are persisted in `blocked_ips` and can be listed/added/removed by administrators via API/UI.
 - Image upload endpoints accept raster image MIME types only (`image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`); SVG and other active/image-document formats are rejected.
