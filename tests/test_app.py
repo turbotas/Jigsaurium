@@ -56,8 +56,20 @@ def test_home_route_renders_expected_content(client):
     assert b"id=\"jigsaws-pagination-top\"" in response.data
     assert b"Show all images" in response.data
     assert b"id=\"admin-sections\" hidden" in response.data
+    assert b"id=\"image-editor-context\"" in response.data
+    assert b"data-enabled=\"0\"" in response.data
     assert b"/static/js/app.js" in response.data
     assert b"/mobile-capture" in response.data
+
+
+@pytest.mark.functional
+def test_image_editor_route_renders_home_in_editor_mode(client):
+    response = client.get("/image-editor/42")
+
+    assert response.status_code == 200
+    assert b"id=\"image-editor-context\"" in response.data
+    assert b"data-enabled=\"1\"" in response.data
+    assert b"data-image-id=\"42\"" in response.data
 
 
 @pytest.mark.functional

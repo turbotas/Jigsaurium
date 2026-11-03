@@ -26,6 +26,18 @@
   const DIARY_VIEW_MODE_LIST = "list";
   const DIARY_VIEW_MODE_CALENDAR = "calendar";
 
+  function parseImageEditorContext() {
+    const contextElement = document.getElementById("image-editor-context");
+    const enabled = String(contextElement?.dataset?.enabled || "") === "1";
+    const parsedImageId = Number.parseInt(String(contextElement?.dataset?.imageId || ""), 10);
+    return {
+      enabled,
+      imageId: Number.isFinite(parsedImageId) && parsedImageId > 0 ? parsedImageId : null,
+    };
+  }
+
+  const initialImageEditorContext = parseImageEditorContext();
+
   function createDefaultTableSortState() {
     return {
       users: { field: "id", direction: "asc" },
@@ -155,11 +167,16 @@
       suggestionsImageId: null,
       nameAssignImageId: null,
     },
+    imageEditor: {
+      enabled: initialImageEditorContext.enabled,
+      imageId: initialImageEditorContext.imageId,
+    },
   };
 
   const elements = {
     feedback: document.getElementById("app-feedback"),
     feedbackText: document.getElementById("app-feedback-text"),
+    imageEditorContext: document.getElementById("image-editor-context"),
     sessionSummary: document.getElementById("session-summary"),
     authSection: document.getElementById("auth-section"),
     loginForm: document.getElementById("login-form"),
@@ -280,6 +297,7 @@
     embeddingsMissingGrid: document.getElementById("embeddings-missing-grid"),
     imageBrowserOpen: document.getElementById("image-browser-open"),
     imageBrowserModal: document.getElementById("image-browser-modal"),
+    imageBrowserTitle: document.getElementById("image-browser-title"),
     imageBrowserStatus: document.getElementById("image-browser-status"),
     imageBrowserFilterShowAll: document.getElementById("image-browser-filter-all"),
     imageBrowserFilterUnassigned: document.getElementById("image-browser-filter-unassigned"),
@@ -1030,6 +1048,67 @@
     return cell;
   }
 
+  function isStandaloneImageEditorMode() {
+    return Boolean(state.imageEditor?.enabled);
+  }
+
+  function getStandaloneImageEditorImageId() {
+    const imageId = Number(state.imageEditor?.imageId || 0);
+    return imageId > 0 ? imageId : 0;
+  }
+
+  function buildImageEditorUrl(imageId) {
+    const numericImageId = Number(imageId || 0);
+    if (!numericImageId) {
+      return "";
+    }
+    return `/image-editor/${numericImageId}`;
+  }
+
+  function openImageEditorPopupForImageId(imageId) {
+    const editorUrl = buildImageEditorUrl(imageId);
+    if (!editorUrl) {
+      return;
+    }
+
+    const popupFeatures = [
+      "popup=yes",
+      "width=1400",
+      "height=900",
+      "resizable=yes",
+      "scrollbars=yes",
+    ].join(",");
+    const popupHandle = window.open(editorUrl, "jigsauriumImageEditor", popupFeatures);
+    if (popupHandle && typeof popupHandle.focus === "function") {
+      popupHandle.focus();
+      return;
+    }
+
+    window.location.assign(editorUrl);
+  }
+
+  function buildStandaloneEditorImageRecord(imageId) {
+    const numericImageId = Number(imageId || 0);
+    if (!numericImageId) {
+      return null;
+    }
+    const versionToken = `editor-${Date.now()}`;
+    const versionQuery = `?v=${versionToken}`;
+    return {
+      id: numericImageId,
+      filename: `image-${numericImageId}.png`,
+      mime_type: "image/png",
+      tag: "-",
+      jigsaw_id: null,
+      content_url: `/api/v1/images/${numericImageId}/content${versionQuery}`,
+      thumbnail_url: `/api/v1/images/${numericImageId}/content?variant=thumbnail&v=${versionToken}`,
+      preview_url: `/api/v1/images/${numericImageId}/content?variant=preview&v=${versionToken}`,
+      created_at: null,
+      captured_at: null,
+      captured_at_source: null,
+    };
+  }
+
   function buildThumbnailWidget(contentUrl, options = {}) {
     const container = document.createElement("div");
     container.className = "app-thumbnail-cell";
@@ -1038,6 +1117,8 @@
     const fallbackText = String(options.fallbackText || "No image");
     const previewUrl = String(options.previewUrl || contentUrl || "");
     const openUrl = String(options.openUrl || contentUrl || "");
+    const openInPopup = Boolean(options.openInPopup);
+    const popupImageId = Number(options.popupImageId || 0);
     const displayWidth = Number(options.widthPx || THUMBNAIL_DISPLAY_WIDTH_PX);
 
     if (!contentUrl) {
@@ -1061,6 +1142,13 @@
     trigger.target = "_blank";
     trigger.rel = "noopener noreferrer";
     trigger.setAttribute("aria-label", `Open ${altText}`);
+
+    if (openInPopup && popupImageId > 0) {
+      trigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        openImageEditorPopupForImageId(popupImageId);
+      });
+    }
 
     const image = document.createElement("img");
     image.className = "app-thumbnail-image";
@@ -2688,6 +2776,7 @@
     const canDetachJigsawImages = currentUserHasCapability("image.assign");
     const canRetireOrDelete = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
     const canOpenOriginalImages = Boolean(state.user);
+    const canEditImageContent = currentUserHasCapability("image.upload");
 
     pageResult.rows.forEach((jigsaw) => {
       const row = document.createElement("tr");
@@ -2701,9 +2790,13 @@
         buildThumbnailCell(preferredImage?.thumbnail_url || preferredImage?.content_url, {
           altText: `Thumbnail for ${jigsaw.title || "jigsaw"}`,
           previewUrl: preferredImage?.preview_url || preferredImage?.content_url,
-          openUrl: canOpenOriginalImages
-            ? preferredImage?.content_url
-            : (preferredImage?.preview_url || preferredImage?.thumbnail_url || ""),
+          openUrl: canEditImageContent && preferredImage?.id
+            ? buildImageEditorUrl(preferredImage.id)
+            : (canOpenOriginalImages
+              ? preferredImage?.content_url
+              : (preferredImage?.preview_url || preferredImage?.thumbnail_url || "")),
+          openInPopup: Boolean(canEditImageContent && preferredImage?.id),
+          popupImageId: Number(preferredImage?.id || 0),
         })
       );
       const titleCell = document.createElement("td");
@@ -2724,6 +2817,16 @@
         detachMainImageButton.dataset.jigsawImageDetach = String(preferredImage.id);
         detachMainImageButton.textContent = "Detach image";
         titleWrap.appendChild(detachMainImageButton);
+      }
+
+      if (canEditImageContent && preferredImage?.id) {
+        const editMainImageButton = document.createElement("button");
+        editMainImageButton.type = "button";
+        editMainImageButton.className = "govuk-button govuk-button--secondary app-inline-button app-jigsaw-image-edit-button";
+        editMainImageButton.setAttribute("data-module", "govuk-button");
+        editMainImageButton.dataset.imageEdit = String(preferredImage.id);
+        editMainImageButton.textContent = "Edit image";
+        titleWrap.appendChild(editMainImageButton);
       }
 
       titleCell.appendChild(titleWrap);
@@ -2824,10 +2927,14 @@
           const thumbnail = buildThumbnailWidget(image.thumbnail_url || image.content_url, {
             altText: `${jigsaw.title || "Jigsaw"} image ${image.id}`,
             previewUrl: image.preview_url || image.content_url,
-            openUrl: canOpenOriginalImages
-              ? image.content_url
-              : (image.preview_url || image.thumbnail_url || ""),
+            openUrl: canEditImageContent && image?.id
+              ? buildImageEditorUrl(image.id)
+              : (canOpenOriginalImages
+                ? image.content_url
+                : (image.preview_url || image.thumbnail_url || "")),
             widthPx: 120,
+            openInPopup: Boolean(canEditImageContent && image?.id),
+            popupImageId: Number(image?.id || 0),
           });
           item.appendChild(thumbnail);
 
@@ -2844,6 +2951,16 @@
             detachButton.dataset.jigsawImageDetach = String(image.id);
             detachButton.textContent = "Detach";
             item.appendChild(detachButton);
+          }
+
+          if (canEditImageContent && image.id) {
+            const editButton = document.createElement("button");
+            editButton.type = "button";
+            editButton.className = "govuk-button govuk-button--secondary app-inline-button app-jigsaw-image-edit-button";
+            editButton.setAttribute("data-module", "govuk-button");
+            editButton.dataset.imageEdit = String(image.id);
+            editButton.textContent = "Edit";
+            item.appendChild(editButton);
           }
 
           grid.appendChild(item);
@@ -3399,6 +3516,7 @@
     }
 
     const sortedImages = sortRowsForTable(images, "jigsawImages");
+    const canEditImageContent = currentUserHasCapability("image.upload");
     sortedImages.forEach((image) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
@@ -3407,7 +3525,9 @@
         buildThumbnailCell(image.thumbnail_url || image.content_url, {
           altText: `Tagged image ${image.filename || "image"}`,
           previewUrl: image.preview_url || image.content_url,
-          openUrl: image.content_url,
+          openUrl: canEditImageContent && image?.id ? buildImageEditorUrl(image.id) : image.content_url,
+          openInPopup: Boolean(canEditImageContent && image?.id),
+          popupImageId: Number(image?.id || 0),
         })
       );
       row.appendChild(buildCell(String(image.tag || "-")));
@@ -3416,15 +3536,26 @@
 
       const actionCell = document.createElement("td");
       actionCell.className = "govuk-table__cell";
-      const link = document.createElement("a");
-      link.className = "govuk-button govuk-button--secondary app-inline-button";
-      link.setAttribute("role", "button");
-      link.setAttribute("data-module", "govuk-button");
-      link.href = String(image.content_url || "#");
-      link.textContent = "Open";
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      actionCell.appendChild(link);
+
+      if (canEditImageContent && image?.id) {
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        editButton.setAttribute("data-module", "govuk-button");
+        editButton.dataset.imageEdit = String(image.id);
+        editButton.textContent = "Edit";
+        actionCell.appendChild(editButton);
+      }
+
+      const openOriginalLink = document.createElement("a");
+      openOriginalLink.className = "govuk-button govuk-button--secondary app-inline-button";
+      openOriginalLink.setAttribute("role", "button");
+      openOriginalLink.setAttribute("data-module", "govuk-button");
+      openOriginalLink.href = String(image.content_url || "#");
+      openOriginalLink.textContent = "Open original";
+      openOriginalLink.target = "_blank";
+      openOriginalLink.rel = "noopener noreferrer";
+      actionCell.appendChild(openOriginalLink);
 
       row.appendChild(actionCell);
 
@@ -3461,6 +3592,7 @@
     const canSetTag = currentUserHasCapability("image.tag");
     const canAssign = currentUserHasCapability("image.assign");
     const canUseAi = currentUserHasCapability("ai.manage");
+    const canEditImageContent = currentUserHasCapability("image.upload");
     pageResult.rows.forEach((image) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
@@ -3476,7 +3608,9 @@
         buildThumbnailCell(image.thumbnail_url || image.content_url, {
           altText: `Library image ${image.filename || "image"}`,
           previewUrl: image.preview_url || image.content_url,
-          openUrl: image.content_url,
+          openUrl: canEditImageContent && image?.id ? buildImageEditorUrl(image.id) : image.content_url,
+          openInPopup: Boolean(canEditImageContent && image?.id),
+          popupImageId: Number(image?.id || 0),
         })
       );
       row.appendChild(buildCell(String(image.filename || "-")));
@@ -3605,15 +3739,25 @@
         suggestControls.appendChild(suggestWrap);
       }
 
-      const link = document.createElement("a");
-      link.className = "govuk-button govuk-button--secondary app-inline-button";
-      link.setAttribute("role", "button");
-      link.setAttribute("data-module", "govuk-button");
-      link.href = String(image.content_url || "#");
-      link.textContent = "Open";
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      actionButtons.appendChild(link);
+      if (canEditImageContent && image?.id) {
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        editButton.setAttribute("data-module", "govuk-button");
+        editButton.dataset.imageEdit = String(image.id);
+        editButton.textContent = "Edit";
+        actionButtons.appendChild(editButton);
+      }
+
+      const openOriginalLink = document.createElement("a");
+      openOriginalLink.className = "govuk-button govuk-button--secondary app-inline-button";
+      openOriginalLink.setAttribute("role", "button");
+      openOriginalLink.setAttribute("data-module", "govuk-button");
+      openOriginalLink.href = String(image.content_url || "#");
+      openOriginalLink.textContent = "Open original";
+      openOriginalLink.target = "_blank";
+      openOriginalLink.rel = "noopener noreferrer";
+      actionButtons.appendChild(openOriginalLink);
 
       if (canCurrentUserDeleteImage(image)) {
         const deleteButton = document.createElement("button");
@@ -3771,6 +3915,17 @@
     if (!Array.isArray(state.imageLibraryImages) || state.imageLibraryImages.length === 0) {
       return [];
     }
+
+    if (isStandaloneImageEditorMode()) {
+      const imageId = getStandaloneImageEditorImageId();
+      if (!imageId) {
+        return [];
+      }
+      return state.imageLibraryImages
+        .filter((image) => Number(image?.id || 0) === imageId)
+        .sort(compareImageBrowserRows);
+    }
+
     return state.imageLibraryImages
       .filter((image) => imageMatchesBrowserFilters(image))
       .sort(compareImageBrowserRows);
@@ -4434,8 +4589,69 @@
     return true;
   }
 
+  function syncStandaloneImageEditorControls() {
+    const standaloneMode = isStandaloneImageEditorMode();
+    const browserOnlyControls = [
+      elements.imageBrowserFilterShowAll,
+      elements.imageBrowserFilterUnassigned,
+      elements.imageBrowserFilterBox,
+      elements.imageBrowserFilterReference,
+      elements.imageBrowserFilterCompleted,
+      elements.imageBrowserFilterInProgress,
+      elements.imageBrowserPrev,
+      elements.imageBrowserNext,
+      elements.imageBrowserMarkBox,
+      elements.imageBrowserMarkCompleted,
+      elements.imageBrowserAssignPrevious,
+      elements.imageBrowserAssignNext,
+      elements.imageBrowserMarkBoxSide,
+      elements.imageBrowserMarkBoxBack,
+      elements.imageBrowserMarkReference,
+      elements.imageBrowserMarkInProgress,
+      elements.imageBrowserFindSimilar,
+      elements.imageBrowserFindName,
+      elements.imageBrowserCreateJigsaw,
+      elements.imageBrowserDelete,
+    ];
+
+    browserOnlyControls.forEach((control) => {
+      if (!control) {
+        return;
+      }
+      control.hidden = standaloneMode;
+      control.disabled = standaloneMode;
+    });
+
+    if (standaloneMode) {
+      closeImageBrowserSuggestionModal();
+      closeImageBrowserNameAssignModal();
+    }
+  }
+
   function syncImageBrowserActionButtons() {
     const item = getCurrentImageBrowserItem();
+    const standaloneMode = isStandaloneImageEditorMode();
+
+    syncStandaloneImageEditorControls();
+
+    if (elements.imageBrowserCropApply) {
+      const showApplyCrop = state.imageBrowser.cropMode && hasActiveImageBrowserCropSelection();
+      elements.imageBrowserCropApply.hidden = !showApplyCrop;
+      elements.imageBrowserCropApply.disabled = !showApplyCrop;
+      elements.imageBrowserCropApply.textContent = isPerspectiveCropModeSelected() ? "Apply transform crop" : "Apply crop";
+    }
+
+    const currentImageId = Number(item?.id || 0);
+    if (state.imageBrowser.suggestionsImageId && Number(state.imageBrowser.suggestionsImageId) !== currentImageId) {
+      closeImageBrowserSuggestionModal();
+    }
+    if (state.imageBrowser.nameAssignImageId && Number(state.imageBrowser.nameAssignImageId) !== currentImageId) {
+      closeImageBrowserNameAssignModal();
+    }
+
+    if (standaloneMode) {
+      return;
+    }
 
     if (elements.imageBrowserDelete) {
       const canDeleteCurrent = Boolean(item && canCurrentUserDeleteImage(item));
@@ -4454,21 +4670,6 @@
       elements.imageBrowserFindName.hidden = !canFindByName;
       elements.imageBrowserFindName.disabled = !canFindByName;
     }
-
-    if (elements.imageBrowserCropApply) {
-      const showApplyCrop = state.imageBrowser.cropMode && hasActiveImageBrowserCropSelection();
-      elements.imageBrowserCropApply.hidden = !showApplyCrop;
-      elements.imageBrowserCropApply.disabled = !showApplyCrop;
-      elements.imageBrowserCropApply.textContent = isPerspectiveCropModeSelected() ? "Apply transform crop" : "Apply crop";
-    }
-
-    const currentImageId = Number(item?.id || 0);
-    if (state.imageBrowser.suggestionsImageId && Number(state.imageBrowser.suggestionsImageId) !== currentImageId) {
-      closeImageBrowserSuggestionModal();
-    }
-    if (state.imageBrowser.nameAssignImageId && Number(state.imageBrowser.nameAssignImageId) !== currentImageId) {
-      closeImageBrowserNameAssignModal();
-    }
   }
 
   function syncImageBrowserSaveButton() {
@@ -4484,7 +4685,9 @@
 
     if (elements.imageBrowserReset) {
       const hasDraftState = browserHasPendingEdits() || Boolean(state.imageBrowser.cropMode);
-      elements.imageBrowserReset.disabled = !currentImageId || isCurrentSaveInFlight || !hasDraftState;
+      const canReset = Boolean(currentImageId) && hasDraftState;
+      elements.imageBrowserReset.hidden = !canReset;
+      elements.imageBrowserReset.disabled = !canReset || isCurrentSaveInFlight;
     }
 
     if (elements.imageBrowserSaveCreate) {
@@ -4500,8 +4703,11 @@
     }
 
     const item = getCurrentImageBrowserItem();
+    const standaloneMode = isStandaloneImageEditorMode();
     if (!item) {
-      elements.imageBrowserStatus.textContent = "No images match the active browser filters.";
+      elements.imageBrowserStatus.textContent = standaloneMode
+        ? "Could not load the requested image for editing."
+        : "No images match the active browser filters.";
       closeImageBrowserSuggestionModal();
       closeImageBrowserNameAssignModal();
       syncImageBrowserActionButtons();
@@ -4523,7 +4729,12 @@
     const backgroundSaveLabel = backgroundSaves > 0
       ? ` | ${backgroundSaves} save${backgroundSaves === 1 ? "" : "s"} running in background`
       : "";
-    elements.imageBrowserStatus.textContent = `Image ${index}/${total} (filtered from ${totalUnfiltered}) | id: ${item.id || "-"} | ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association} | captured: ${capturedAtLabel} (${captureSourceLabel})${dirty}${currentSave}${backgroundSaveLabel}`;
+
+    if (standaloneMode) {
+      elements.imageBrowserStatus.textContent = `Image editor | id: ${item.id || "-"} | ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association} | captured: ${capturedAtLabel} (${captureSourceLabel})${dirty}${currentSave}${backgroundSaveLabel}`;
+    } else {
+      elements.imageBrowserStatus.textContent = `Image ${index}/${total} (filtered from ${totalUnfiltered}) | id: ${item.id || "-"} | ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association} | captured: ${capturedAtLabel} (${captureSourceLabel})${dirty}${currentSave}${backgroundSaveLabel}`;
+    }
     syncImageBrowserActionButtons();
     syncImageBrowserSaveButton();
   }
@@ -4647,6 +4858,19 @@
     if (!elements.imageBrowserModal) {
       return;
     }
+
+    if (isStandaloneImageEditorMode()) {
+      const requestedImageId = getStandaloneImageEditorImageId();
+      if (!requestedImageId) {
+        showFeedback("Image editor link is missing an image id.", true);
+        return;
+      }
+      if (!setImageBrowserIndexByImageId(requestedImageId)) {
+        showFeedback(`Image #${requestedImageId} is unavailable or you do not have access to it.`, true);
+        return;
+      }
+    }
+
     let filtered = getImageBrowserFilteredImages();
     if (filtered.length === 0) {
       const hasAnyImages = Array.isArray(state.imageLibraryImages) && state.imageLibraryImages.length > 0;
@@ -4683,6 +4907,13 @@
     state.imageBrowser.isOpen = true;
     elements.imageBrowserModal.hidden = false;
 
+    if (elements.imageBrowserTitle) {
+      elements.imageBrowserTitle.textContent = isStandaloneImageEditorMode() ? "Image editor" : "Image browser";
+    }
+    if (elements.imageBrowserClose) {
+      elements.imageBrowserClose.textContent = isStandaloneImageEditorMode() ? "Close editor" : "Close Image Browser";
+    }
+
     try {
       await loadCurrentImageIntoBrowser();
     } catch (error) {
@@ -4703,6 +4934,17 @@
     if (!elements.imageBrowserModal) {
       return;
     }
+
+    if (isStandaloneImageEditorMode()) {
+      window.close();
+      window.setTimeout(() => {
+        if (!window.closed) {
+          window.location.assign("/");
+        }
+      }, 120);
+      return;
+    }
+
     state.imageBrowser.isOpen = false;
     elements.imageBrowserModal.hidden = true;
     clearImageBrowserWorkingState();
@@ -5398,9 +5640,15 @@
         await loadCurrentImageIntoBrowser();
       }
 
-      Promise.all([loadImageLibraryImages({ skipBrowserReload: true }), loadJigsawImagesForSelected(), loadAuditEvents()]).catch(() => {
-        // Background refresh errors are surfaced by individual loaders.
-      });
+      if (isStandaloneImageEditorMode()) {
+        Promise.all([loadAuditEvents()]).catch(() => {
+          // Background refresh errors are surfaced by individual loaders.
+        });
+      } else {
+        Promise.all([loadImageLibraryImages({ skipBrowserReload: true }), loadJigsawImagesForSelected(), loadAuditEvents()]).catch(() => {
+          // Background refresh errors are surfaced by individual loaders.
+        });
+      }
     } catch (error) {
       showFeedback(error.message, true);
     } finally {
@@ -5483,9 +5731,15 @@
       }
 
       showFeedback(`Reference image created as image #${createdReference.id}.`);
-      Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]).catch(() => {
-        // Background refresh errors are surfaced by individual loaders.
-      });
+      if (isStandaloneImageEditorMode()) {
+        Promise.all([loadAuditEvents()]).catch(() => {
+          // Background refresh errors are surfaced by individual loaders.
+        });
+      } else {
+        Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]).catch(() => {
+          // Background refresh errors are surfaced by individual loaders.
+        });
+      }
     } catch (error) {
       showFeedback(error.message, true);
     } finally {
@@ -5504,12 +5758,20 @@
       return;
     }
 
+    const standaloneMode = isStandaloneImageEditorMode();
+
     if (event.key === "ArrowLeft") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       navigateImageBrowser(-1);
       return;
     }
     if (event.key === "ArrowRight") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       navigateImageBrowser(1);
       return;
@@ -5525,51 +5787,81 @@
       return;
     }
     if (event.key === "b" || event.key === "B") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       setImageBrowserTag(IMAGE_BROWSER_TAG_BOX);
       return;
     }
     if (event.key === "c" || event.key === "C") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       setImageBrowserTag(IMAGE_BROWSER_TAG_COMPLETED);
       return;
     }
     if (event.key === "r" || event.key === "R") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       setImageBrowserTag(IMAGE_BROWSER_TAG_REFERENCE);
       return;
     }
     if (event.code === "Comma" || event.key === ",") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       assignCurrentImageUsingNeighbor(-1);
       return;
     }
     if (event.code === "Period" || event.key === ".") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       assignCurrentImageUsingNeighbor(1);
       return;
     }
     if (event.key === "s" || event.key === "S") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       setImageBrowserTag(IMAGE_BROWSER_TAG_BOX_SIDE);
       return;
     }
     if (event.key === "k" || event.key === "K") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       setImageBrowserTag(IMAGE_BROWSER_TAG_BOX_BACK);
       return;
     }
     if (event.key === "i" || event.key === "I") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       setImageBrowserTag(IMAGE_BROWSER_TAG_IN_PROGRESS);
       return;
     }
     if (event.key === "Delete" || event.key === "Backspace") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       deleteCurrentBrowserImage();
       return;
     }
     if (event.key === "j" || event.key === "J") {
+      if (standaloneMode) {
+        return;
+      }
       event.preventDefault();
       createJigsawFromCurrentBrowserImage();
       return;
@@ -7965,6 +8257,21 @@
       return;
     }
 
+    const imageEditButton = event.target.closest("[data-image-edit]");
+    if (imageEditButton) {
+      event.preventDefault();
+      clearFeedback();
+
+      if (!currentUserHasCapability("image.upload")) {
+        showFeedback("You do not have permission to edit images.", true);
+        return;
+      }
+
+      const imageId = Number(imageEditButton.getAttribute("data-image-edit"));
+      openImageEditorPopupForImageId(imageId);
+      return;
+    }
+
     const editJigsawButton = event.target.closest("[data-jigsaw-edit]");
     const toggleJigsawImagesButton = event.target.closest("[data-jigsaw-images-toggle]");
     if (toggleJigsawImagesButton) {
@@ -9374,6 +9681,40 @@
     }
   }
 
+  async function launchStandaloneImageEditor() {
+    if (!isStandaloneImageEditorMode()) {
+      return;
+    }
+
+    if (typeof document !== "undefined" && document.body) {
+      document.body.classList.add("app-image-editor-mode");
+    }
+
+    const requestedImageId = getStandaloneImageEditorImageId();
+    if (!requestedImageId) {
+      showFeedback("Image editor link is missing an image id.", true);
+      return;
+    }
+
+    if (!state.user) {
+      showFeedback("Sign in to edit this image.", true);
+      openAuthDialog();
+      return;
+    }
+
+    if (!currentUserHasCapability("image.upload")) {
+      showFeedback("You do not have permission to edit images.", true);
+      return;
+    }
+
+    const standaloneRecord = buildStandaloneEditorImageRecord(requestedImageId);
+    state.imageLibraryImages = standaloneRecord ? [standaloneRecord] : [];
+    state.imageBrowserContentCacheByImageId = {};
+    clearImageBrowserWorkingState();
+
+    await openImageBrowser();
+  }
+
   async function init() {
     syncHeaderAuthControls();
     state.diarySelectionTouchedByUser = false;
@@ -9388,6 +9729,16 @@
     renderBulkUploadFiles();
     syncBulkCreateFromUploadVisibility();
     const isAuthenticated = consumedToken ? true : await refreshSession();
+
+    if (isStandaloneImageEditorMode()) {
+      if (isAuthenticated) {
+        clearImageEmbeddingBackfillProgress();
+        setImageEmbeddingBackfillStatus("");
+      }
+      await launchStandaloneImageEditor();
+      return;
+    }
+
     if (isAuthenticated) {
       clearImageEmbeddingBackfillProgress();
       setImageEmbeddingBackfillStatus("");

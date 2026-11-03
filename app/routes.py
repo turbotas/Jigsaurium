@@ -6,7 +6,12 @@ main_bp = Blueprint("main", __name__)
 
 @main_bp.get("/")
 def home():
-    return render_template("home.html")
+    return render_template("home.html", image_editor_mode=False, image_editor_image_id=None)
+
+
+@main_bp.get("/image-editor/<int:image_id>")
+def image_editor(image_id):
+    return render_template("home.html", image_editor_mode=True, image_editor_image_id=int(image_id))
 
 
 @main_bp.get("/mobile-capture")

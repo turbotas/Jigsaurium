@@ -55,6 +55,13 @@
     </section>
   </div>
 
+  <div
+    id="image-editor-context"
+    data-enabled="{{ '1' if image_editor_mode else '0' }}"
+    data-image-id="{{ image_editor_image_id if image_editor_image_id is not none else '' }}"
+    hidden
+  ></div>
+
   <nav id="workspace-tabs" class="app-workspace-tabs govuk-!-margin-bottom-6" aria-label="Main page sections" hidden>
     <ul class="app-workspace-tabs__list" role="tablist">
       <li class="app-workspace-tabs__item" role="presentation">

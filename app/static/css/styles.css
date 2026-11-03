@@ -899,6 +899,17 @@
   border-top: 1px solid #d8d8d8;
 }
 
+.app-image-editor-mode .app-image-browser__filters,
+.app-image-editor-mode .app-image-browser__controls-row:not(.app-image-browser__controls-row--image-edit),
+.app-image-editor-mode .app-image-browser__help-fieldset {
+  display: none;
+}
+
+.app-image-editor-mode .app-image-browser__controls-row--image-edit {
+  border-top: 0;
+  padding-top: 0;
+}
+
 .app-image-browser__crop-mode-wrap {
   min-width: 230px;
   margin-right: 4px;

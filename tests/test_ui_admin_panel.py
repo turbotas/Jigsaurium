@@ -300,6 +300,8 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("text=Jigsaw image uploaded.")
         page.wait_for_selector("#jigsaw-images-table-body tr")
         assert page.locator("#jigsaw-images-table-body tr", has_text="untagged").count() >= 1
+        assert page.locator("#jigsaw-images-table-body tr [data-image-edit]").count() >= 1
+        assert page.locator("#jigsaw-images-table-body tr a", has_text="Open original").count() >= 1
 
         page.set_input_files(
             "#image-library-files",
@@ -328,6 +330,8 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         assert page.locator("#image-library-table-body tr", has_text="bulk-one.png").count() >= 1
         assert page.locator("#image-library-table-body tr", has_text="bulk-two.png").count() >= 1
         assert page.locator("#image-library-table-body tr", has_text="Completed").count() >= 2
+        assert page.locator("#image-library-table-body tr [data-image-edit]").count() >= 1
+        assert page.locator("#image-library-table-body tr a", has_text="Open original").count() >= 1
 
         bulk_two_row = page.locator("#image-library-table-body tr", has_text="bulk-two.png")
         bulk_two_row.locator("select[data-image-tag-select]").select_option("Box side")
@@ -378,6 +382,7 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
 
         page.click("#collection-tab-jigsaws")
         page.wait_for_selector("#collection-jigsaws-panel:not([hidden])")
+        assert page.locator("#jigsaws-table-body tr [data-image-edit]").count() >= 1
 
         jigsaw_row = page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle")
         jigsaw_row.locator("button[data-jigsaw-images-toggle]").click()
@@ -408,7 +413,6 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         assert page.locator("#image-browser-assign-next").is_visible()
         assert page.locator("#image-browser-create-jigsaw").is_visible()
         assert page.locator("#image-browser-delete").is_visible()
-        assert page.locator("#image-browser-reset").is_visible()
         assert page.locator("#image-browser-crop-mode").is_visible()
         assert page.locator("#image-browser-crop-mode option[value='rectangle']").count() == 1
         assert page.locator("#image-browser-crop-mode option[value='perspective']").count() == 1
