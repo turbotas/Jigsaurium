@@ -114,7 +114,7 @@
 - Images may store `captured_at` extracted from EXIF date metadata; EXIF timestamps without timezone are interpreted as UTC.
 - Images may store optional user-entered feedback/notes (`user_comment`) from upload workflows.
 - Duplicate uploads can backfill missing `captured_at` metadata on an existing image record without overwriting image content.
-- Image browser edits (rotation/crop) overwrite image content in-place but preserve the original dedupe hash.
+- Image browser edits (rotation, rectangle crop, and perspective transform crop) overwrite image content in-place but preserve the original dedupe hash.
 - Overwrite image-content edits in the image browser require capability `image.upload`.
 - Tag/classification updates (`Box`, `Completed`, etc.) are allowed before jigsaw assignment.
 - Built-in image-browser tags use canonical title-case values: `Box`, `Box front`, `Box side`, `Box back`, `Completed`, `In progress`.

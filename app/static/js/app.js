@@ -21,6 +21,8 @@
   const BROWSER_FILTER_MODE_IGNORE = "ignore";
   const BROWSER_FILTER_MODE_INCLUDE = "include";
   const BROWSER_FILTER_MODE_EXCLUDE = "exclude";
+  const IMAGE_BROWSER_CROP_MODE_RECTANGLE = "rectangle";
+  const IMAGE_BROWSER_CROP_MODE_PERSPECTIVE = "perspective";
   const DIARY_VIEW_MODE_LIST = "list";
   const DIARY_VIEW_MODE_CALENDAR = "calendar";
 
@@ -141,7 +143,11 @@
       workingImage: null,
       rotationDegrees: 0,
       cropMode: false,
+      cropModeType: IMAGE_BROWSER_CROP_MODE_RECTANGLE,
       cropRect: null,
+      cropPerspectivePoints: [],
+      cropPerspectivePreviewPoint: null,
+      cropPerspectiveActivePointIndex: -1,
       isDraggingCrop: false,
       dragStart: null,
       mimeType: "image/png",
@@ -299,7 +305,9 @@
     imageBrowserCreateJigsaw: document.getElementById("image-browser-create-jigsaw"),
     imageBrowserDelete: document.getElementById("image-browser-delete"),
     imageBrowserCropToggle: document.getElementById("image-browser-crop-toggle"),
+    imageBrowserCropMode: document.getElementById("image-browser-crop-mode"),
     imageBrowserCropApply: document.getElementById("image-browser-crop-apply"),
+    imageBrowserReset: document.getElementById("image-browser-reset"),
     imageBrowserSaveCreate: document.getElementById("image-browser-save-create"),
     imageBrowserSave: document.getElementById("image-browser-save"),
     imageBrowserSuggestionsModal: document.getElementById("image-browser-suggestions-modal"),
@@ -3851,6 +3859,181 @@
     context.restore();
   }
 
+  function clearImageBrowserCropSelection() {
+    state.imageBrowser.cropRect = null;
+    state.imageBrowser.cropPerspectivePoints = [];
+    state.imageBrowser.cropPerspectivePreviewPoint = null;
+    state.imageBrowser.cropPerspectiveActivePointIndex = -1;
+    state.imageBrowser.isDraggingCrop = false;
+    state.imageBrowser.dragStart = null;
+  }
+
+  function isPerspectiveCropModeSelected() {
+    return state.imageBrowser.cropModeType === IMAGE_BROWSER_CROP_MODE_PERSPECTIVE;
+  }
+
+  function distanceBetweenPoints(left, right) {
+    if (!left || !right) {
+      return 0;
+    }
+    const dx = Number(left.x || 0) - Number(right.x || 0);
+    const dy = Number(left.y || 0) - Number(right.y || 0);
+    return Math.sqrt((dx * dx) + (dy * dy));
+  }
+
+  function polygonSignedArea(points) {
+    if (!Array.isArray(points) || points.length < 3) {
+      return 0;
+    }
+    let area = 0;
+    for (let i = 0; i < points.length; i += 1) {
+      const current = points[i];
+      const next = points[(i + 1) % points.length];
+      area += (Number(current.x || 0) * Number(next.y || 0)) - (Number(next.x || 0) * Number(current.y || 0));
+    }
+    return area / 2;
+  }
+
+  function isConvexPolygon(points) {
+    if (!Array.isArray(points) || points.length < 4) {
+      return false;
+    }
+
+    let previousSign = 0;
+    for (let index = 0; index < points.length; index += 1) {
+      const a = points[index];
+      const b = points[(index + 1) % points.length];
+      const c = points[(index + 2) % points.length];
+      const cross = ((Number(b.x || 0) - Number(a.x || 0)) * (Number(c.y || 0) - Number(b.y || 0)))
+        - ((Number(b.y || 0) - Number(a.y || 0)) * (Number(c.x || 0) - Number(b.x || 0)));
+      const sign = Math.sign(cross);
+      if (sign === 0) {
+        return false;
+      }
+      if (previousSign && sign !== previousSign) {
+        return false;
+      }
+      previousSign = sign;
+    }
+    return true;
+  }
+
+  function segmentOrientation(a, b, c) {
+    return ((Number(b.x || 0) - Number(a.x || 0)) * (Number(c.y || 0) - Number(a.y || 0)))
+      - ((Number(b.y || 0) - Number(a.y || 0)) * (Number(c.x || 0) - Number(a.x || 0)));
+  }
+
+  function segmentsIntersect(a, b, c, d) {
+    const epsilon = 0.000001;
+    const o1 = segmentOrientation(a, b, c);
+    const o2 = segmentOrientation(a, b, d);
+    const o3 = segmentOrientation(c, d, a);
+    const o4 = segmentOrientation(c, d, b);
+    return ((o1 > epsilon && o2 < -epsilon) || (o1 < -epsilon && o2 > epsilon))
+      && ((o3 > epsilon && o4 < -epsilon) || (o3 < -epsilon && o4 > epsilon));
+  }
+
+  function validatePerspectiveCropPoints(points) {
+    if (!Array.isArray(points) || points.length !== 4) {
+      return { ok: false, reason: "Select four corners before applying transform crop." };
+    }
+
+    const minEdgeLengthPx = 10;
+    const minAreaPx = 500;
+    const edges = [
+      distanceBetweenPoints(points[0], points[1]),
+      distanceBetweenPoints(points[1], points[2]),
+      distanceBetweenPoints(points[2], points[3]),
+      distanceBetweenPoints(points[3], points[0]),
+    ];
+    if (edges.some((length) => length < minEdgeLengthPx)) {
+      return { ok: false, reason: "Transform crop corners are too close together." };
+    }
+
+    if (segmentsIntersect(points[0], points[1], points[2], points[3])
+      || segmentsIntersect(points[1], points[2], points[3], points[0])) {
+      return { ok: false, reason: "Transform crop shape crosses over itself." };
+    }
+
+    if (!isConvexPolygon(points)) {
+      return { ok: false, reason: "Transform crop shape must be a normal convex quadrilateral." };
+    }
+
+    const area = Math.abs(polygonSignedArea(points));
+    if (area < minAreaPx) {
+      return { ok: false, reason: "Transform crop area is too small." };
+    }
+
+    return { ok: true, reason: "" };
+  }
+
+  function normalizePerspectiveCropPoints(points) {
+    if (!Array.isArray(points) || points.length !== 4) {
+      return [];
+    }
+
+    const cloned = points.map((point) => ({ x: Number(point.x || 0), y: Number(point.y || 0) }));
+    const signedArea = polygonSignedArea(cloned);
+    if (signedArea < 0) {
+      cloned.reverse();
+    }
+
+    let topLeftIndex = 0;
+    let bestScore = Number.POSITIVE_INFINITY;
+    cloned.forEach((point, index) => {
+      const score = point.x + point.y;
+      if (score < bestScore) {
+        bestScore = score;
+        topLeftIndex = index;
+      }
+    });
+
+    const ordered = [];
+    for (let offset = 0; offset < cloned.length; offset += 1) {
+      ordered.push(cloned[(topLeftIndex + offset) % cloned.length]);
+    }
+    return ordered;
+  }
+
+  function findPerspectivePointIndexNear(targetPoint, radiusPx = 14) {
+    const points = Array.isArray(state.imageBrowser.cropPerspectivePoints) ? state.imageBrowser.cropPerspectivePoints : [];
+    if (!targetPoint || points.length === 0) {
+      return -1;
+    }
+
+    let closestIndex = -1;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    points.forEach((point, index) => {
+      const distance = distanceBetweenPoints(point, targetPoint);
+      if (distance <= radiusPx && distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = index;
+      }
+    });
+    return closestIndex;
+  }
+
+  function syncImageBrowserCanvasCursor() {
+    const canvas = elements.imageBrowserCanvas;
+    if (!canvas) {
+      return;
+    }
+    if (!state.imageBrowser.cropMode) {
+      canvas.style.cursor = "default";
+      return;
+    }
+    if (!isPerspectiveCropModeSelected()) {
+      canvas.style.cursor = "crosshair";
+      return;
+    }
+    if (state.imageBrowser.isDraggingCrop) {
+      canvas.style.cursor = "grabbing";
+      return;
+    }
+    const hasHandleHover = state.imageBrowser.cropPerspectiveActivePointIndex >= 0;
+    canvas.style.cursor = hasHandleHover ? "grab" : "crosshair";
+  }
+
   async function renderImageBrowserToCanvas(targetCanvas, includeCropOverlay = true) {
     if (!targetCanvas) {
       return false;
@@ -3877,19 +4060,71 @@
     context.clearRect(0, 0, canvasWidth, canvasHeight);
     drawRotatedImageToContext(context, image, normalizedRotation, canvasWidth, canvasHeight);
 
-    if (includeCropOverlay && state.imageBrowser.cropMode && state.imageBrowser.cropRect) {
-      const rect = state.imageBrowser.cropRect;
-      context.save();
-      context.lineWidth = 2;
-      context.strokeStyle = "#ffdd00";
-      context.setLineDash([8, 4]);
-      context.strokeRect(rect.x, rect.y, rect.width, rect.height);
-      context.fillStyle = "rgba(255, 221, 0, 0.2)";
-      context.fillRect(rect.x, rect.y, rect.width, rect.height);
-      context.restore();
+    if (includeCropOverlay && state.imageBrowser.cropMode) {
+      if (isPerspectiveCropModeSelected()) {
+        const points = Array.isArray(state.imageBrowser.cropPerspectivePoints)
+          ? state.imageBrowser.cropPerspectivePoints
+          : [];
+        const previewPoint = state.imageBrowser.cropPerspectivePreviewPoint;
+
+        if (points.length > 0) {
+          context.save();
+          context.lineWidth = 2;
+          context.strokeStyle = "#ffdd00";
+          context.setLineDash([]);
+          context.beginPath();
+          context.moveTo(points[0].x, points[0].y);
+          for (let index = 1; index < points.length; index += 1) {
+            context.lineTo(points[index].x, points[index].y);
+          }
+          if (points.length === 4) {
+            context.closePath();
+            context.fillStyle = "rgba(255, 221, 0, 0.2)";
+            context.fill();
+          }
+          context.stroke();
+          context.restore();
+        }
+
+        if (points.length > 0 && points.length < 4 && previewPoint) {
+          const lastPoint = points[points.length - 1];
+          context.save();
+          context.lineWidth = 2;
+          context.strokeStyle = "#ffdd00";
+          context.setLineDash([8, 4]);
+          context.beginPath();
+          context.moveTo(lastPoint.x, lastPoint.y);
+          context.lineTo(previewPoint.x, previewPoint.y);
+          context.stroke();
+          context.restore();
+        }
+
+        points.forEach((point, index) => {
+          context.save();
+          context.beginPath();
+          context.arc(point.x, point.y, 6, 0, Math.PI * 2, false);
+          context.fillStyle = index === state.imageBrowser.cropPerspectiveActivePointIndex ? "#0b0c0c" : "#ffdd00";
+          context.strokeStyle = "#0b0c0c";
+          context.lineWidth = 2;
+          context.fill();
+          context.stroke();
+          context.restore();
+        });
+      } else if (state.imageBrowser.cropRect) {
+        const rect = state.imageBrowser.cropRect;
+        context.save();
+        context.lineWidth = 2;
+        context.strokeStyle = "#ffdd00";
+        context.setLineDash([8, 4]);
+        context.strokeRect(rect.x, rect.y, rect.width, rect.height);
+        context.fillStyle = "rgba(255, 221, 0, 0.2)";
+        context.fillRect(rect.x, rect.y, rect.width, rect.height);
+        context.restore();
+      }
     }
 
     targetCanvas.classList.toggle("is-cropping", Boolean(state.imageBrowser.cropMode));
+    syncImageBrowserCanvasCursor();
     return true;
   }
 
@@ -3910,6 +4145,9 @@
   }
 
   function hasActiveImageBrowserCropSelection() {
+    if (isPerspectiveCropModeSelected()) {
+      return validatePerspectiveCropPoints(state.imageBrowser.cropPerspectivePoints).ok;
+    }
     const cropRect = state.imageBrowser.cropRect;
     return Boolean(cropRect && cropRect.width >= 8 && cropRect.height >= 8);
   }
@@ -4221,6 +4459,7 @@
       const showApplyCrop = state.imageBrowser.cropMode && hasActiveImageBrowserCropSelection();
       elements.imageBrowserCropApply.hidden = !showApplyCrop;
       elements.imageBrowserCropApply.disabled = !showApplyCrop;
+      elements.imageBrowserCropApply.textContent = isPerspectiveCropModeSelected() ? "Apply transform crop" : "Apply crop";
     }
 
     const currentImageId = Number(item?.id || 0);
@@ -4242,6 +4481,11 @@
     const canUploadImages = currentUserHasCapability("image.upload");
     elements.imageBrowserSave.disabled = !currentImageId || isCurrentSaveInFlight || !canUploadImages;
     elements.imageBrowserSave.textContent = isCurrentSaveInFlight ? "Saving..." : "Save overwrite";
+
+    if (elements.imageBrowserReset) {
+      const hasDraftState = browserHasPendingEdits() || Boolean(state.imageBrowser.cropMode);
+      elements.imageBrowserReset.disabled = !currentImageId || isCurrentSaveInFlight || !hasDraftState;
+    }
 
     if (elements.imageBrowserSaveCreate) {
       const currentJigsawId = Number(getCurrentImageBrowserItem()?.jigsaw_id || 0);
@@ -4290,9 +4534,7 @@
     state.imageBrowser.workingImage = null;
     state.imageBrowser.rotationDegrees = 0;
     state.imageBrowser.cropMode = false;
-    state.imageBrowser.cropRect = null;
-    state.imageBrowser.isDraggingCrop = false;
-    state.imageBrowser.dragStart = null;
+    clearImageBrowserCropSelection();
     state.imageBrowser.mimeType = "image/png";
     state.imageBrowser.filename = "image.png";
     closeImageBrowserSuggestionModal();
@@ -4644,9 +4886,19 @@
 
   function toggleImageBrowserCropMode() {
     state.imageBrowser.cropMode = !state.imageBrowser.cropMode;
-    state.imageBrowser.cropRect = null;
-    state.imageBrowser.isDraggingCrop = false;
-    state.imageBrowser.dragStart = null;
+    clearImageBrowserCropSelection();
+    redrawImageBrowserCanvas();
+  }
+
+  function setImageBrowserCropModeType(nextModeType) {
+    const normalized = String(nextModeType || "").toLowerCase() === IMAGE_BROWSER_CROP_MODE_PERSPECTIVE
+      ? IMAGE_BROWSER_CROP_MODE_PERSPECTIVE
+      : IMAGE_BROWSER_CROP_MODE_RECTANGLE;
+    if (state.imageBrowser.cropModeType === normalized) {
+      return;
+    }
+    state.imageBrowser.cropModeType = normalized;
+    clearImageBrowserCropSelection();
     redrawImageBrowserCanvas();
   }
 
@@ -4675,17 +4927,70 @@
     if (!point) {
       return;
     }
+
+    if (isPerspectiveCropModeSelected()) {
+      const existingPoints = Array.isArray(state.imageBrowser.cropPerspectivePoints)
+        ? state.imageBrowser.cropPerspectivePoints
+        : [];
+      const handleIndex = findPerspectivePointIndexNear(point);
+
+      if (handleIndex >= 0) {
+        state.imageBrowser.cropPerspectiveActivePointIndex = handleIndex;
+        state.imageBrowser.isDraggingCrop = true;
+        redrawImageBrowserCanvas();
+        return;
+      }
+
+      if (existingPoints.length < 4) {
+        state.imageBrowser.cropPerspectivePoints = [...existingPoints, { x: point.x, y: point.y }];
+        state.imageBrowser.cropPerspectiveActivePointIndex = -1;
+        state.imageBrowser.cropPerspectivePreviewPoint = null;
+        redrawImageBrowserCanvas();
+      }
+      return;
+    }
+
     state.imageBrowser.isDraggingCrop = true;
     state.imageBrowser.dragStart = point;
     state.imageBrowser.cropRect = { x: point.x, y: point.y, width: 0, height: 0 };
   }
 
   function handleImageBrowserCanvasMouseMove(event) {
-    if (!state.imageBrowser.isOpen || !state.imageBrowser.cropMode || !state.imageBrowser.isDraggingCrop || !state.imageBrowser.dragStart) {
+    if (!state.imageBrowser.isOpen || !state.imageBrowser.cropMode) {
       return;
     }
     const point = getCanvasCoordinates(event);
     if (!point) {
+      return;
+    }
+
+    if (isPerspectiveCropModeSelected()) {
+      const points = Array.isArray(state.imageBrowser.cropPerspectivePoints)
+        ? state.imageBrowser.cropPerspectivePoints
+        : [];
+
+      if (state.imageBrowser.isDraggingCrop && state.imageBrowser.cropPerspectiveActivePointIndex >= 0) {
+        const updated = points.map((entry, index) => (
+          index === state.imageBrowser.cropPerspectiveActivePointIndex
+            ? { x: point.x, y: point.y }
+            : entry
+        ));
+        state.imageBrowser.cropPerspectivePoints = updated;
+        redrawImageBrowserCanvas();
+        return;
+      }
+
+      state.imageBrowser.cropPerspectiveActivePointIndex = findPerspectivePointIndexNear(point);
+      if (points.length > 0 && points.length < 4) {
+        state.imageBrowser.cropPerspectivePreviewPoint = { x: point.x, y: point.y };
+      } else {
+        state.imageBrowser.cropPerspectivePreviewPoint = null;
+      }
+      redrawImageBrowserCanvas();
+      return;
+    }
+
+    if (!state.imageBrowser.isDraggingCrop || !state.imageBrowser.dragStart) {
       return;
     }
 
@@ -4699,8 +5004,215 @@
   }
 
   function handleImageBrowserCanvasMouseUp() {
+    if (isPerspectiveCropModeSelected()) {
+      state.imageBrowser.isDraggingCrop = false;
+      state.imageBrowser.cropPerspectiveActivePointIndex = -1;
+      syncImageBrowserCanvasCursor();
+      return;
+    }
     state.imageBrowser.isDraggingCrop = false;
     state.imageBrowser.dragStart = null;
+  }
+
+  function handleImageBrowserCanvasMouseLeave() {
+    if (isPerspectiveCropModeSelected()) {
+      state.imageBrowser.isDraggingCrop = false;
+      state.imageBrowser.cropPerspectiveActivePointIndex = -1;
+      state.imageBrowser.cropPerspectivePreviewPoint = null;
+      redrawImageBrowserCanvas();
+      return;
+    }
+    handleImageBrowserCanvasMouseUp();
+  }
+
+  function solveLinearSystem(matrix, vector) {
+    const size = Array.isArray(vector) ? vector.length : 0;
+    if (!size || !Array.isArray(matrix) || matrix.length !== size) {
+      return null;
+    }
+
+    const augmented = matrix.map((row, index) => [...row, vector[index]]);
+    for (let pivot = 0; pivot < size; pivot += 1) {
+      let maxRow = pivot;
+      for (let row = pivot + 1; row < size; row += 1) {
+        if (Math.abs(augmented[row][pivot]) > Math.abs(augmented[maxRow][pivot])) {
+          maxRow = row;
+        }
+      }
+      if (Math.abs(augmented[maxRow][pivot]) < 0.0000001) {
+        return null;
+      }
+
+      if (maxRow !== pivot) {
+        const temp = augmented[pivot];
+        augmented[pivot] = augmented[maxRow];
+        augmented[maxRow] = temp;
+      }
+
+      const pivotValue = augmented[pivot][pivot];
+      for (let column = pivot; column <= size; column += 1) {
+        augmented[pivot][column] /= pivotValue;
+      }
+
+      for (let row = 0; row < size; row += 1) {
+        if (row === pivot) {
+          continue;
+        }
+        const factor = augmented[row][pivot];
+        for (let column = pivot; column <= size; column += 1) {
+          augmented[row][column] -= factor * augmented[pivot][column];
+        }
+      }
+    }
+
+    return augmented.map((row) => row[size]);
+  }
+
+  function buildHomography(fromPoints, toPoints) {
+    if (!Array.isArray(fromPoints) || !Array.isArray(toPoints) || fromPoints.length !== 4 || toPoints.length !== 4) {
+      return null;
+    }
+
+    const matrix = [];
+    const vector = [];
+
+    for (let index = 0; index < 4; index += 1) {
+      const source = fromPoints[index];
+      const target = toPoints[index];
+      const x = Number(source.x || 0);
+      const y = Number(source.y || 0);
+      const u = Number(target.x || 0);
+      const v = Number(target.y || 0);
+
+      matrix.push([x, y, 1, 0, 0, 0, -u * x, -u * y]);
+      vector.push(u);
+      matrix.push([0, 0, 0, x, y, 1, -v * x, -v * y]);
+      vector.push(v);
+    }
+
+    const solved = solveLinearSystem(matrix, vector);
+    if (!solved) {
+      return null;
+    }
+
+    return [
+      solved[0], solved[1], solved[2],
+      solved[3], solved[4], solved[5],
+      solved[6], solved[7], 1,
+    ];
+  }
+
+  function applyHomography(matrix, x, y) {
+    if (!Array.isArray(matrix) || matrix.length !== 9) {
+      return null;
+    }
+    const denominator = (matrix[6] * x) + (matrix[7] * y) + matrix[8];
+    if (Math.abs(denominator) < 0.0000001) {
+      return null;
+    }
+    return {
+      x: (((matrix[0] * x) + (matrix[1] * y) + matrix[2]) / denominator),
+      y: (((matrix[3] * x) + (matrix[4] * y) + matrix[5]) / denominator),
+    };
+  }
+
+  function applyPerspectiveTransformCrop(renderedCanvas, orderedPoints) {
+    const topWidth = distanceBetweenPoints(orderedPoints[0], orderedPoints[1]);
+    const bottomWidth = distanceBetweenPoints(orderedPoints[3], orderedPoints[2]);
+    const leftHeight = distanceBetweenPoints(orderedPoints[0], orderedPoints[3]);
+    const rightHeight = distanceBetweenPoints(orderedPoints[1], orderedPoints[2]);
+
+    const outputWidth = Math.max(1, Math.round((topWidth + bottomWidth) / 2));
+    const outputHeight = Math.max(1, Math.round((leftHeight + rightHeight) / 2));
+
+    const destinationCorners = [
+      { x: 0, y: 0 },
+      { x: outputWidth - 1, y: 0 },
+      { x: outputWidth - 1, y: outputHeight - 1 },
+      { x: 0, y: outputHeight - 1 },
+    ];
+
+    const destinationToSource = buildHomography(destinationCorners, orderedPoints);
+    if (!destinationToSource) {
+      throw new Error("Could not resolve transform crop geometry.");
+    }
+
+    const sourceContext = renderedCanvas.getContext("2d");
+    const sourceImageData = sourceContext.getImageData(0, 0, renderedCanvas.width, renderedCanvas.height);
+    const sourcePixels = sourceImageData.data;
+
+    const outputCanvas = document.createElement("canvas");
+    outputCanvas.width = outputWidth;
+    outputCanvas.height = outputHeight;
+    const outputContext = outputCanvas.getContext("2d");
+    const outputImageData = outputContext.createImageData(outputWidth, outputHeight);
+    const outputPixels = outputImageData.data;
+
+    for (let y = 0; y < outputHeight; y += 1) {
+      for (let x = 0; x < outputWidth; x += 1) {
+        const sourcePoint = applyHomography(destinationToSource, x, y);
+        const outputOffset = ((y * outputWidth) + x) * 4;
+        if (!sourcePoint) {
+          outputPixels[outputOffset + 3] = 0;
+          continue;
+        }
+
+        const sourceX = Math.round(sourcePoint.x);
+        const sourceY = Math.round(sourcePoint.y);
+        if (sourceX < 0 || sourceX >= renderedCanvas.width || sourceY < 0 || sourceY >= renderedCanvas.height) {
+          outputPixels[outputOffset + 3] = 0;
+          continue;
+        }
+
+        const sourceOffset = ((sourceY * renderedCanvas.width) + sourceX) * 4;
+        outputPixels[outputOffset] = sourcePixels[sourceOffset];
+        outputPixels[outputOffset + 1] = sourcePixels[sourceOffset + 1];
+        outputPixels[outputOffset + 2] = sourcePixels[sourceOffset + 2];
+        outputPixels[outputOffset + 3] = sourcePixels[sourceOffset + 3];
+      }
+    }
+
+    outputContext.putImageData(outputImageData, 0, 0);
+    return outputCanvas;
+  }
+
+  async function applyImageBrowserRectangleCrop(cropRect) {
+    const outputCanvas = document.createElement("canvas");
+    outputCanvas.width = Math.max(1, Math.round(cropRect.width));
+    outputCanvas.height = Math.max(1, Math.round(cropRect.height));
+    const outputContext = outputCanvas.getContext("2d");
+    const renderedCanvas = document.createElement("canvas");
+    const rendered = await renderImageBrowserToCanvas(renderedCanvas, false);
+    if (!rendered) {
+      throw new Error("Unable to crop this image.");
+    }
+    outputContext.drawImage(
+      renderedCanvas,
+      Math.round(cropRect.x),
+      Math.round(cropRect.y),
+      Math.round(cropRect.width),
+      Math.round(cropRect.height),
+      0,
+      0,
+      outputCanvas.width,
+      outputCanvas.height,
+    );
+    return outputCanvas;
+  }
+
+  async function applyImageBrowserPerspectiveCrop() {
+    const validation = validatePerspectiveCropPoints(state.imageBrowser.cropPerspectivePoints);
+    if (!validation.ok) {
+      throw new Error(validation.reason);
+    }
+
+    const orderedPoints = normalizePerspectiveCropPoints(state.imageBrowser.cropPerspectivePoints);
+    const renderedCanvas = document.createElement("canvas");
+    const rendered = await renderImageBrowserToCanvas(renderedCanvas, false);
+    if (!rendered) {
+      throw new Error("Unable to transform crop this image.");
+    }
+    return applyPerspectiveTransformCrop(renderedCanvas, orderedPoints);
   }
 
   function resolveWritableMimeType(mimeType) {
@@ -4713,42 +5225,76 @@
   }
 
   async function applyImageBrowserCrop() {
-    const cropRect = state.imageBrowser.cropRect;
+    if (!state.imageBrowser.cropMode) {
+      showFeedback("Enable crop mode before applying crop.", true);
+      return;
+    }
+
     if (!hasActiveImageBrowserCropSelection()) {
-      showFeedback("Select a crop area before applying crop.", true);
+      const message = isPerspectiveCropModeSelected()
+        ? "Select four valid corners before applying transform crop."
+        : "Select a crop area before applying crop.";
+      showFeedback(message, true);
       return;
     }
 
-    const renderedCanvas = document.createElement("canvas");
-    const rendered = await renderImageBrowserToCanvas(renderedCanvas, false);
-    if (!rendered) {
-      showFeedback("Unable to crop this image.", true);
+    let outputCanvas;
+    try {
+      if (isPerspectiveCropModeSelected()) {
+        outputCanvas = await applyImageBrowserPerspectiveCrop();
+      } else {
+        outputCanvas = await applyImageBrowserRectangleCrop(state.imageBrowser.cropRect);
+      }
+    } catch (error) {
+      showFeedback(error.message, true);
       return;
     }
-
-    const outputCanvas = document.createElement("canvas");
-    outputCanvas.width = Math.max(1, Math.round(cropRect.width));
-    outputCanvas.height = Math.max(1, Math.round(cropRect.height));
-    const outputContext = outputCanvas.getContext("2d");
-    outputContext.drawImage(
-      renderedCanvas,
-      Math.round(cropRect.x),
-      Math.round(cropRect.y),
-      Math.round(cropRect.width),
-      Math.round(cropRect.height),
-      0,
-      0,
-      outputCanvas.width,
-      outputCanvas.height,
-    );
 
     const writableMimeType = resolveWritableMimeType(state.imageBrowser.mimeType);
     state.imageBrowser.workingDataUrl = outputCanvas.toDataURL(writableMimeType);
     state.imageBrowser.workingImage = await loadImageElementFromDataUrl(state.imageBrowser.workingDataUrl);
     state.imageBrowser.rotationDegrees = 0;
     state.imageBrowser.cropMode = false;
-    state.imageBrowser.cropRect = null;
-    showFeedback("Crop applied locally. Save overwrite to persist changes.");
+    clearImageBrowserCropSelection();
+    showFeedback(isPerspectiveCropModeSelected()
+      ? "Transform crop applied locally. Save overwrite to persist changes."
+      : "Crop applied locally. Save overwrite to persist changes.");
+    await redrawImageBrowserCanvas();
+  }
+
+  async function resetImageBrowserEdits() {
+    const item = getCurrentImageBrowserItem();
+    if (!item) {
+      return;
+    }
+
+    const imageId = Number(item.id || 0);
+    if (!imageId) {
+      return;
+    }
+
+    if (isImageBrowserSaveInFlight(imageId)) {
+      showFeedback("Cannot reset while this image is currently saving.", true);
+      return;
+    }
+
+    const hasDraftState = browserHasPendingEdits() || Boolean(state.imageBrowser.cropMode);
+    if (!hasDraftState) {
+      showFeedback("Image already matches the stored version.");
+      return;
+    }
+
+    if (!state.imageBrowser.sourceDataUrl) {
+      showFeedback("Unable to reset image because source data is not loaded.", true);
+      return;
+    }
+
+    state.imageBrowser.workingDataUrl = state.imageBrowser.sourceDataUrl;
+    state.imageBrowser.workingImage = await loadImageElementFromDataUrl(state.imageBrowser.sourceDataUrl);
+    state.imageBrowser.rotationDegrees = 0;
+    state.imageBrowser.cropMode = false;
+    clearImageBrowserCropSelection();
+    showFeedback("Image reset to stored version.");
     await redrawImageBrowserCanvas();
   }
 
@@ -4919,7 +5465,7 @@
     state.imageBrowser.sourceDataUrl = state.imageBrowser.workingDataUrl;
     state.imageBrowser.rotationDegrees = 0;
     state.imageBrowser.cropMode = false;
-    state.imageBrowser.cropRect = null;
+    clearImageBrowserCropSelection();
     updateImageBrowserStatus();
 
     showFeedback("Reference image save started in background.");
@@ -8619,9 +9165,22 @@
       elements.imageBrowserCropToggle.addEventListener("click", toggleImageBrowserCropMode);
     }
 
+    if (elements.imageBrowserCropMode) {
+      elements.imageBrowserCropMode.addEventListener("change", (event) => {
+        setImageBrowserCropModeType(event.target?.value);
+      });
+      elements.imageBrowserCropMode.value = state.imageBrowser.cropModeType;
+    }
+
     if (elements.imageBrowserCropApply) {
       elements.imageBrowserCropApply.addEventListener("click", () => {
         applyImageBrowserCrop();
+      });
+    }
+
+    if (elements.imageBrowserReset) {
+      elements.imageBrowserReset.addEventListener("click", () => {
+        resetImageBrowserEdits();
       });
     }
 
@@ -8693,7 +9252,7 @@
       elements.imageBrowserCanvas.addEventListener("mousedown", handleImageBrowserCanvasMouseDown);
       elements.imageBrowserCanvas.addEventListener("mousemove", handleImageBrowserCanvasMouseMove);
       elements.imageBrowserCanvas.addEventListener("mouseup", handleImageBrowserCanvasMouseUp);
-      elements.imageBrowserCanvas.addEventListener("mouseleave", handleImageBrowserCanvasMouseUp);
+      elements.imageBrowserCanvas.addEventListener("mouseleave", handleImageBrowserCanvasMouseLeave);
     }
 
     document.addEventListener("keydown", handleImageBrowserKeyDown);

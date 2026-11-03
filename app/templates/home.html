@@ -693,14 +693,22 @@
                <button id="image-browser-create-jigsaw" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Create jigsaw</button>
                <button id="image-browser-delete" type="button" class="govuk-button govuk-button--warning" data-module="govuk-button">Delete image</button>
              </div>
-             <div class="app-image-browser__controls-row app-image-browser__controls-row--image-edit">
-               <button id="image-browser-rotate-left" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate left</button>
-               <button id="image-browser-rotate-right" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate right</button>
-               <button id="image-browser-crop-toggle" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Crop</button>
-               <button id="image-browser-crop-apply" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Apply crop</button>
-               <button id="image-browser-save-create" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Save create</button>
-               <button id="image-browser-save" type="button" class="govuk-button" data-module="govuk-button">Save overwrite</button>
-             </div>
+              <div class="app-image-browser__controls-row app-image-browser__controls-row--image-edit">
+                <button id="image-browser-rotate-left" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate left</button>
+                <button id="image-browser-rotate-right" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Rotate right</button>
+                <div class="app-image-browser__crop-mode-wrap">
+                  <label class="govuk-label govuk-!-margin-bottom-1" for="image-browser-crop-mode">Crop mode</label>
+                  <select id="image-browser-crop-mode" class="govuk-select govuk-!-margin-bottom-0">
+                    <option value="rectangle" selected>Rectangle</option>
+                    <option value="perspective">Perspective (4 corners)</option>
+                  </select>
+                </div>
+                <button id="image-browser-crop-toggle" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Crop</button>
+                <button id="image-browser-crop-apply" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Apply crop</button>
+                <button id="image-browser-reset" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Reset image</button>
+                <button id="image-browser-save-create" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Save create</button>
+                <button id="image-browser-save" type="button" class="govuk-button" data-module="govuk-button">Save overwrite</button>
+              </div>
            </div>
 
            <div id="image-browser-suggestions-modal" class="app-image-browser-suggestions-modal" hidden>

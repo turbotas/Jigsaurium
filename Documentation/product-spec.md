@@ -81,6 +81,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
   - Guided capture accepts optional free-text comments to capture user feedback/notes alongside uploaded images.
   - Create a new jigsaw from an image via AI metadata extraction (title, series name/number, artist, manufacturer/publisher, piece count, tags, dimensions, description).
   - Enrich an existing jigsaw from associated box images (front/back/side) to populate missing fields.
+  - Image browser supports both rectangle crop (two-corner drag) and perspective transform crop (four-corner selection with draggable corner adjustment before apply).
   - Track AI token/cost usage per create-from-image call and enforce daily spend guardrails.
 - Lending management (deprioritized, existing capability retained):
   - Create loan.

@@ -899,6 +899,15 @@
   border-top: 1px solid #d8d8d8;
 }
 
+.app-image-browser__crop-mode-wrap {
+  min-width: 230px;
+  margin-right: 4px;
+}
+
+.app-image-browser__crop-mode-wrap .govuk-select {
+  min-width: 220px;
+}
+
 .app-image-browser__help-fieldset {
   margin: 0;
   padding: 0;

@@ -408,6 +408,20 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         assert page.locator("#image-browser-assign-next").is_visible()
         assert page.locator("#image-browser-create-jigsaw").is_visible()
         assert page.locator("#image-browser-delete").is_visible()
+        assert page.locator("#image-browser-reset").is_visible()
+        assert page.locator("#image-browser-crop-mode").is_visible()
+        assert page.locator("#image-browser-crop-mode option[value='rectangle']").count() == 1
+        assert page.locator("#image-browser-crop-mode option[value='perspective']").count() == 1
+
+        page.select_option("#image-browser-crop-mode", "rectangle")
+        assert page.locator("#image-browser-crop-mode").input_value() == "rectangle"
+        page.click("#image-browser-crop-toggle")
+        page.click("#image-browser-crop-toggle")
+
+        page.select_option("#image-browser-crop-mode", "perspective")
+        assert page.locator("#image-browser-crop-mode").input_value() == "perspective"
+        page.click("#image-browser-crop-toggle")
+        page.click("#image-browser-crop-toggle")
 
         page.once("dialog", lambda dialog: dialog.accept())
         page.click("#image-browser-delete")
