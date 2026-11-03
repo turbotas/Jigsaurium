@@ -81,6 +81,17 @@ except ImportError:  # pragma: no cover
     class DecompressionBombError(Exception):
         pass
 
+try:  # pragma: no cover - optional HEIF/HEIC decoder plugin
+    from pillow_heif import register_heif_opener
+except ImportError:  # pragma: no cover
+    register_heif_opener = None
+
+if Image is not None and register_heif_opener is not None:  # pragma: no cover - registration side effect only
+    try:
+        register_heif_opener()
+    except Exception:
+        register_heif_opener = None
+
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 

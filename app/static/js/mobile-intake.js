@@ -9,8 +9,10 @@
     box_side: "Box side",
     box_back: "Box back",
     completed: "Completed",
+    reference: "Reference",
   };
   const boxSlotKeys = ["box_front", "box_side", "box_back"];
+  const jigsawSeedSlotKeys = ["box_front", "box_side", "box_back", "reference"];
 
   const titleInput = document.getElementById("mobile-intake-title");
   const pieceCountInput = document.getElementById("mobile-intake-piece-count");
@@ -19,6 +21,7 @@
   const statusPanel = document.getElementById("mobile-intake-status");
   const statusText = document.getElementById("mobile-intake-status-text");
   const slotInputs = Array.from(form.querySelectorAll("[data-slot-file]"));
+  const slotActionButtons = Array.from(form.querySelectorAll("[data-slot-action][data-slot-key]"));
 
   const authCard = document.getElementById("mobile-capture-auth-card");
   const loginForm = document.getElementById("mobile-capture-login-form");
@@ -32,6 +35,7 @@
   const workflowSection = document.getElementById("mobile-capture-workflow");
 
   const previewObjectUrls = new Map();
+  const selectedSlotFiles = new Map();
   const state = {
     csrfToken: null,
     isSubmitting: false,
@@ -40,22 +44,34 @@
     stfdAllowLocalLogin: true,
     stfdLoginUrl: null,
   };
+  const cameraCaptureState = {
+    shell: null,
+    title: null,
+    video: null,
+    captureButton: null,
+    cancelButton: null,
+    stream: null,
+    slotKey: null,
+  };
 
   const fallbackRoleCapabilities = {
     administrator: [
       "image.upload",
+      "image.tag",
       "jigsaw.create",
       "jigsaw.enrich",
       "image.manage_library",
     ],
     member: [
       "image.upload",
+      "image.tag",
       "jigsaw.create",
       "jigsaw.enrich",
       "image.manage_library",
     ],
     borrower: [
       "image.upload",
+      "image.tag",
       "jigsaw.create",
       "jigsaw.enrich",
       "image.manage_library",
@@ -98,6 +114,186 @@
     }
     statusPanel.classList.toggle("govuk-notification-banner--success", !isError);
     statusPanel.classList.toggle("govuk-notification-banner--error", Boolean(isError));
+  }
+
+  function normalizeTagForCompare(value) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
+  }
+
+  function browserCameraSupported() {
+    return Boolean(
+      window.isSecureContext &&
+        navigator.mediaDevices &&
+        typeof navigator.mediaDevices.getUserMedia === "function"
+    );
+  }
+
+  function stopCameraStream() {
+    if (!cameraCaptureState.stream) {
+      return;
+    }
+    cameraCaptureState.stream.getTracks().forEach((track) => {
+      track.stop();
+    });
+    cameraCaptureState.stream = null;
+    if (cameraCaptureState.video) {
+      cameraCaptureState.video.srcObject = null;
+    }
+  }
+
+  function closeCameraCaptureUi() {
+    stopCameraStream();
+    cameraCaptureState.slotKey = null;
+    if (cameraCaptureState.shell) {
+      cameraCaptureState.shell.hidden = true;
+    }
+  }
+
+  async function capturePhotoFromStream() {
+    const video = cameraCaptureState.video;
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) {
+      throw new Error("Camera stream is not ready yet. Please try capture again.");
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Unable to capture camera frame.");
+    }
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const blob = await new Promise((resolve) => {
+      canvas.toBlob(resolve, "image/jpeg", 0.92);
+    });
+    if (!blob) {
+      throw new Error("Could not capture photo from camera.");
+    }
+
+    const slotKey = String(cameraCaptureState.slotKey || "").trim();
+    if (!slotKey) {
+      throw new Error("Capture slot is missing.");
+    }
+
+    const file = new File([blob], `${slotKey}-${Date.now()}.jpg`, {
+      type: blob.type || "image/jpeg",
+      lastModified: Date.now(),
+    });
+    selectedSlotFiles.set(slotKey, {
+      file,
+      source: "camera",
+      inputId: `camera-stream-${slotKey}`,
+    });
+    slotInputs.forEach((candidate) => {
+      if (candidate.getAttribute("data-slot-file") === slotKey) {
+        candidate.value = "";
+      }
+    });
+    renderSlotPreview(slotKey);
+    closeCameraCaptureUi();
+  }
+
+  function ensureCameraCaptureUi() {
+    if (cameraCaptureState.shell) {
+      return;
+    }
+
+    const shell = document.createElement("div");
+    shell.className = "app-mobile-camera-capture";
+    shell.hidden = true;
+
+    const panel = document.createElement("div");
+    panel.className = "app-mobile-camera-capture__panel";
+
+    const heading = document.createElement("h3");
+    heading.className = "govuk-heading-m govuk-!-margin-bottom-2";
+    heading.textContent = "Capture photo";
+
+    const hint = document.createElement("p");
+    hint.className = "govuk-hint govuk-!-margin-bottom-2";
+    hint.textContent = "Use your camera, then tap Capture photo.";
+
+    const video = document.createElement("video");
+    video.className = "app-mobile-camera-capture__video";
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = true;
+
+    const actions = document.createElement("div");
+    actions.className = "app-mobile-camera-capture__actions";
+
+    const captureButton = document.createElement("button");
+    captureButton.type = "button";
+    captureButton.className = "govuk-button govuk-!-margin-bottom-0";
+    captureButton.textContent = "Capture photo";
+
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "govuk-button govuk-button--secondary govuk-!-margin-bottom-0";
+    cancelButton.textContent = "Cancel";
+
+    actions.appendChild(captureButton);
+    actions.appendChild(cancelButton);
+    panel.appendChild(heading);
+    panel.appendChild(hint);
+    panel.appendChild(video);
+    panel.appendChild(actions);
+    shell.appendChild(panel);
+    document.body.appendChild(shell);
+
+    shell.addEventListener("click", (event) => {
+      if (event.target === shell) {
+        closeCameraCaptureUi();
+      }
+    });
+    cancelButton.addEventListener("click", closeCameraCaptureUi);
+    captureButton.addEventListener("click", () => {
+      capturePhotoFromStream().catch((error) => {
+        setStatus(error.message || "Camera capture failed.", true);
+      });
+    });
+
+    cameraCaptureState.shell = shell;
+    cameraCaptureState.title = heading;
+    cameraCaptureState.video = video;
+    cameraCaptureState.captureButton = captureButton;
+    cameraCaptureState.cancelButton = cancelButton;
+  }
+
+  async function openBrowserCamera(slotKey) {
+    if (!browserCameraSupported()) {
+      return false;
+    }
+
+    ensureCameraCaptureUi();
+    stopCameraStream();
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
+      });
+      cameraCaptureState.stream = stream;
+      cameraCaptureState.slotKey = slotKey;
+      if (cameraCaptureState.title) {
+        cameraCaptureState.title.textContent = `Capture ${slotTagMap[slotKey] || "photo"}`;
+      }
+      if (cameraCaptureState.video) {
+        cameraCaptureState.video.srcObject = stream;
+        await cameraCaptureState.video.play().catch(() => {});
+      }
+      if (cameraCaptureState.shell) {
+        cameraCaptureState.shell.hidden = false;
+      }
+      return true;
+    } catch (_error) {
+      closeCameraCaptureUi();
+      return false;
+    }
   }
 
   function setWorkflowVisible(isVisible) {
@@ -198,11 +394,11 @@
   }
 
   function getFileFromSlot(slotKey) {
-    const input = form.querySelector(`[data-slot-file="${slotKey}"]`);
-    if (!input || !input.files || input.files.length === 0) {
+    const selected = selectedSlotFiles.get(slotKey);
+    if (!selected || !selected.file) {
       return null;
     }
-    return input.files[0];
+    return selected.file;
   }
 
   function selectedSlotEntries() {
@@ -228,6 +424,7 @@
     clearPreviewObjectUrl(slotKey);
     preview.innerHTML = "";
     const file = getFileFromSlot(slotKey);
+    const selected = selectedSlotFiles.get(slotKey);
     if (!file) {
       preview.textContent = "No photo selected.";
       return;
@@ -244,7 +441,8 @@
     const meta = document.createElement("p");
     meta.className = "govuk-body-s govuk-!-margin-bottom-0";
     const fileSizeKb = Math.max(1, Math.round(file.size / 1024));
-    meta.textContent = `${file.name} (${fileSizeKb} KB)`;
+    const sourceLabel = selected?.source === "camera" ? "Camera" : "Gallery";
+    meta.textContent = `${file.name} (${fileSizeKb} KB) | ${sourceLabel}`;
 
     preview.appendChild(image);
     preview.appendChild(meta);
@@ -252,12 +450,18 @@
 
   function setSubmitting(isSubmitting) {
     state.isSubmitting = isSubmitting;
+    if (isSubmitting) {
+      closeCameraCaptureUi();
+    }
     if (submitButton) {
       submitButton.disabled = isSubmitting;
       submitButton.textContent = isSubmitting ? "Processing..." : "Process capture";
     }
     slotInputs.forEach((input) => {
       input.disabled = isSubmitting;
+    });
+    slotActionButtons.forEach((button) => {
+      button.disabled = isSubmitting;
     });
     if (titleInput) {
       titleInput.disabled = isSubmitting;
@@ -519,6 +723,35 @@
     });
   }
 
+  async function ensureExpectedImageTag(image, expectedTag, expectedJigsawId) {
+    const imageId = Number(image?.id || 0);
+    const imageJigsawId = Number(image?.jigsaw_id || 0);
+    if (!imageId || imageJigsawId !== Number(expectedJigsawId)) {
+      return;
+    }
+
+    const expected = normalizeTagForCompare(expectedTag);
+    const current = normalizeTagForCompare(image?.tag);
+    if (!expected || expected === current) {
+      return;
+    }
+
+    if (!hasCapability("image.tag")) {
+      throw new Error(
+        `Image ${imageId} uploaded with tag "${image?.tag || ""}" instead of "${expectedTag}", and your account cannot retag images.`
+      );
+    }
+
+    const response = await apiRequest(`/api/v1/image-library/images/${imageId}/tag`, {
+      method: "PATCH",
+      body: JSON.stringify({ tag: expectedTag }),
+    });
+    const updatedTag = response?.data?.tag;
+    if (normalizeTagForCompare(updatedTag) !== expected) {
+      throw new Error(`Image ${imageId} could not be retagged as "${expectedTag}".`);
+    }
+  }
+
   function buildJigsawCreatePayload() {
     const payload = {};
     const title = String(titleInput?.value || "").trim();
@@ -539,9 +772,67 @@
 
   function clearForm() {
     form.reset();
+    selectedSlotFiles.clear();
     Object.keys(slotTagMap).forEach((slotKey) => {
       renderSlotPreview(slotKey);
     });
+  }
+
+  function getSlotInput(slotKey, source) {
+    return form.querySelector(`[data-slot-file="${slotKey}"][data-slot-source="${source}"]`);
+  }
+
+  async function handleSlotActionClick(event) {
+    const button = event.currentTarget;
+    const slotKey = String(button?.getAttribute("data-slot-key") || "").trim();
+    const source = String(button?.getAttribute("data-slot-action") || "").trim();
+    if (!slotKey || !source) {
+      return;
+    }
+
+    if (source === "camera") {
+      const openedWithBrowserCamera = await openBrowserCamera(slotKey);
+      if (openedWithBrowserCamera) {
+        return;
+      }
+    }
+
+    const input = getSlotInput(slotKey, source);
+    if (!input || input.disabled) {
+      return;
+    }
+    input.click();
+  }
+
+  function handleSlotInputChange(input) {
+    const slotKey = String(input.getAttribute("data-slot-file") || "").trim();
+    const source = String(input.getAttribute("data-slot-source") || "").trim();
+    if (!slotKey || !source) {
+      return;
+    }
+
+    if (input.files && input.files.length > 0) {
+      selectedSlotFiles.set(slotKey, {
+        file: input.files[0],
+        source,
+        inputId: input.id,
+      });
+      slotInputs.forEach((candidate) => {
+        if (candidate === input) {
+          return;
+        }
+        if (candidate.getAttribute("data-slot-file") === slotKey) {
+          candidate.value = "";
+        }
+      });
+    } else {
+      const selected = selectedSlotFiles.get(slotKey);
+      if (selected && selected.inputId === input.id) {
+        selectedSlotFiles.delete(slotKey);
+      }
+    }
+
+    renderSlotPreview(slotKey);
   }
 
   async function handleSubmit(event) {
@@ -561,6 +852,7 @@
     }
 
     const selectedBoxEntries = entries.filter((entry) => boxSlotKeys.includes(entry.slotKey));
+    const selectedSeedEntries = entries.filter((entry) => jigsawSeedSlotKeys.includes(entry.slotKey));
     const completedEntry = entries.find((entry) => entry.slotKey === "completed") || null;
     const commentText = String(commentInput?.value || "").trim();
 
@@ -568,7 +860,7 @@
     setStatus("Starting mobile capture workflow...");
 
     try {
-      if (selectedBoxEntries.length === 0 && completedEntry) {
+      if (selectedSeedEntries.length === 0 && completedEntry && entries.length === 1) {
         setStatus("Uploading completed image to the unassigned image library...");
         const uploadPayload = await uploadImageLibraryItem(completedEntry.file, slotTagMap.completed, commentText);
         const createdCount = Number(uploadPayload?.data?.created_count || 0);
@@ -592,10 +884,7 @@
         throw new Error("Jigsaw create response did not include an id.");
       }
 
-      const uploadQueue = [...selectedBoxEntries];
-      if (completedEntry) {
-        uploadQueue.push(completedEntry);
-      }
+      const uploadQueue = [...entries];
       const hasCompleted = Boolean(completedEntry);
 
       const duplicateWarnings = [];
@@ -608,10 +897,13 @@
         const image = payload?.data || {};
         if (Number(image?.jigsaw_id || 0) !== Number(jigsawId)) {
           duplicateWarnings.push(tag);
+          continue;
         }
+        await ensureExpectedImageTag(image, tag, jigsawId);
       }
 
-      if (hasCapability("jigsaw.enrich")) {
+      const shouldRunEnrich = hasCapability("jigsaw.enrich") && selectedBoxEntries.length > 0;
+      if (shouldRunEnrich) {
         setStatus("Running AI enrich from uploaded box images...");
         await apiRequest(`/api/v1/jigsaws/${Number(jigsawId)}/enrich-from-images`, {
           method: "POST",
@@ -623,7 +915,8 @@
         duplicateWarnings.length > 0
           ? ` Duplicate image bytes were detected for ${duplicateWarnings.join(", ")}, so those images may already belong to another jigsaw.`
           : "";
-      setStatus(`Mobile capture complete. Created jigsaw #${jigsawId} and started enrichment.${warningSuffix}`);
+      const enrichSuffix = shouldRunEnrich ? " and started enrichment" : "";
+      setStatus(`Mobile capture complete. Created jigsaw #${jigsawId}${enrichSuffix}.${warningSuffix}`);
       clearForm();
     } catch (error) {
       setStatus(error.message || "Mobile capture workflow failed.", true);
@@ -694,13 +987,14 @@
   }
 
   slotInputs.forEach((input) => {
-    input.addEventListener("change", () => {
-      const slotKey = input.getAttribute("data-slot-file");
-      if (slotKey) {
-        renderSlotPreview(slotKey);
-      }
+    input.addEventListener("change", () => handleSlotInputChange(input));
+  });
+  slotActionButtons.forEach((button) => {
+    button.addEventListener("click", (event) => {
+      void handleSlotActionClick(event);
     });
   });
+  window.addEventListener("beforeunload", closeCameraCaptureUi);
 
   if (loginForm) {
     loginForm.addEventListener("submit", handleLoginSubmit);

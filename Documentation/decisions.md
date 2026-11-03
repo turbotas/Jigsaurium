@@ -275,3 +275,14 @@
 - Why: full SQL dumps with image blobs are large; compression reduces storage and download overhead without changing restore compatibility (decompress then import).
 - Decision: allow administrators to delete completed/failed backups (file + history row) while blocking deletion of running jobs.
 - Why: operators need lifecycle control and disk-space management while preserving integrity of in-flight backup operations.
+
+## 2026-11-03 - Guided Capture Source Choice and HEIF Metadata Support
+
+- Decision: expose both source actions for every guided-capture slot (`Choose file from gallery` and `Capture with camera`) instead of camera-only capture controls.
+- Why: camera-intent capture in mobile browsers can skip camera-roll persistence and has inconsistent metadata behavior; explicit source choice is clearer and more flexible across mobile and desktop devices.
+- Decision: for `Capture with camera`, first attempt in-browser camera capture (`getUserMedia`) and fall back to file-input capture intent when browser/device support is unavailable.
+- Why: desktop browsers often ignore input `capture` hints; direct browser camera access provides clearer and more consistent camera behavior.
+- Decision: add a fifth optional guided-capture slot tagged `Reference`.
+- Why: users need to upload supporting reference images alongside box/completed photos in the same guided flow.
+- Decision: add HEIF/HEIC decoder registration (`pillow-heif`) so EXIF/capture-time extraction can work when supported by source files.
+- Why: guided capture and gallery uploads increasingly include HEIF/HEIC assets from modern phones, and metadata extraction quality depends on codec support.

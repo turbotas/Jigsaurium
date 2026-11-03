@@ -73,10 +73,11 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
   - Bulk upload one or more images (including zip archives containing image files).
   - Store uploaded images as library assets with an initial tag (default `untagged`).
   - Optionally associate uploads to a jigsaw during import.
-  - Provide a mobile-friendly guided capture flow with slots for `Box front`, `Box side`, `Box back`, and `Completed` images.
+  - Provide a mobile-friendly guided capture flow with slots for `Box front`, `Box side`, `Box back`, `Reference`, and `Completed` images.
+  - For each guided-capture slot, provide both `Choose file from gallery` and `Capture with camera` actions.
   - Require at least one captured image per guided-capture submission.
   - If only `Completed` is captured, store it as an unassigned `Completed` image (no new jigsaw created).
-  - If one or more box images are captured, create a jigsaw, upload all captured images with slot tags, and run enrich-from-images once for that jigsaw.
+  - If one or more box/reference images are captured, create a jigsaw, upload all captured images with slot tags, and run enrich-from-images once when at least one box image is present.
   - Guided capture accepts optional title and piece count seed values but does not require them.
   - Guided capture accepts optional free-text comments to capture user feedback/notes alongside uploaded images.
   - Create a new jigsaw from an image via AI metadata extraction (title, series name/number, artist, manufacturer/publisher, piece count, tags, dimensions, description).
@@ -111,7 +112,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
 - Admin can run non-destructive AI enrichment on an existing jigsaw using its assigned images.
 - Admin can submit a mobile guided-capture upload with at least one slot populated.
 - Completed-only guided capture stores an unassigned `Completed` image without creating a jigsaw.
-- Guided capture that includes a box image creates a jigsaw, tags/uploads captured slot images, and runs enrich-from-images once.
+- Guided capture that includes a box or reference image creates a jigsaw and tags/uploads captured slot images; enrich-from-images runs once when box imagery is included.
 - Authenticated non-admin users can log and edit their own completion diary entries.
 - Admin can log, edit, and delete completion diary entries with difficulty ratings and notes per jigsaw.
 - Diary tab supports list and month-calendar modes, with month navigation in calendar mode.

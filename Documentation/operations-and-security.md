@@ -17,6 +17,7 @@
 - Use `requirements/prod.txt` for production/runtime-only installs.
 - Use `requirements/dev.txt` for developer environments and test execution.
 - Use `requirements/embeddings.txt` for core embedding runtime dependencies (`torch`, `transformers`).
+- Core image runtime depends on Pillow plus `pillow-heif` so HEIF/HEIC uploads can be decoded for metadata extraction and derivative generation.
 - Production/test deployment target is CPU-only; install PyTorch from the CPU wheel index only and do not install CUDA/NVIDIA runtime packages.
 - Use `requirements/known-good-dev.txt` and `requirements/known-good-prod.txt` as constraints files for reproducible installs.
 - `requirements.txt` points to production dependencies for compatibility.
