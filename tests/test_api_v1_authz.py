@@ -14,6 +14,7 @@ from app.models import (
     Jigsaw,
     JigsawDiaryEntry,
     JigsawImage,
+    LoginThrottleCounter,
     Loan,
     Role,
     User,
@@ -1612,6 +1613,36 @@ def test_auth_login_rate_limits_repeated_failures(app, client, seeded_identity_d
     blocked_home_response = client.get("/")
     assert blocked_home_response.status_code == 429
     assert int(blocked_home_response.headers["Retry-After"]) > 0
+
+
+@pytest.mark.functional
+def test_auth_login_rate_limit_counter_persists_in_database(app, client, seeded_identity_data):
+    from app.api.v1.routes import reset_runtime_security_state
+
+    for _ in range(10):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@example.com", "password": "WrongPassword999!"},
+        )
+        assert response.status_code == 401
+
+    with app.app_context():
+        db_session = get_session()
+        counter = db_session.query(LoginThrottleCounter).filter_by(
+            client_ip="127.0.0.1",
+            email="admin@example.com",
+        ).one_or_none()
+        assert counter is not None
+        assert counter.blocked_until is not None
+
+    reset_runtime_security_state()
+
+    throttled_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@example.com", "password": "WrongPassword999!"},
+    )
+    assert throttled_response.status_code == 429
+    assert throttled_response.get_json()["error"]["code"] == "too_many_requests"
 
 
 @pytest.mark.functional

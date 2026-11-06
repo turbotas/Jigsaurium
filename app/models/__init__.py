@@ -10,6 +10,7 @@ from app.models.image_embedding import ImageEmbedding
 from app.models.image_embedding_job import ImageEmbeddingJob
 from app.models.jigsaw_image import JigsawImage
 from app.models.loan import Loan
+from app.models.login_throttle_counter import LoginThrottleCounter
 from app.models.role import Role
 from app.models.user import User
 from app.models.user_session import UserSession
@@ -28,6 +29,7 @@ __all__ = [
     "ImageEmbeddingJob",
     "JigsawImage",
     "Loan",
+    "LoginThrottleCounter",
     "Role",
     "User",
     "UserSession",

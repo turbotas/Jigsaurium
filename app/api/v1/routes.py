@@ -22,7 +22,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import case, func, or_, select
 from sqlalchemy import update as sa_update
-from sqlalchemy.exc import DataError, OperationalError
+from sqlalchemy.exc import DataError, IntegrityError, OperationalError
 
 from app.db import get_session
 from app.database_backups import (
@@ -57,6 +57,7 @@ from app.models import (
     JigsawDiaryEntry,
     JigsawImage,
     Loan,
+    LoginThrottleCounter,
     Role,
     User,
     UserSession,
@@ -234,8 +235,6 @@ LOGIN_RATE_LIMIT_WINDOW_SECONDS = 15 * 60
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 10
 LOGIN_RATE_LIMIT_BLOCK_SECONDS = 15 * 60
 LOGIN_RATE_LIMIT_BLOCK_SOURCE = "auto_login_failures"
-_failed_login_attempts = {}
-_failed_login_attempts_lock = threading.Lock()
 
 if Image is not None:
     Image.MAX_IMAGE_PIXELS = JIGSAW_IMAGE_MAX_PIXELS
@@ -2009,55 +2008,109 @@ def _validate_csrf_for_request():
     return None
 
 
-def _login_rate_limit_key(email):
-    client_ip = str(getattr(g, "client_ip_resolved", request.remote_addr) or "unknown")
-    return f"{client_ip}|{email}"
+def _login_rate_limit_identity(email):
+    client_ip = normalize_ip_address(getattr(g, "client_ip_resolved", request.remote_addr)) or "unknown"
+    return client_ip, str(email or "").strip().lower()
+
+
+def _load_login_throttle_counter(db_session, *, client_ip, email, for_update=False):
+    stmt = select(LoginThrottleCounter).where(
+        LoginThrottleCounter.client_ip == client_ip,
+        LoginThrottleCounter.email == email,
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return db_session.execute(stmt).scalar_one_or_none()
 
 
 def _check_login_rate_limit(email):
-    now = time.time()
-    key = _login_rate_limit_key(email)
-    with _failed_login_attempts_lock:
-        state = _failed_login_attempts.get(key)
-        if not state:
-            return None
+    client_ip, normalized_email = _login_rate_limit_identity(email)
+    now = datetime.now(timezone.utc)
+    db_session = get_session()
+    counter = _load_login_throttle_counter(db_session, client_ip=client_ip, email=normalized_email)
+    if counter is None:
+        return None
 
-        blocked_until = float(state.get("blocked_until", 0) or 0)
-        if blocked_until > now:
-            retry_after_seconds = max(1, int(blocked_until - now))
-            payload, status_code = _error_response(
-                "too_many_requests",
-                "Too many failed login attempts. Please try again later.",
-                429,
-            )
-            return payload, status_code, retry_after_seconds
+    blocked_until = _normalize_datetime_to_utc(counter.blocked_until)
+    if blocked_until is not None and blocked_until > now:
+        retry_after_seconds = max(1, int((blocked_until - now).total_seconds()))
+        payload, status_code = _error_response(
+            "too_many_requests",
+            "Too many failed login attempts. Please try again later.",
+            429,
+        )
+        return payload, status_code, retry_after_seconds
 
-        window_started_at = float(state.get("window_started_at", 0) or 0)
-        if window_started_at and now - window_started_at > LOGIN_RATE_LIMIT_WINDOW_SECONDS:
-            _failed_login_attempts.pop(key, None)
+    window_started_at = _normalize_datetime_to_utc(counter.window_started_at)
+    if window_started_at is not None and (now - window_started_at).total_seconds() > LOGIN_RATE_LIMIT_WINDOW_SECONDS:
+        counter.failed_count = 0
+        counter.window_started_at = now
+        counter.blocked_until = None
+        counter.updated_at = now
+        db_session.commit()
     return None
 
 
 def _record_failed_login_attempt(email):
-    now = time.time()
-    key = _login_rate_limit_key(email)
-    should_persist_ip_block = False
-    with _failed_login_attempts_lock:
-        state = _failed_login_attempts.get(key)
-        if not state or now - float(state.get("window_started_at", 0) or 0) > LOGIN_RATE_LIMIT_WINDOW_SECONDS:
-            state = {"count": 0, "window_started_at": now, "blocked_until": 0}
+    client_ip, normalized_email = _login_rate_limit_identity(email)
+    db_session = get_session()
 
-        state["count"] = int(state.get("count", 0)) + 1
-        if state["count"] >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS:
-            state["blocked_until"] = now + LOGIN_RATE_LIMIT_BLOCK_SECONDS
-            state["count"] = 0
-            state["window_started_at"] = now
-            should_persist_ip_block = True
+    for attempt in range(2):
+        now = datetime.now(timezone.utc)
+        should_persist_ip_block = False
+        try:
+            counter = _load_login_throttle_counter(
+                db_session,
+                client_ip=client_ip,
+                email=normalized_email,
+                for_update=True,
+            )
+            if counter is None:
+                counter = LoginThrottleCounter(
+                    client_ip=client_ip,
+                    email=normalized_email,
+                    failed_count=0,
+                    window_started_at=now,
+                    blocked_until=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db_session.add(counter)
 
-        _failed_login_attempts[key] = state
+            window_started_at = _normalize_datetime_to_utc(counter.window_started_at) or now
+            if (now - window_started_at).total_seconds() > LOGIN_RATE_LIMIT_WINDOW_SECONDS:
+                counter.failed_count = 0
+                counter.window_started_at = now
+                counter.blocked_until = None
 
-    if should_persist_ip_block:
-        _persist_failed_login_ip_block()
+            counter.failed_count = int(counter.failed_count or 0) + 1
+            if counter.failed_count >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS:
+                counter.blocked_until = now + timedelta(seconds=LOGIN_RATE_LIMIT_BLOCK_SECONDS)
+                counter.failed_count = 0
+                counter.window_started_at = now
+                should_persist_ip_block = True
+
+            counter.updated_at = now
+            db_session.commit()
+            if should_persist_ip_block:
+                _persist_failed_login_ip_block()
+            return
+        except IntegrityError:
+            db_session.rollback()
+            if attempt == 0:
+                continue
+            raise
+        except Exception:
+            db_session.rollback()
+            current_app.logger.warning(
+                "login_rate_limit_counter_update_failed",
+                extra={
+                    "client_ip_resolved": client_ip,
+                    "email": normalized_email,
+                    "request_id": getattr(g, "request_id", None),
+                },
+            )
+            return
 
 
 def _persist_failed_login_ip_block():
@@ -2093,14 +2146,18 @@ def _persist_failed_login_ip_block():
 
 
 def _clear_failed_login_attempts(email):
-    key = _login_rate_limit_key(email)
-    with _failed_login_attempts_lock:
-        _failed_login_attempts.pop(key, None)
+    client_ip, normalized_email = _login_rate_limit_identity(email)
+    db_session = get_session()
+    db_session.execute(
+        sa_delete(LoginThrottleCounter).where(
+            LoginThrottleCounter.client_ip == client_ip,
+            LoginThrottleCounter.email == normalized_email,
+        )
+    )
 
 
 def reset_runtime_security_state():
-    with _failed_login_attempts_lock:
-        _failed_login_attempts.clear()
+    return None
 
 
 def require_auth(view_func):

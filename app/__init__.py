@@ -467,23 +467,3 @@ def create_app(config_class="config.Config"):
     _validate_stfd_config_on_startup(app)
     _warm_embeddings_on_startup(app)
     return app
-    secret_key = str(app.config.get("SECRET_KEY", "") or "")
-    if app_env in {"test", "prod"}:
-        stripped_secret_key = secret_key.strip()
-        default_or_placeholder_values = {
-            "dev-secret-key",
-            "change-me",
-            "changeme",
-            "default",
-            "secret",
-        }
-        if not stripped_secret_key:
-            errors.append("SECRET_KEY must be set in non-dev environments.")
-        elif stripped_secret_key in default_or_placeholder_values:
-            errors.append(
-                "SECRET_KEY uses a default/placeholder value; set a unique random value in non-dev environments."
-            )
-        elif len(stripped_secret_key) < 16:
-            errors.append(
-                "SECRET_KEY is too short for non-dev environments; use at least 16 characters of random entropy."
-            )
