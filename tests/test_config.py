@@ -54,3 +54,25 @@ def test_config_parses_proxy_settings(monkeypatch):
     monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
     monkeypatch.delenv("TRUSTED_CLIENT_CIDRS", raising=False)
     importlib.reload(config)
+
+
+@pytest.mark.functional
+def test_config_invalid_trusted_proxy_hops_raises_actionable_error(monkeypatch):
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "abc")
+
+    with pytest.raises(ValueError, match="TRUSTED_PROXY_HOPS"):
+        importlib.reload(config)
+
+    monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+    importlib.reload(config)
+
+
+@pytest.mark.functional
+def test_config_invalid_ai_budget_raises_actionable_error(monkeypatch):
+    monkeypatch.setenv("AI_DAILY_BUDGET_USD", "not-a-number")
+
+    with pytest.raises(ValueError, match="AI_DAILY_BUDGET_USD"):
+        importlib.reload(config)
+
+    monkeypatch.delenv("AI_DAILY_BUDGET_USD", raising=False)
+    importlib.reload(config)

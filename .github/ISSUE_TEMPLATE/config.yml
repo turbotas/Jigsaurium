@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability report
+    url: https://github.com/turbotas/Jigsaurium/security/policy
+    about: Please report vulnerabilities via the security policy channels, not public issues.
+  - name: Maintainer contact / governance path
+    url: https://github.com/turbotas/Jigsaurium/blob/master/GOVERNANCE.md
+    about: For conduct/governance concerns, use the maintainer contact path.

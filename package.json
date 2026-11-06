@@ -7,7 +7,7 @@
     "govuk:update": "python scripts/vendor_govuk_assets.py --update latest"
   },
   "private": true,
-  "license": "UNLICENSED",
+  "license": "AGPL-3.0-only",
   "devDependencies": {
     "govuk-frontend": "6.6.0"
   }

@@ -1,17 +1,34 @@
-from flask import Blueprint, redirect, render_template, url_for
+from flask import Blueprint, current_app, redirect, render_template, url_for
 
 
 main_bp = Blueprint("main", __name__)
 
 
+def _feature_flag_context():
+    return {
+        "feature_ai_enabled": bool(current_app.config.get("AI_ENABLED", False)),
+        "feature_embeddings_enabled": bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)),
+    }
+
+
 @main_bp.get("/")
 def home():
-    return render_template("home.html", image_editor_mode=False, image_editor_image_id=None)
+    return render_template(
+        "home.html",
+        image_editor_mode=False,
+        image_editor_image_id=None,
+        **_feature_flag_context(),
+    )
 
 
 @main_bp.get("/image-editor/<int:image_id>")
 def image_editor(image_id):
-    return render_template("home.html", image_editor_mode=True, image_editor_image_id=int(image_id))
+    return render_template(
+        "home.html",
+        image_editor_mode=True,
+        image_editor_image_id=int(image_id),
+        **_feature_flag_context(),
+    )
 
 
 @main_bp.get("/mobile-capture")

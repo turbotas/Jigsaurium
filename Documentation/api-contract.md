@@ -365,17 +365,20 @@
   - Overwrite operations preserve the original dedupe hash so future uploads of the original source bytes still clash as duplicates.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` is admin-only and creates a new jigsaw from AI-extracted image metadata.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` only works for unassigned images; assigned images return `409`.
+  - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` returns `409` when AI is disabled (`AI_ENABLED=0`) or when AI provider configuration is incomplete.
   - Successful create-from-image sets the associated image tag to `Box`.
   - `POST /api/v1/image-library/bulk-create-jigsaws` is admin-only and queues (or runs inline in test mode) one create-from-image action per provided image id.
   - `POST /api/v1/image-library/bulk-create-jigsaws` requires JSON body with `image_ids` as a non-empty list of positive integers (max 500).
+  - `POST /api/v1/image-library/bulk-create-jigsaws` returns `409` when create-from-image AI is disabled or not fully configured.
   - `POST /api/v1/image-library/bulk-create-jigsaws/unassigned-box` is admin-only and queues create-from-image jobs for all currently unassigned images tagged exactly as `Box`.
+  - `POST /api/v1/image-library/bulk-create-jigsaws/unassigned-box` returns `409` when create-from-image AI is disabled or not fully configured.
   - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}` returns aggregate job status and counters (`queued` / `running` / `completed` / `failed`).
   - `GET /api/v1/image-library/bulk-create-jigsaws/{job_id}/items` returns per-image outcomes with list pagination.
   - `POST /api/v1/image-embeddings/backfill` is admin-only and queues an image-embedding backfill job across all stored images.
   - `POST /api/v1/image-embeddings/backfill` accepts optional JSON field `scope`:
     - `all` (default): recompute embeddings for all images
     - `missing`: compute embeddings only for images missing an embedding row for the active model key
-  - `POST /api/v1/image-embeddings/backfill` returns `409` when embedding runtime dependencies are unavailable (for example incompatible `transformers` install).
+  - `POST /api/v1/image-embeddings/backfill` returns `409` when image embeddings are disabled or when embedding runtime dependencies are unavailable (for example incompatible `transformers` install).
   - `GET /api/v1/image-embeddings/backfill/{job_id}` is admin-only and returns backfill job status/counters plus `scope`.
   - `GET /api/v1/image-embeddings/diagnostics` is admin-only and returns:
     - model configuration (`name`, `revision`, `model_key`, `local_path`, `local_files_only`)
@@ -384,7 +387,7 @@
     - performance summary (`samples`, `min_ms`, `avg_ms`, `p95_ms`, `max_ms`)
     - latest backfill job summary for the active model key.
   - `GET /api/v1/image-library/images/{image_id}/match-suggestions` requires `image.assign` capability and returns top visual-match jigsaw candidates for one unassigned `Completed` image.
-  - `GET /api/v1/image-library/images/{image_id}/match-suggestions` returns `409` when embedding runtime dependencies are unavailable.
+  - `GET /api/v1/image-library/images/{image_id}/match-suggestions` returns `409` when image embeddings are disabled or when embedding runtime dependencies are unavailable.
   - Each match candidate includes `reference_image` URLs (`content_url`, `thumbnail_url`, `preview_url`) so the admin UI can show side-by-side visual confirmation.
   - Visual-match suggestions require image embeddings to be enabled in server configuration and use cosine similarity against reference-tagged jigsaw images.
   - Embeddings are model-keyed (`model_name@revision`); when model key changes, backfill should be run before relying on suggestions.

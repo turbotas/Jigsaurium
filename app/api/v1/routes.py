@@ -6016,6 +6016,16 @@ def get_image_match_suggestions(image_id):
 @api_v1_bp.post("/image-library/bulk-create-jigsaws")
 @require_role("administrator")
 def start_bulk_create_jigsaws_job():
+    if not current_app.config.get("AI_ENABLED", False):
+        return _error_response("conflict", "Create-from-image AI is disabled in server configuration.", 409)
+
+    if not (
+        current_app.config.get("AI_API_KEY")
+        and current_app.config.get("AI_ENDPOINT_URL")
+        and current_app.config.get("AI_MODEL")
+    ):
+        return _error_response("conflict", "Create-from-image AI is not fully configured.", 409)
+
     payload, error = _parse_json_object()
     if error is not None:
         return error
@@ -6060,6 +6070,16 @@ def start_bulk_create_jigsaws_job():
 @api_v1_bp.post("/image-library/bulk-create-jigsaws/unassigned-box")
 @require_role("administrator")
 def start_bulk_create_jigsaws_for_unassigned_box_images():
+    if not current_app.config.get("AI_ENABLED", False):
+        return _error_response("conflict", "Create-from-image AI is disabled in server configuration.", 409)
+
+    if not (
+        current_app.config.get("AI_API_KEY")
+        and current_app.config.get("AI_ENDPOINT_URL")
+        and current_app.config.get("AI_MODEL")
+    ):
+        return _error_response("conflict", "Create-from-image AI is not fully configured.", 409)
+
     db_session = get_session()
     image_ids = db_session.execute(
         select(JigsawImage.id)

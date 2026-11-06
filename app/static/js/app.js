@@ -30,9 +30,13 @@
     const contextElement = document.getElementById("image-editor-context");
     const enabled = String(contextElement?.dataset?.enabled || "") === "1";
     const parsedImageId = Number.parseInt(String(contextElement?.dataset?.imageId || ""), 10);
+    const aiEnabled = String(contextElement?.dataset?.featureAiEnabled || "") === "1";
+    const embeddingsEnabled = String(contextElement?.dataset?.featureEmbeddingsEnabled || "") === "1";
     return {
       enabled,
       imageId: Number.isFinite(parsedImageId) && parsedImageId > 0 ? parsedImageId : null,
+      aiEnabled,
+      embeddingsEnabled,
     };
   }
 
@@ -170,6 +174,10 @@
     imageEditor: {
       enabled: initialImageEditorContext.enabled,
       imageId: initialImageEditorContext.imageId,
+    },
+    featureFlags: {
+      aiEnabled: initialImageEditorContext.aiEnabled,
+      embeddingsEnabled: initialImageEditorContext.embeddingsEnabled,
     },
   };
 
@@ -1642,6 +1650,14 @@
     return getCurrentUserCapabilities().includes(target);
   }
 
+  function isAiFeatureEnabled() {
+    return Boolean(state.featureFlags?.aiEnabled);
+  }
+
+  function isImageEmbeddingsFeatureEnabled() {
+    return Boolean(state.featureFlags?.embeddingsEnabled);
+  }
+
   function createInitialDiaryCalendarState() {
     const today = new Date();
     return {
@@ -1669,6 +1685,8 @@
 
   function imageSupportsSimilarMatch(image) {
     return Boolean(
+      isImageEmbeddingsFeatureEnabled()
+      &&
       currentUserHasCapability("image.assign")
       && !image?.jigsaw_id
       && toImageTagKey(image?.tag) === toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED)
@@ -2465,10 +2483,12 @@
     const isStfdSession = String(state.authProvider || "").toLowerCase() === "stfd";
 
     const isAdministrator = Array.isArray(state.user.roles) && state.user.roles.includes("administrator");
+    const aiFeatureEnabled = isAiFeatureEnabled();
+    const embeddingsFeatureEnabled = isImageEmbeddingsFeatureEnabled();
     const canReadJigsaw = currentUserHasCapability("jigsaw.read");
     const canCreateJigsaw = currentUserHasCapability("jigsaw.create");
     const canUpdateJigsaw = currentUserHasCapability("jigsaw.update");
-    const canEnrichJigsaw = currentUserHasCapability("jigsaw.enrich");
+    const canEnrichJigsaw = currentUserHasCapability("jigsaw.enrich") && aiFeatureEnabled;
     const canReadDiary = currentUserHasCapability("diary.read");
     const canCreateDiary = currentUserHasCapability("diary.create");
     const canUpdateDiaryAny = currentUserHasCapability("diary.update_any");
@@ -2482,8 +2502,8 @@
     const canManageSecurity = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
     const canAccessCollection = canReadJigsaw || canReadDiary || canManageImages || canCreateJigsaw;
     const canAccessAdminUsers = canManageUsers;
-    const canAccessAdminAi = canManageAi;
-    const canAccessAdminEmbeddings = isAdministrator;
+    const canAccessAdminAi = canManageAi && aiFeatureEnabled;
+    const canAccessAdminEmbeddings = isAdministrator && embeddingsFeatureEnabled;
     const canAccessAdminIpBlocks = canManageSecurity;
     const canAccessAdminSessions = canManageSecurity;
     const canAccessAdminBackups = canManageSecurity;
@@ -2559,10 +2579,10 @@
       elements.imageLibraryUploadForm.hidden = !canUploadImages;
     }
     if (elements.imageLibraryBulkCreateWrap) {
-      elements.imageLibraryBulkCreateWrap.hidden = !canManageAi;
+      elements.imageLibraryBulkCreateWrap.hidden = !(canManageAi && aiFeatureEnabled);
     }
     if (elements.imageLibraryBulkCreateUnassignedBoxButton) {
-      elements.imageLibraryBulkCreateUnassignedBoxButton.hidden = !canManageAi;
+      elements.imageLibraryBulkCreateUnassignedBoxButton.hidden = !(canManageAi && aiFeatureEnabled);
     }
     if (!isAdministrator) {
       closeUserEditor();
@@ -2772,7 +2792,7 @@
     const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.jigsawThumbnailImages);
     const assignedImagesByJigsawId = buildAssignedJigsawImagesByJigsawId(state.imageLibraryImages);
     const canEditJigsaw = currentUserHasCapability("jigsaw.update");
-    const canEnrichJigsaw = currentUserHasCapability("jigsaw.enrich");
+    const canEnrichJigsaw = currentUserHasCapability("jigsaw.enrich") && isAiFeatureEnabled();
     const canDetachJigsawImages = currentUserHasCapability("image.assign");
     const canRetireOrDelete = Array.isArray(state.user?.roles) && state.user.roles.includes("administrator");
     const canOpenOriginalImages = Boolean(state.user);
@@ -3591,7 +3611,7 @@
     const jigsawsById = new Map(state.jigsaws.map((jigsaw) => [Number(jigsaw.id), jigsaw]));
     const canSetTag = currentUserHasCapability("image.tag");
     const canAssign = currentUserHasCapability("image.assign");
-    const canUseAi = currentUserHasCapability("ai.manage");
+    const canUseAi = currentUserHasCapability("ai.manage") && isAiFeatureEnabled();
     const canEditImageContent = currentUserHasCapability("image.upload");
     pageResult.rows.forEach((image) => {
       const row = document.createElement("tr");
@@ -4670,6 +4690,17 @@
       elements.imageBrowserFindName.hidden = !canFindByName;
       elements.imageBrowserFindName.disabled = !canFindByName;
     }
+
+    if (elements.imageBrowserCreateJigsaw) {
+      const canCreateFromImage = Boolean(
+        item
+        && !item?.jigsaw_id
+        && currentUserHasCapability("ai.manage")
+        && isAiFeatureEnabled(),
+      );
+      elements.imageBrowserCreateJigsaw.hidden = !canCreateFromImage;
+      elements.imageBrowserCreateJigsaw.disabled = !canCreateFromImage;
+    }
   }
 
   function syncImageBrowserSaveButton() {
@@ -5055,6 +5086,16 @@
   async function createJigsawFromCurrentBrowserImage() {
     const item = getCurrentImageBrowserItem();
     if (!item) {
+      return;
+    }
+
+    if (!isAiFeatureEnabled()) {
+      showFeedback("Create-from-image is disabled in this runtime profile.", true);
+      return;
+    }
+
+    if (!currentUserHasCapability("ai.manage")) {
+      showFeedback("You do not have permission to create jigsaws from images.", true);
       return;
     }
 
@@ -5937,7 +5978,7 @@
       const canUpdateDiaryAny = currentUserHasCapability("diary.update_any");
       const canUpdateDiaryOwn = currentUserHasCapability("diary.update_own");
       const canDeleteDiaryAny = currentUserHasCapability("diary.delete_any");
-      const canAssignImages = currentUserHasCapability("image.assign");
+      const canAssignImages = currentUserHasCapability("image.assign") && isImageEmbeddingsFeatureEnabled();
       const canDeleteUnassignedImages = canCurrentUserDeleteImage({ jigsaw_id: null });
       const canEditThisEntry =
         isFormalDiaryEntry && (
@@ -6630,6 +6671,11 @@
   }
 
   async function handleDiarySuggestMatch(imageId) {
+    if (!isImageEmbeddingsFeatureEnabled()) {
+      showFeedback("Find similar is disabled in this runtime profile.", true);
+      return;
+    }
+
     const resolvedImageId = Number(imageId || 0);
     if (!resolvedImageId) {
       showFeedback("Could not determine which completed image to match.", true);
@@ -6678,6 +6724,11 @@
   }
 
   async function handleImageBrowserSuggestMatch() {
+    if (!isImageEmbeddingsFeatureEnabled()) {
+      showFeedback("Find similar is disabled in this runtime profile.", true);
+      return;
+    }
+
     const item = getCurrentImageBrowserItem();
     if (!item || !item.id) {
       showFeedback("Could not determine which image to match.", true);
@@ -6820,6 +6871,11 @@
   }
 
   async function handleImageLibrarySuggestMatch(imageId) {
+    if (!isImageEmbeddingsFeatureEnabled()) {
+      showFeedback("Find similar is disabled in this runtime profile.", true);
+      return;
+    }
+
     const resolvedImageId = Number(imageId || 0);
     if (!resolvedImageId) {
       showFeedback("Could not determine which image to match.", true);
@@ -6942,6 +6998,13 @@
   }
 
   async function loadAiUsageDiagnostics() {
+    if (!isAiFeatureEnabled()) {
+      state.aiUsageDiagnostics = null;
+      renderAiUsageDiagnostics(null);
+      closeAiUsageDetailModal();
+      return;
+    }
+
     if (!state.user) {
       state.aiUsageDiagnostics = null;
       renderAiUsageDiagnostics(null);
@@ -7047,6 +7110,14 @@
   }
 
   async function loadImageEmbeddingDiagnostics() {
+    if (!isImageEmbeddingsFeatureEnabled()) {
+      state.imageEmbeddingDiagnostics = null;
+      renderImageEmbeddingDiagnostics(null);
+      clearImageEmbeddingBackfillProgress();
+      setImageEmbeddingBackfillStatus("");
+      return;
+    }
+
     if (!state.user) {
       state.imageEmbeddingDiagnostics = null;
       renderImageEmbeddingDiagnostics(null);
@@ -7638,7 +7709,7 @@
   }
 
   function syncBulkCreateFromUploadVisibility() {
-    const shouldShow = currentUserHasCapability("ai.manage") && shouldShowBulkCreateFromUploadOption();
+    const shouldShow = isAiFeatureEnabled() && currentUserHasCapability("ai.manage") && shouldShowBulkCreateFromUploadOption();
     if (elements.imageLibraryBulkCreateWrap) {
       elements.imageLibraryBulkCreateWrap.hidden = !shouldShow;
     }
@@ -7723,6 +7794,10 @@
   }
 
   async function startBulkCreateJobForImageIds(imageIds) {
+    if (!isAiFeatureEnabled()) {
+      throw new Error("Create-from-image is disabled in this runtime profile.");
+    }
+
     const uniqueImageIds = Array.isArray(imageIds)
       ? imageIds.filter((imageId, index, values) => Number(imageId) > 0 && values.indexOf(imageId) === index)
       : [];
@@ -7810,6 +7885,11 @@
   async function handleImageEmbeddingBackfillStart(event) {
     clearFeedback();
     clearImageEmbeddingBackfillProgress();
+
+    if (!isImageEmbeddingsFeatureEnabled()) {
+      showFeedback("Image embeddings are disabled in this runtime profile.", true);
+      return;
+    }
 
     const requestedScope = String(event?.currentTarget?.dataset?.embeddingBackfillScope || "all").trim().toLowerCase();
     const scope = requestedScope === "missing" ? "missing" : "all";
@@ -7945,6 +8025,11 @@
   async function handleBulkCreateAllUnassignedBoxImages() {
     clearFeedback();
     clearBulkCreateProgress();
+
+    if (!isAiFeatureEnabled()) {
+      showFeedback("Create-from-image is disabled in this runtime profile.", true);
+      return;
+    }
 
     if (!currentUserHasCapability("ai.manage")) {
       showFeedback("You do not have permission to run bulk AI create.", true);
@@ -8203,6 +8288,11 @@
 
   async function handleEnrichJigsaw() {
     clearFeedback();
+
+    if (!isAiFeatureEnabled()) {
+      showFeedback("AI enrichment is disabled in this runtime profile.", true);
+      return;
+    }
 
     if (!currentUserHasCapability("jigsaw.enrich")) {
       showFeedback("You do not have permission to enrich jigsaws.", true);
@@ -8505,6 +8595,11 @@
       event.preventDefault();
       clearFeedback();
 
+      if (!isAiFeatureEnabled()) {
+        showFeedback("AI enrichment is disabled in this runtime profile.", true);
+        return;
+      }
+
       if (!currentUserHasCapability("jigsaw.enrich")) {
         showFeedback("You do not have permission to enrich jigsaws.", true);
         return;
@@ -8646,6 +8741,11 @@
       event.preventDefault();
       clearFeedback();
 
+      if (!isImageEmbeddingsFeatureEnabled()) {
+        showFeedback("Find similar is disabled in this runtime profile.", true);
+        return;
+      }
+
       if (!currentUserHasCapability("image.assign")) {
         showFeedback("You do not have permission to access image suggestions.", true);
         return;
@@ -8786,6 +8886,11 @@
     if (imageCreateButton) {
       event.preventDefault();
       clearFeedback();
+
+      if (!isAiFeatureEnabled()) {
+        showFeedback("Create-from-image is disabled in this runtime profile.", true);
+        return;
+      }
 
       if (!currentUserHasCapability("ai.manage")) {
         showFeedback("You do not have permission to create jigsaws from images.", true);

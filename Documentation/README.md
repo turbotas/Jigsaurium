@@ -2,15 +2,23 @@
 
 This folder defines the product, architecture, and delivery rules for Jigsaurium.
 
+Community/governance files at repository root:
+
+- `../CODE_OF_CONDUCT.md`
+- `../GOVERNANCE.md`
+
 - `product-spec.md`: Product goals, roles, scope, workflows, and acceptance criteria.
 - `architecture.md`: SPA/API architecture, backend boundaries, data model, and runtime targets.
 - `design-system.md`: GOV.UK Design System integration and customization rules.
 - `api-contract.md`: API conventions, payload shape, pagination, and error format.
 - `domain-rules.md`: Business rules for roles, jigsaw lifecycle, and loan lifecycle.
 - `operations-and-security.md`: runtime config, proxy trust model, logging, and release checks.
+- `simple-mode.md`: quick-start default runtime profile (no STFD, AI/embeddings off by default) and feature-flag matrix.
 - `roadmap.md`: Phase-based delivery plan for multiple developers.
 - `decisions.md`: ADR-style decision log.
 - `release-and-versioning.md`: SemVer tags, environment pointers, and release/promotion flow.
+- `public-release-readiness-audit.md`: Step 4.3 go/no-go audit record before repo visibility change.
+- `../CHANGELOG.md`: Keep-a-Changelog style release notes and unreleased changes.
 - `truenas-compose-import.md`: production compose baseline and TrueNAS YAML import notes.
 - `truenas-first-test-and-prod-deploy.md`: single-path runbook to release via GitHub Actions and deploy first test/prod app versions in TrueNAS.
 
@@ -52,6 +60,7 @@ This folder defines the product, architecture, and delivery rules for Jigsaurium
   - targeted Python dependency updates + known-good lock refresh (`scripts/update_python_dependencies.bat`, `scripts/update_python_dependencies.sh`)
   - GOV.UK asset updates (`scripts/update_govuk_assets.bat`, `scripts/update_govuk_assets.sh`)
   - admin bootstrap (`scripts/bootstrap_admin.py`)
+  - demo seed/reset (`scripts/seed_demo_data.py`, `scripts/reset_demo_data.py`)
 
 ## Pending Decisions Checklist
 

@@ -18,7 +18,9 @@
 - Backend: Flask.
 - ORM: SQLAlchemy 2.x.
 - Migrations: Alembic CLI (direct usage, not wrapper).
-- Database: MariaDB.
+- Database:
+  - MariaDB is the primary test/production baseline.
+  - SQLite is permitted for local quick-start/Simple Mode use only.
 - DB driver: PyMySQL.
 - Frontend: SPA consuming backend JSON APIs.
 

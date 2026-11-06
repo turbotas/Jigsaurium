@@ -286,3 +286,24 @@
 - Why: users need to upload supporting reference images alongside box/completed photos in the same guided flow.
 - Decision: add HEIF/HEIC decoder registration (`pillow-heif`) so EXIF/capture-time extraction can work when supported by source files.
 - Why: guided capture and gallery uploads increasingly include HEIF/HEIC assets from modern phones, and metadata extraction quality depends on codec support.
+
+## 2026-11-06 - Open Source License Selection (AGPL-3.0)
+
+- Decision: license Jigsaurium under **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+- Why: project direction favors strong copyleft and preserving user freedoms for both redistributed and network-hosted modified versions.
+- Why: AGPL aligns with a web-application/API deployment model where SaaS use is a primary distribution path.
+
+## 2026-11-06 - Simple Mode Default Profile (no STFD, AI/embeddings disabled)
+
+- Decision: define a documented Simple Mode profile for quick-start and evaluation with `STFD_ENABLED=0`, `AI_ENABLED=0`, and `IMAGE_EMBEDDINGS_ENABLED=0` by default.
+- Why: reduces startup friction and removes external identity/AI dependency requirements for first-run usage.
+- Decision: require UI suppression of controls tied to disabled AI/embedding capabilities.
+- Why: avoids dead-end controls and improves first-run usability.
+
+## 2026-11-06 - Quick-Start Datastore Strategy (SQLite local + MariaDB primary)
+
+- Decision: adopt SQLite as the recommended datastore for local Simple Mode quick-start.
+- Decision: keep MariaDB as the primary test/production datastore baseline.
+- Why: SQLite reduces first-run operational overhead without requiring a second persistence model.
+- Why: this preserves SQLAlchemy + Alembic migration patterns and avoids NoSQL model divergence.
+- Impact: CI and maintainer validation must continue to guard against engine-specific SQL behavior differences.

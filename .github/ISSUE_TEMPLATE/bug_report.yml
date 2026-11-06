@@ -1,0 +1,69 @@
+name: Bug report
+description: Report a reproducible bug or regression.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug.
+        Please provide enough detail for maintainers to reproduce and triage quickly.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is wrong?
+      placeholder: Short description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List exact steps and inputs.
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, browser, app version/build SHA, and runtime mode (Simple Mode / custom config).
+      placeholder: Windows 11, Chromium 130, APP_VERSION v0.1.0, APP_BUILD_SHA abc123...
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots (optional)
+      description: Paste stack traces, API errors, screenshots, or recordings.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I checked for existing duplicate issues.
+          required: true
+        - label: I removed secrets/tokens/private data from logs and screenshots.
+          required: true

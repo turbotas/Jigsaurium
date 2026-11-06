@@ -394,6 +394,43 @@ def test_admin_can_get_image_embedding_diagnostics(client, seeded_image_library_
 
 
 @pytest.mark.functional
+def test_image_embedding_backfill_rejects_when_feature_disabled(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    app.config["IMAGE_EMBEDDINGS_ENABLED"] = False
+
+    response = client.post(
+        "/api/v1/image-embeddings/backfill",
+        headers=_csrf_headers(),
+        json={"scope": "all"},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["message"] == "Image embeddings are disabled in server configuration."
+
+
+@pytest.mark.functional
+def test_match_suggestions_rejects_when_feature_disabled(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    app.config["IMAGE_EMBEDDINGS_ENABLED"] = False
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "tag": "Completed",
+            "files": [(BytesIO(_make_png_bytes(color=(40, 40, 40))), "completed-for-match.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image_id = int(upload_response.get_json()["data"]["created"][0]["id"])
+
+    response = client.get(f"/api/v1/image-library/images/{image_id}/match-suggestions")
+    assert response.status_code == 409
+    assert response.get_json()["error"]["message"] == "Image embeddings are disabled in server configuration."
+
+
+@pytest.mark.functional
 def test_admin_can_backfill_missing_embeddings_only(client, seeded_image_library_data, app, embedding_test_fallback):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
     app.config["IMAGE_EMBEDDINGS_ENABLED"] = False
@@ -1604,6 +1641,32 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
 
 
 @pytest.mark.functional
+def test_create_jigsaw_from_image_rejects_when_ai_disabled(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"q" * 24), "disabled-ai.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    app.config["AI_ENABLED"] = False
+
+    response = client.post(
+        f"/api/v1/image-library/images/{image_id}/create-jigsaw",
+        headers=_csrf_headers(),
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["message"] == "Create-from-image AI is disabled in server configuration."
+
+
+@pytest.mark.functional
 def test_create_jigsaw_from_image_tolerates_messy_ai_payload_types(client, seeded_image_library_data, app, monkeypatch):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 
@@ -1924,6 +1987,36 @@ def test_enrich_jigsaw_from_images_rejects_without_box_tagged_images(client, see
 
 
 @pytest.mark.functional
+def test_enrich_jigsaw_from_images_rejects_when_ai_disabled(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
+            "tag": "Box",
+            "files": [
+                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"c" * 32), "box-for-disabled-enrich.png", "image/png"),
+            ],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+
+    app.config["AI_ENABLED"] = False
+
+    response = client.post(
+        f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/enrich-from-images",
+        headers=_csrf_headers(),
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["message"] == "AI enrichment is disabled in server configuration."
+
+
+@pytest.mark.functional
 def test_admin_can_start_bulk_create_jigsaws_job(client, seeded_image_library_data, app, monkeypatch):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 
@@ -2091,7 +2184,60 @@ def test_admin_can_start_bulk_create_for_all_unassigned_box_images(client, seede
 
 
 @pytest.mark.functional
-def test_bulk_create_jigsaws_job_tracks_failed_items(client, seeded_image_library_data):
+def test_bulk_create_jigsaws_rejects_when_ai_disabled(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"z" * 24), "bulk-disabled.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    app.config["AI_ENABLED"] = False
+
+    response = client.post(
+        "/api/v1/image-library/bulk-create-jigsaws",
+        headers=_csrf_headers(),
+        json={"image_ids": [image_id]},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["message"] == "Create-from-image AI is disabled in server configuration."
+
+
+@pytest.mark.functional
+def test_bulk_create_unassigned_box_rejects_when_ai_disabled(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"y" * 24), "bulk-unassigned-disabled.png", "image/png")],
+            "tag": "Box",
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+
+    app.config["AI_ENABLED"] = False
+
+    response = client.post(
+        "/api/v1/image-library/bulk-create-jigsaws/unassigned-box",
+        headers=_csrf_headers(),
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["message"] == "Create-from-image AI is disabled in server configuration."
+
+
+@pytest.mark.functional
+def test_bulk_create_jigsaws_rejects_when_ai_not_fully_configured(client, seeded_image_library_data, app):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 
     upload_response = client.post(
@@ -2105,22 +2251,18 @@ def test_bulk_create_jigsaws_job_tracks_failed_items(client, seeded_image_librar
     assert upload_response.status_code == 201
     image_id = upload_response.get_json()["data"]["created"][0]["id"]
 
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = ""
+    app.config["AI_MODEL"] = ""
+    app.config["AI_ENDPOINT_URL"] = ""
+
     start_response = client.post(
         "/api/v1/image-library/bulk-create-jigsaws",
         headers=_csrf_headers(),
         json={"image_ids": [image_id]},
     )
-    assert start_response.status_code == 202
-    job = start_response.get_json()["data"]["job"]
-    assert job["status"] == "failed"
-    assert job["failed_items"] == 1
-
-    items_response = client.get(f"/api/v1/image-library/bulk-create-jigsaws/{job['id']}/items")
-    assert items_response.status_code == 200
-    items = items_response.get_json()["data"]
-    assert len(items) == 1
-    assert items[0]["status"] == "failed"
-    assert items[0]["error_code"] == "conflict"
+    assert start_response.status_code == 409
+    assert start_response.get_json()["error"]["message"] == "Create-from-image AI is not fully configured."
 
 
 @pytest.mark.functional

@@ -30,6 +30,28 @@ def test_create_app_accepts_custom_config_object():
 
 
 @pytest.mark.functional
+def test_create_app_rejects_invalid_backup_compression_value():
+    class InvalidConfig:
+        SECRET_KEY = "custom-key"
+        TESTING = True
+        DB_BACKUP_COMPRESSION = "zip"
+
+    with pytest.raises(RuntimeError, match="DB_BACKUP_COMPRESSION"):
+        create_app(InvalidConfig)
+
+
+@pytest.mark.functional
+def test_create_app_rejects_negative_ai_daily_budget_value():
+    class InvalidConfig:
+        SECRET_KEY = "custom-key"
+        TESTING = True
+        AI_DAILY_BUDGET_USD = -1
+
+    with pytest.raises(RuntimeError, match="AI_DAILY_BUDGET_USD"):
+        create_app(InvalidConfig)
+
+
+@pytest.mark.functional
 def test_home_route_returns_ok(client):
     response = client.get("/")
 
@@ -58,6 +80,8 @@ def test_home_route_renders_expected_content(client):
     assert b"id=\"admin-sections\" hidden" in response.data
     assert b"id=\"image-editor-context\"" in response.data
     assert b"data-enabled=\"0\"" in response.data
+    assert b"data-feature-ai-enabled=\"" in response.data
+    assert b"data-feature-embeddings-enabled=\"" in response.data
     assert b"/static/js/app.js" in response.data
     assert b"/mobile-capture" in response.data
 
@@ -70,6 +94,19 @@ def test_image_editor_route_renders_home_in_editor_mode(client):
     assert b"id=\"image-editor-context\"" in response.data
     assert b"data-enabled=\"1\"" in response.data
     assert b"data-image-id=\"42\"" in response.data
+    assert b"data-feature-ai-enabled=\"" in response.data
+    assert b"data-feature-embeddings-enabled=\"" in response.data
+
+
+@pytest.mark.functional
+def test_home_route_exposes_feature_flag_data_attributes(app, client):
+    app.config["AI_ENABLED"] = True
+    app.config["IMAGE_EMBEDDINGS_ENABLED"] = False
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b"data-feature-ai-enabled=\"1\"" in response.data
+    assert b"data-feature-embeddings-enabled=\"0\"" in response.data
 
 
 @pytest.mark.functional

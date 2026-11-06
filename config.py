@@ -8,16 +8,22 @@ def _parse_csv(value):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _parse_optional_int(value):
+def _parse_optional_int(value, env_name="value"):
     if value is None or value == "":
         return None
-    return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Invalid {env_name}: expected integer, got {value!r}") from error
 
 
-def _parse_optional_float(value):
+def _parse_optional_float(value, env_name="value"):
     if value is None or value == "":
         return None
-    return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Invalid {env_name}: expected number, got {value!r}") from error
 
 
 def _parse_bool(value, default=False):
@@ -36,14 +42,14 @@ class Config:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     CANONICAL_HOST = os.getenv("CANONICAL_HOST", "localhost")
     TRUSTED_PROXY_CIDRS = _parse_csv(os.getenv("TRUSTED_PROXY_CIDRS", ""))
-    TRUSTED_PROXY_HOPS = _parse_optional_int(os.getenv("TRUSTED_PROXY_HOPS"))
+    TRUSTED_PROXY_HOPS = _parse_optional_int(os.getenv("TRUSTED_PROXY_HOPS"), env_name="TRUSTED_PROXY_HOPS")
     TRUSTED_CLIENT_CIDRS = _parse_csv(os.getenv("TRUSTED_CLIENT_CIDRS", ""))
     AI_ENABLED = _parse_bool(os.getenv("AI_ENABLED"), default=False)
     AI_API_KEY = os.getenv("AI_API_KEY", "")
     AI_ENDPOINT_URL = os.getenv("AI_ENDPOINT_URL", "")
     AI_MODEL = os.getenv("AI_MODEL", "")
-    AI_TIMEOUT_SECONDS = _parse_optional_int(os.getenv("AI_TIMEOUT_SECONDS")) or 60
-    AI_DAILY_BUDGET_USD = _parse_optional_float(os.getenv("AI_DAILY_BUDGET_USD"))
+    AI_TIMEOUT_SECONDS = _parse_optional_int(os.getenv("AI_TIMEOUT_SECONDS"), env_name="AI_TIMEOUT_SECONDS") or 60
+    AI_DAILY_BUDGET_USD = _parse_optional_float(os.getenv("AI_DAILY_BUDGET_USD"), env_name="AI_DAILY_BUDGET_USD")
     BULK_AI_CREATE_INLINE = _parse_bool(os.getenv("BULK_AI_CREATE_INLINE"), default=False)
     IMAGE_EMBEDDINGS_ENABLED = _parse_bool(os.getenv("IMAGE_EMBEDDINGS_ENABLED"), default=False)
     IMAGE_EMBEDDING_MODEL_NAME = os.getenv("IMAGE_EMBEDDING_MODEL_NAME", "openai/clip-vit-base-patch32")
@@ -63,8 +69,11 @@ class Config:
     IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES = _parse_csv(
         os.getenv("IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES", "box,reference")
     )
-    MAX_CONTENT_LENGTH = _parse_optional_int(os.getenv("MAX_CONTENT_LENGTH_BYTES")) or (32 * 1024 * 1024)
-    SESSION_IDLE_TIMEOUT_MINUTES = _parse_optional_int(os.getenv("SESSION_IDLE_TIMEOUT_MINUTES")) or 120
+    MAX_CONTENT_LENGTH = _parse_optional_int(os.getenv("MAX_CONTENT_LENGTH_BYTES"), env_name="MAX_CONTENT_LENGTH_BYTES") or (32 * 1024 * 1024)
+    SESSION_IDLE_TIMEOUT_MINUTES = _parse_optional_int(
+        os.getenv("SESSION_IDLE_TIMEOUT_MINUTES"),
+        env_name="SESSION_IDLE_TIMEOUT_MINUTES",
+    ) or 120
     PERMANENT_SESSION_LIFETIME = timedelta(minutes=SESSION_IDLE_TIMEOUT_MINUTES)
     SESSION_REFRESH_EACH_REQUEST = True
     SESSION_COOKIE_SECURE = APP_ENV != "dev"
@@ -83,5 +92,11 @@ class Config:
     STFD_ROLE_UNI_BORROWER = os.getenv("STFD_ROLE_UNI_BORROWER", "")
     DB_BACKUP_STORAGE_PATH = os.getenv("DB_BACKUP_STORAGE_PATH", "")
     DB_BACKUP_COMPRESSION = os.getenv("DB_BACKUP_COMPRESSION", "gzip")
-    DB_BACKUP_BLOB_CHUNK_BYTES = _parse_optional_int(os.getenv("DB_BACKUP_BLOB_CHUNK_BYTES")) or (32 * 1024)
-    DB_BACKUP_MAX_STATEMENT_BYTES = _parse_optional_int(os.getenv("DB_BACKUP_MAX_STATEMENT_BYTES")) or (4 * 1024 * 1024)
+    DB_BACKUP_BLOB_CHUNK_BYTES = _parse_optional_int(
+        os.getenv("DB_BACKUP_BLOB_CHUNK_BYTES"),
+        env_name="DB_BACKUP_BLOB_CHUNK_BYTES",
+    ) or (32 * 1024)
+    DB_BACKUP_MAX_STATEMENT_BYTES = _parse_optional_int(
+        os.getenv("DB_BACKUP_MAX_STATEMENT_BYTES"),
+        env_name="DB_BACKUP_MAX_STATEMENT_BYTES",
+    ) or (4 * 1024 * 1024)

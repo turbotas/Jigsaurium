@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest an improvement or new capability.
+title: "feature: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Please describe the problem and the expected outcome.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What user or operator problem are you trying to solve?
+      placeholder: As a ..., I need ... because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe your preferred approach.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered (optional)
+      description: Other options or workarounds you've considered.
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and impact
+      description: Mention affected areas (API, UI, schema/migrations, docs, security, etc.).
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I checked for existing duplicate feature requests.
+          required: true
+        - label: I reviewed CONTRIBUTING.md and relevant Documentation/* specs.
+          required: true

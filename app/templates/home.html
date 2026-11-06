@@ -59,6 +59,8 @@
     id="image-editor-context"
     data-enabled="{{ '1' if image_editor_mode else '0' }}"
     data-image-id="{{ image_editor_image_id if image_editor_image_id is not none else '' }}"
+    data-feature-ai-enabled="{{ '1' if feature_ai_enabled else '0' }}"
+    data-feature-embeddings-enabled="{{ '1' if feature_embeddings_enabled else '0' }}"
     hidden
   ></div>
 

@@ -12,6 +12,18 @@
   - `environments/prod.env.local`
 - Never commit `*.local` environment files.
 
+## Simple Mode Default Profile (M2 Step 2.1)
+
+For quick-start/local onboarding, Simple Mode defaults are:
+
+- `STFD_ENABLED=0`
+- `AI_ENABLED=0`
+- `IMAGE_EMBEDDINGS_ENABLED=0`
+
+With these defaults, STFD/AI/embedding credentials are optional and may be blank in local templates.
+
+See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behavior expectations.
+
 ## Dependency Profiles
 
 - Use `requirements/prod.txt` for production/runtime-only installs.
@@ -153,3 +165,27 @@
 - CI workflows enforce a GPU package guard: fail when pip resolves any `nvidia-*` or `cuda-*` package.
 - Functional and UI tests use Alembic-migrated test databases (not ORM `create_all`) to keep schema behavior aligned with runtime environments.
 - Alembic migration execution fails fast if target URL resolves to in-memory SQLite (`sqlite+pysqlite:///:memory:`) to avoid false-positive migration runs.
+
+## Test Quality Statement (M3 Step 3.2)
+
+Jigsaurium uses a **scope-based test quality policy** rather than a global percentage-only coverage gate.
+
+### Minimum policy for changes
+
+- Every behavior change must include tests at the level where the behavior is enforced:
+  - API/domain rule changes: functional API tests.
+  - UI interaction changes: UI smoke tests (or functional coverage when UI-only automation is not practical).
+  - Migration/schema changes: migration validation via Alembic upgrade path checks.
+- Bug fixes must include a regression test that fails before the fix and passes after it.
+- New public-facing or admin critical-path workflows must have at least one end-to-end happy-path test.
+
+### CI baseline required for merge readiness
+
+- `API and Core Tests` must pass (`pytest -m "not ui"`).
+- `UI Smoke Tests` must pass for pull requests and default-branch pushes.
+- `Embedding Runtime Tests` remain a separate manual/weekly guardrail and are required before release-candidate sign-off when embedding behavior changed.
+
+### Coverage target posture
+
+- Preferred direction: maintain or improve meaningful coverage over time, especially around authn/authz, audit logging, jigsaw/diary/image-library workflows, and migrations.
+- Temporary exceptions are allowed only when documented in the relevant issue/PR with follow-up work explicitly tracked.

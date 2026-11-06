@@ -62,6 +62,66 @@ def _validate_stfd_config_on_startup(app):
         app.logger.warning("STFD_SHARED_KEY is shorter than recommended (32+ chars).")
 
 
+def _validate_runtime_config_on_startup(app):
+    errors = []
+
+    app_env = str(app.config.get("APP_ENV", "")).strip().lower()
+    if app_env not in {"dev", "test", "prod"}:
+        errors.append(
+            f"APP_ENV must be one of dev/test/prod (received {app.config.get('APP_ENV')!r})."
+        )
+
+    database_url = str(app.config.get("DATABASE_URL", "") or "").strip()
+    if not database_url:
+        errors.append("DATABASE_URL must be set to a valid SQLAlchemy connection string.")
+
+    ai_timeout_seconds = int(app.config.get("AI_TIMEOUT_SECONDS", 60) or 60)
+    if ai_timeout_seconds < 1:
+        errors.append("AI_TIMEOUT_SECONDS must be >= 1.")
+
+    daily_budget = app.config.get("AI_DAILY_BUDGET_USD")
+    if daily_budget is not None and float(daily_budget) < 0:
+        errors.append("AI_DAILY_BUDGET_USD must be a non-negative number when set.")
+
+    max_content_length = app.config.get("MAX_CONTENT_LENGTH")
+    if max_content_length is not None and int(max_content_length) < 1024:
+        errors.append("MAX_CONTENT_LENGTH_BYTES must be >= 1024 when set.")
+
+    session_idle_timeout_minutes = int(app.config.get("SESSION_IDLE_TIMEOUT_MINUTES", 0) or 0)
+    if session_idle_timeout_minutes < 1:
+        errors.append("SESSION_IDLE_TIMEOUT_MINUTES must be >= 1.")
+
+    backup_compression = str(app.config.get("DB_BACKUP_COMPRESSION", "gzip") or "gzip").strip().lower()
+    if backup_compression not in {"gzip", "bzip2", "none"}:
+        errors.append(
+            "DB_BACKUP_COMPRESSION must be one of: gzip, bzip2, none."
+        )
+
+    if errors:
+        detail = "\n - ".join(["Configuration validation failed:", *errors])
+        raise RuntimeError(detail)
+
+    if bool(app.config.get("AI_ENABLED", False)):
+        missing_ai_keys = [
+            key
+            for key in ("AI_API_KEY", "AI_ENDPOINT_URL", "AI_MODEL")
+            if not str(app.config.get(key, "") or "").strip()
+        ]
+        if missing_ai_keys:
+            app.logger.warning(
+                "AI is enabled but configuration is incomplete; set %s to use AI create/enrich endpoints.",
+                ", ".join(missing_ai_keys),
+            )
+
+    if bool(app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
+        model_name = str(app.config.get("IMAGE_EMBEDDING_MODEL_NAME", "") or "").strip()
+        if not model_name:
+            raise RuntimeError(
+                "Configuration validation failed:\n"
+                " - IMAGE_EMBEDDING_MODEL_NAME must be set when IMAGE_EMBEDDINGS_ENABLED=1."
+            )
+
+
 def _warm_embeddings_on_startup(app):
     if not bool(app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
         return
@@ -161,6 +221,8 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("DB_BACKUP_COMPRESSION", "gzip")
     app.config.setdefault("DB_BACKUP_BLOB_CHUNK_BYTES", 32 * 1024)
     app.config.setdefault("DB_BACKUP_MAX_STATEMENT_BYTES", 4 * 1024 * 1024)
+
+    _validate_runtime_config_on_startup(app)
 
     backup_blob_chunk_bytes = int(app.config.get("DB_BACKUP_BLOB_CHUNK_BYTES", 32 * 1024) or 32 * 1024)
     if backup_blob_chunk_bytes < 1024:
