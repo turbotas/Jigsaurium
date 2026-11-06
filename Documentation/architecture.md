@@ -103,5 +103,7 @@
 - Parse RFC7239 `Forwarded` header for request origin details used in logs and audit context.
 - Support `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` as compatibility fallbacks.
 - Trust forwarded headers only from configured proxy hops/networks.
+- Forwarded `proto` and `host` values are ignored when request source is not a trusted proxy.
 - Persist both socket remote address and resolved client/proxy chain in request logs.
 - Include resolved scheme and host in audit metadata for sensitive actions.
+- Canonical host policy is app-configurable via `CANONICAL_HOST_ENFORCEMENT` (`strict` or `off`), with strict mode rejecting non-canonical hosts at the app layer.

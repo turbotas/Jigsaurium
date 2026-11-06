@@ -52,6 +52,39 @@ def test_create_app_rejects_negative_ai_daily_budget_value():
 
 
 @pytest.mark.functional
+def test_create_app_rejects_default_secret_key_in_non_dev_environment():
+    class InvalidConfig:
+        APP_ENV = "test"
+        SECRET_KEY = "dev-secret-key"
+        TESTING = True
+
+    with pytest.raises(RuntimeError, match="SECRET_KEY"):
+        create_app(InvalidConfig)
+
+
+@pytest.mark.functional
+def test_create_app_rejects_short_secret_key_in_non_dev_environment():
+    class InvalidConfig:
+        APP_ENV = "prod"
+        SECRET_KEY = "short-secret"
+        TESTING = True
+
+    with pytest.raises(RuntimeError, match="SECRET_KEY"):
+        create_app(InvalidConfig)
+
+
+@pytest.mark.functional
+def test_create_app_allows_default_secret_key_in_dev_environment():
+    class DevConfig:
+        APP_ENV = "dev"
+        SECRET_KEY = "dev-secret-key"
+        TESTING = True
+
+    app = create_app(DevConfig)
+    assert app.config["SECRET_KEY"] == "dev-secret-key"
+
+
+@pytest.mark.functional
 def test_home_route_returns_ok(client):
     response = client.get("/")
 

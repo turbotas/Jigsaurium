@@ -1332,8 +1332,8 @@ def _record_audit_event(action, entity_type, entity_id, payload=None, actor_user
         remote_addr=getattr(g, "remote_addr", request.remote_addr),
         client_ip_resolved=getattr(g, "client_ip_resolved", request.remote_addr),
         forwarded_chain=getattr(g, "forwarded_chain", None),
-        scheme=request.scheme,
-        host=request.host,
+        scheme=getattr(g, "request_scheme_resolved", request.scheme),
+        host=getattr(g, "request_host_resolved", request.host),
         payload_json=json.dumps(payload, sort_keys=True) if payload is not None else None,
     )
     db_session.add(audit_event)

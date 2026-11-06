@@ -3,9 +3,11 @@ import pytest
 from app.db import get_session
 from app.models import BlockedIp
 from app.request_security import (
+    normalize_host,
     reset_request_security_state,
     resolve_client_request_context,
     resolve_console_log_ip,
+    resolve_request_origin_context,
 )
 
 
@@ -102,6 +104,95 @@ def test_resolve_console_log_ip_ignores_forwarded_value_for_untrusted_proxy():
     )
 
     assert resolved_ip == "198.51.100.20"
+
+
+@pytest.mark.functional
+def test_normalize_host_strips_port_and_normalizes_case():
+    assert normalize_host("WWW.Example.COM:8443") == "www.example.com"
+
+
+@pytest.mark.functional
+def test_canonical_host_enforcement_strict_blocks_non_canonical_api_host(client, app):
+    app.config["CANONICAL_HOST_ENFORCEMENT"] = "strict"
+    app.config["CANONICAL_HOST"] = "www.example.test"
+
+    response = client.get("/api/v1/health", base_url="http://wrong-host.test")
+
+    assert response.status_code == 421
+    payload = response.get_json()
+    assert payload["error"]["code"] == "misdirected_request"
+    assert payload["meta"]["request_id"].startswith("req_")
+
+
+@pytest.mark.functional
+def test_canonical_host_enforcement_strict_allows_canonical_api_host_with_port(client, app):
+    app.config["CANONICAL_HOST_ENFORCEMENT"] = "strict"
+    app.config["CANONICAL_HOST"] = "www.example.test"
+
+    response = client.get("/api/v1/health", base_url="http://www.example.test:8443")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.functional
+def test_canonical_host_enforcement_off_allows_non_canonical_host(client, app):
+    app.config["CANONICAL_HOST_ENFORCEMENT"] = "off"
+    app.config["CANONICAL_HOST"] = "www.example.test"
+
+    response = client.get("/api/v1/health", base_url="http://wrong-host.test")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.functional
+def test_resolve_request_origin_context_uses_forwarded_scheme_host_for_trusted_proxy():
+    context = resolve_request_origin_context(
+        remote_addr="192.168.51.12",
+        forwarded_header='for="203.0.113.11";proto=https;host="public.example.test", for="192.168.51.99"',
+        x_forwarded_proto_header="http",
+        x_forwarded_host_header="ignored.example.test",
+        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_hops=None,
+        current_scheme="http",
+        current_host="internal.local:5000",
+    )
+
+    assert context.scheme == "https"
+    assert context.host == "public.example.test"
+
+
+@pytest.mark.functional
+def test_resolve_request_origin_context_uses_x_forwarded_fallback_for_trusted_proxy():
+    context = resolve_request_origin_context(
+        remote_addr="192.168.51.12",
+        forwarded_header='for="203.0.113.11"',
+        x_forwarded_proto_header="https",
+        x_forwarded_host_header="public-fallback.example.test",
+        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_hops=None,
+        current_scheme="http",
+        current_host="internal.local:5000",
+    )
+
+    assert context.scheme == "https"
+    assert context.host == "public-fallback.example.test"
+
+
+@pytest.mark.functional
+def test_resolve_request_origin_context_ignores_forwarded_scheme_host_for_untrusted_proxy():
+    context = resolve_request_origin_context(
+        remote_addr="198.51.100.20",
+        forwarded_header='for="203.0.113.11";proto=https;host="public.example.test"',
+        x_forwarded_proto_header="https",
+        x_forwarded_host_header="public-fallback.example.test",
+        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_hops=None,
+        current_scheme="http",
+        current_host="internal.local:5000",
+    )
+
+    assert context.scheme == "http"
+    assert context.host == "internal.local"
 
 
 @pytest.mark.functional

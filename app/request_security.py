@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from ipaddress import ip_address, ip_network
 import threading
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 
@@ -30,6 +31,12 @@ class ClientRequestContext:
     remote_addr: str
     client_ip_resolved: str
     forwarded_chain: str | None
+
+
+@dataclass(frozen=True)
+class RequestOriginContext:
+    scheme: str
+    host: str | None
 
 
 def resolve_console_log_ip(
@@ -72,6 +79,94 @@ def _parse_ip_candidate(value):
 
 def normalize_ip_address(value):
     return _parse_ip_candidate(value)
+
+
+def normalize_host(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    parsed = urlsplit(f"//{text}")
+    hostname = (parsed.hostname or "").strip().rstrip(".").lower()
+    return hostname or None
+
+
+def _is_request_from_trusted_proxy(*, remote_addr, trusted_proxy_cidrs, trusted_proxy_hops):
+    remote_ip = _parse_ip_candidate(remote_addr) or "unknown"
+    trusted_proxy_list = [cidr for cidr in (trusted_proxy_cidrs or []) if str(cidr).strip()]
+    has_trusted_proxy_cidrs = bool(trusted_proxy_list)
+    use_trusted_proxy_hops = bool(trusted_proxy_hops and trusted_proxy_hops > 0 and not has_trusted_proxy_cidrs)
+
+    if has_trusted_proxy_cidrs:
+        return _is_trusted_proxy_ip(remote_ip, trusted_proxy_list)
+    return use_trusted_proxy_hops
+
+
+def _parse_forwarded_header_param(header_value, param_name):
+    if not header_value or not param_name:
+        return None
+
+    target_key = str(param_name).strip().lower()
+    for hop in str(header_value).split(","):
+        for pair in hop.split(";"):
+            key, separator, raw_value = pair.partition("=")
+            if separator != "=" or key.strip().lower() != target_key:
+                continue
+            candidate = str(raw_value or "").strip().strip('"')
+            if candidate:
+                return candidate
+    return None
+
+
+def _parse_scheme_candidate(value):
+    candidate = str(value or "").strip().lower()
+    if candidate in {"http", "https"}:
+        return candidate
+    return None
+
+
+def _parse_x_forwarded_proto(value):
+    if not value:
+        return None
+    first = str(value).split(",", 1)[0]
+    return _parse_scheme_candidate(first)
+
+
+def _parse_x_forwarded_host(value):
+    if not value:
+        return None
+    first = str(value).split(",", 1)[0]
+    return normalize_host(first)
+
+
+def resolve_request_origin_context(
+    *,
+    remote_addr,
+    forwarded_header,
+    x_forwarded_proto_header,
+    x_forwarded_host_header,
+    trusted_proxy_cidrs,
+    trusted_proxy_hops,
+    current_scheme,
+    current_host,
+):
+    resolved_scheme = _parse_scheme_candidate(current_scheme) or "http"
+    resolved_host = normalize_host(current_host)
+
+    if not _is_request_from_trusted_proxy(
+        remote_addr=remote_addr,
+        trusted_proxy_cidrs=trusted_proxy_cidrs,
+        trusted_proxy_hops=trusted_proxy_hops,
+    ):
+        return RequestOriginContext(scheme=resolved_scheme, host=resolved_host)
+
+    forwarded_proto = _parse_scheme_candidate(_parse_forwarded_header_param(forwarded_header, "proto"))
+    forwarded_host = normalize_host(_parse_forwarded_header_param(forwarded_header, "host"))
+
+    resolved_scheme = forwarded_proto or _parse_x_forwarded_proto(x_forwarded_proto_header) or resolved_scheme
+    resolved_host = forwarded_host or _parse_x_forwarded_host(x_forwarded_host_header) or resolved_host
+
+    return RequestOriginContext(scheme=resolved_scheme, host=resolved_host)
 
 
 def _parse_forwarded_header_ip_chain(header_value):
@@ -138,10 +233,11 @@ def resolve_client_request_context(
     has_trusted_proxy_cidrs = bool(trusted_proxy_list)
     use_trusted_proxy_hops = bool(trusted_proxy_hops and trusted_proxy_hops > 0 and not has_trusted_proxy_cidrs)
 
-    if has_trusted_proxy_cidrs:
-        is_trusted_proxy = _is_trusted_proxy_ip(remote_ip, trusted_proxy_list)
-    else:
-        is_trusted_proxy = use_trusted_proxy_hops
+    is_trusted_proxy = _is_request_from_trusted_proxy(
+        remote_addr=remote_addr,
+        trusted_proxy_cidrs=trusted_proxy_cidrs,
+        trusted_proxy_hops=trusted_proxy_hops,
+    )
 
     if not is_trusted_proxy:
         return ClientRequestContext(

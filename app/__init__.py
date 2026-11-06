@@ -12,8 +12,10 @@ from app.request_security import (
     AUTO_BLOCK_SOURCE,
     build_auto_blocked_until,
     get_request_ban_retry_after_seconds,
+    normalize_host,
     record_request_outcome,
     resolve_client_request_context,
+    resolve_request_origin_context,
     reset_request_security_state,
     upsert_blocked_ip,
 )
@@ -90,6 +92,35 @@ def _validate_runtime_config_on_startup(app):
     session_idle_timeout_minutes = int(app.config.get("SESSION_IDLE_TIMEOUT_MINUTES", 0) or 0)
     if session_idle_timeout_minutes < 1:
         errors.append("SESSION_IDLE_TIMEOUT_MINUTES must be >= 1.")
+
+    secret_key = str(app.config.get("SECRET_KEY", "") or "")
+    if app_env in {"test", "prod"}:
+        stripped_secret_key = secret_key.strip()
+        default_or_placeholder_values = {
+            "dev-secret-key",
+            "change-me",
+            "changeme",
+            "default",
+            "secret",
+        }
+        if not stripped_secret_key:
+            errors.append("SECRET_KEY must be set in non-dev environments.")
+        elif stripped_secret_key in default_or_placeholder_values:
+            errors.append(
+                "SECRET_KEY uses a default/placeholder value; set a unique random value in non-dev environments."
+            )
+        elif len(stripped_secret_key) < 16:
+            errors.append(
+                "SECRET_KEY is too short for non-dev environments; use at least 16 characters of random entropy."
+            )
+
+    canonical_host_enforcement = str(app.config.get("CANONICAL_HOST_ENFORCEMENT", "strict") or "strict").strip().lower()
+    if canonical_host_enforcement not in {"strict", "off"}:
+        errors.append("CANONICAL_HOST_ENFORCEMENT must be one of: strict, off.")
+
+    canonical_host = normalize_host(app.config.get("CANONICAL_HOST", ""))
+    if canonical_host_enforcement == "strict" and not canonical_host:
+        errors.append("CANONICAL_HOST must be set when CANONICAL_HOST_ENFORCEMENT is strict.")
 
     backup_compression = str(app.config.get("DB_BACKUP_COMPRESSION", "gzip") or "gzip").strip().lower()
     if backup_compression not in {"gzip", "bzip2", "none"}:
@@ -178,6 +209,7 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     app.config.setdefault("LOG_LEVEL", "INFO")
     app.config.setdefault("CANONICAL_HOST", "localhost")
+    app.config.setdefault("CANONICAL_HOST_ENFORCEMENT", "strict")
     app.config.setdefault("TRUSTED_PROXY_CIDRS", [])
     app.config.setdefault("TRUSTED_PROXY_HOPS", None)
     app.config.setdefault("TRUSTED_CLIENT_CIDRS", [])
@@ -240,6 +272,51 @@ def create_app(config_class="config.Config"):
     @app.before_request
     def set_request_id():
         g.request_id = f"req_{uuid4().hex[:12]}"
+
+        origin_context = resolve_request_origin_context(
+            remote_addr=request.remote_addr,
+            forwarded_header=request.headers.get("Forwarded"),
+            x_forwarded_proto_header=request.headers.get("X-Forwarded-Proto"),
+            x_forwarded_host_header=request.headers.get("X-Forwarded-Host"),
+            trusted_proxy_cidrs=app.config.get("TRUSTED_PROXY_CIDRS", []),
+            trusted_proxy_hops=app.config.get("TRUSTED_PROXY_HOPS"),
+            current_scheme=request.scheme,
+            current_host=request.host,
+        )
+        g.request_scheme_resolved = origin_context.scheme
+        g.request_host_resolved = origin_context.host
+
+        canonical_host_enforcement = str(app.config.get("CANONICAL_HOST_ENFORCEMENT", "strict") or "strict").strip().lower()
+        if canonical_host_enforcement == "strict":
+            canonical_host = normalize_host(app.config.get("CANONICAL_HOST", ""))
+            request_host = normalize_host(getattr(g, "request_host_resolved", request.host))
+            if canonical_host and request_host and request_host != canonical_host:
+                if request.path.startswith("/api/v1"):
+                    payload = {
+                        "error": {
+                            "code": "misdirected_request",
+                            "message": "Request host does not match canonical host policy.",
+                            "details": [
+                                {
+                                    "field": "host",
+                                    "issue": f"Expected host '{canonical_host}'.",
+                                }
+                            ],
+                        },
+                        "meta": {"request_id": g.request_id},
+                    }
+                    return app.response_class(
+                        response=app.json.dumps(payload),
+                        status=421,
+                        mimetype="application/json",
+                    )
+
+                return app.response_class(
+                    response="Request host does not match canonical host policy.",
+                    status=421,
+                    mimetype="text/plain",
+                )
+
         client_context = resolve_client_request_context(
             remote_addr=request.remote_addr,
             forwarded_header=request.headers.get("Forwarded"),
@@ -364,3 +441,23 @@ def create_app(config_class="config.Config"):
     _validate_stfd_config_on_startup(app)
     _warm_embeddings_on_startup(app)
     return app
+    secret_key = str(app.config.get("SECRET_KEY", "") or "")
+    if app_env in {"test", "prod"}:
+        stripped_secret_key = secret_key.strip()
+        default_or_placeholder_values = {
+            "dev-secret-key",
+            "change-me",
+            "changeme",
+            "default",
+            "secret",
+        }
+        if not stripped_secret_key:
+            errors.append("SECRET_KEY must be set in non-dev environments.")
+        elif stripped_secret_key in default_or_placeholder_values:
+            errors.append(
+                "SECRET_KEY uses a default/placeholder value; set a unique random value in non-dev environments."
+            )
+        elif len(stripped_secret_key) < 16:
+            errors.append(
+                "SECRET_KEY is too short for non-dev environments; use at least 16 characters of random entropy."
+            )

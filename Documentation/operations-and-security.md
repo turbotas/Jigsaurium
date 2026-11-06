@@ -35,6 +35,7 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `requirements.txt` points to production dependencies for compatibility.
 
 - `DATABASE_URL`: SQLAlchemy MariaDB connection string.
+- `AUTO_MIGRATE`: when `1`, container entrypoint runs `alembic upgrade head` on startup before launching the app process.
 - `SECRET_KEY`: Flask secret key.
 - `APP_ENV`: one of `dev`, `test`, `prod`.
 - `APP_VERSION`: deployed application version (SemVer or release tag such as `v1.2.3`).
@@ -42,6 +43,7 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `APP_BUILD_TIME`: UTC build timestamp for the deployed build.
 - `LOG_LEVEL`: application logging level.
 - `CANONICAL_HOST`: expected public host per environment.
+- `CANONICAL_HOST_ENFORCEMENT`: host-policy mode (`strict` to reject non-canonical hosts with HTTP 421, `off` to disable app-layer host checks).
 - `MAX_CONTENT_LENGTH_BYTES`: optional hard cap for inbound request payload size (defaults to `33554432` / 32 MiB).
 - `SESSION_IDLE_TIMEOUT_MINUTES`: authenticated app-session inactivity timeout in minutes (default `120`).
 - `TRUSTED_PROXY_CIDRS`: comma-separated proxy CIDRs for header trust.
@@ -85,6 +87,11 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - Test: `www.test.jigsaurium.lateral-thought.co.uk`
 - Prod: `www.jigsaurium.lateral-thought.co.uk`
 
+Host enforcement policy:
+
+- `CANONICAL_HOST_ENFORCEMENT=strict` (recommended for deployed environments) rejects requests whose host does not match `CANONICAL_HOST`.
+- `CANONICAL_HOST_ENFORCEMENT=off` allows non-canonical hosts (useful for local contributor workflows).
+
 ## Embedding Model Provisioning
 
 - Container images are CPU-only and include embedding dependencies/model vendoring by default.
@@ -101,6 +108,35 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - Accept `X-Forwarded-*` as compatibility fallback.
 - Ignore forwarded headers from untrusted sources.
 - Record both raw remote socket address and resolved client chain.
+- Trust forwarded `proto`/`host` values only when request source matches `TRUSTED_PROXY_CIDRS` (or configured `TRUSTED_PROXY_HOPS` mode).
+
+## Reverse-Proxy Hardening Checklist
+
+- Terminate TLS at the proxy; do not expose direct public HTTP to the Flask process.
+- Restrict direct network access to the Flask service (private network / firewall allowlist / loopback-only bind where possible).
+- Ensure proxy overwrites inbound forwarding headers (do not pass client-supplied values through unchanged).
+- Set `TRUSTED_PROXY_CIDRS` to exact proxy CIDR(s) used by this environment.
+- Keep `CANONICAL_HOST` and `CANONICAL_HOST_ENFORCEMENT` aligned with deployed hostname policy.
+- Keep Flask app behind the proxy boundary; do not publish Flask listener directly to the internet.
+
+Example Nginx forwarding block (safe overwrite pattern):
+
+```nginx
+location / {
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Forwarded "for=$remote_addr;proto=$scheme;host=$host";
+
+    proxy_pass http://jigsaurium_app;
+}
+```
+
+`TRUSTED_PROXY_CIDRS` examples:
+
+- Single reverse proxy host: `TRUSTED_PROXY_CIDRS=192.168.51.12/32`
+- Internal proxy subnet: `TRUSTED_PROXY_CIDRS=10.20.30.0/24`
 
 ## Request Logging Baseline
 
@@ -142,6 +178,7 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - Least-privilege role enforcement at API/service layer.
 - Security response headers are applied to all responses (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and `Cross-Origin-Resource-Policy`).
 - Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` outside dev.
+- In non-dev environments (`APP_ENV=test|prod`), startup fails when `SECRET_KEY` is missing, default/placeholder, or too short.
 - Server-side app sessions expire after the configured inactivity window (`SESSION_IDLE_TIMEOUT_MINUTES`, default 120 minutes).
 - Login endpoint enforces anti-brute-force throttling per client IP and email (15-minute block after repeated failures in the same window).
 - When the login throttle trips, the resolved client IP is persisted in `blocked_ips` for the same block window so the client is blocked across all routes until expiry.

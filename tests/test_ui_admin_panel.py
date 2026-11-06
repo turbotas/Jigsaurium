@@ -18,11 +18,12 @@ def ui_server(tmp_path):
 
     class UITestConfig:
         APP_ENV = "test"
-        SECRET_KEY = "ui-test-secret"
+        SECRET_KEY = "ui-test-secret-0123456789"
         TESTING = True
         DATABASE_URL = f"sqlite+pysqlite:///{db_path.as_posix()}"
         LOG_LEVEL = "INFO"
         CANONICAL_HOST = "localhost"
+        CANONICAL_HOST_ENFORCEMENT = "off"
         TRUSTED_PROXY_CIDRS = []
         TRUSTED_PROXY_HOPS = None
         SESSION_COOKIE_SECURE = False
@@ -63,11 +64,12 @@ def ui_server_stfd_only(tmp_path):
 
     class UITestStfdOnlyConfig:
         APP_ENV = "test"
-        SECRET_KEY = "ui-test-secret"
+        SECRET_KEY = "ui-test-secret-0123456789"
         TESTING = True
         DATABASE_URL = f"sqlite+pysqlite:///{db_path.as_posix()}"
         LOG_LEVEL = "INFO"
         CANONICAL_HOST = "localhost"
+        CANONICAL_HOST_ENFORCEMENT = "off"
         TRUSTED_PROXY_CIDRS = []
         TRUSTED_PROXY_HOPS = None
         SESSION_COOKIE_SECURE = False
