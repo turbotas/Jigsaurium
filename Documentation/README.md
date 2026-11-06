@@ -13,6 +13,7 @@ Community/governance files at repository root:
 - `api-contract.md`: API conventions, payload shape, pagination, and error format.
 - `domain-rules.md`: Business rules for roles, jigsaw lifecycle, and loan lifecycle.
 - `operations-and-security.md`: runtime config, proxy trust model, logging, and release checks.
+- `secret-audit-2026-11-06.md`: documented Step 1.1 secret/sensitive-data audit record.
 - `simple-mode.md`: quick-start default runtime profile (no STFD, AI/embeddings off by default) and feature-flag matrix.
 - `roadmap.md`: Phase-based delivery plan for multiple developers.
 - `decisions.md`: ADR-style decision log.
