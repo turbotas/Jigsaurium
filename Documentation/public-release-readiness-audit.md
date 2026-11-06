@@ -25,3 +25,24 @@ Reason: One or more blocking issues remain open, including external platform con
 1. Close #30, #42, and #44 (or resolve/replace blockers with approved equivalents).
 2. Re-run this checklist and record a new decision.
 3. If GO, proceed with #51 (make repository public and announce).
+
+---
+
+## Re-run Gate Record (Updated)
+
+- Re-run date: 2026-11-06
+- Scope: Step 4.3 final readiness confirmation after blocker resolution
+
+### Updated blocker status
+
+| Issue | Status |
+|---|---|
+| #30 | CLOSED |
+| #42 | CLOSED |
+| #44 | CLOSED |
+
+### Decision
+
+**Decision: GO**
+
+Reason: previously identified release blockers have been resolved. Repository visibility has already been switched to public and branch protection baseline is active on `master`.
