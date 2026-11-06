@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import secrets
 from uuid import uuid4
 import urllib.parse
 
@@ -128,6 +129,10 @@ def _validate_runtime_config_on_startup(app):
             "DB_BACKUP_COMPRESSION must be one of: gzip, bzip2, none."
         )
 
+    hsts_max_age_seconds = int(app.config.get("HSTS_MAX_AGE_SECONDS", 0) or 0)
+    if hsts_max_age_seconds < 0:
+        errors.append("HSTS_MAX_AGE_SECONDS must be >= 0.")
+
     if errors:
         detail = "\n - ".join(["Configuration validation failed:", *errors])
         raise RuntimeError(detail)
@@ -240,6 +245,9 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("SESSION_REFRESH_EACH_REQUEST", True)
     app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
     app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
+    app.config.setdefault("HSTS_MAX_AGE_SECONDS", 31536000)
+    app.config.setdefault("HSTS_INCLUDE_SUBDOMAINS", True)
+    app.config.setdefault("HSTS_PRELOAD", False)
     app.config.setdefault("STFD_ENABLED", False)
     app.config.setdefault("STFD_ALLOW_LOCAL_LOGIN", False)
     app.config.setdefault("STFD_APP_UNI", "")
@@ -272,6 +280,7 @@ def create_app(config_class="config.Config"):
     @app.before_request
     def set_request_id():
         g.request_id = f"req_{uuid4().hex[:12]}"
+        g.csp_script_nonce = secrets.token_urlsafe(16)
 
         origin_context = resolve_request_origin_context(
             remote_addr=request.remote_addr,
@@ -383,6 +392,11 @@ def create_app(config_class="config.Config"):
             except Exception:
                 db_session.rollback()
 
+        csp_script_nonce = str(getattr(g, "csp_script_nonce", "") or "").strip()
+        csp_script_src = "script-src 'self'"
+        if csp_script_nonce:
+            csp_script_src += f" 'nonce-{csp_script_nonce}'"
+
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -390,8 +404,19 @@ def create_app(config_class="config.Config"):
         response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
+            f"default-src 'self'; {csp_script_src}; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
         )
+
+        app_env = str(app.config.get("APP_ENV", "dev") or "dev").strip().lower()
+        request_scheme_resolved = str(getattr(g, "request_scheme_resolved", request.scheme) or request.scheme).strip().lower()
+        if app_env in {"test", "prod"} and request_scheme_resolved == "https":
+            hsts_parts = [f"max-age={int(app.config.get('HSTS_MAX_AGE_SECONDS', 31536000) or 0)}"]
+            if bool(app.config.get("HSTS_INCLUDE_SUBDOMAINS", True)):
+                hsts_parts.append("includeSubDomains")
+            if bool(app.config.get("HSTS_PRELOAD", False)):
+                hsts_parts.append("preload")
+            response.headers.setdefault("Strict-Transport-Security", "; ".join(hsts_parts))
+
         if app.config.get("APP_ENV") == "dev" or bool(app.config.get("TESTING", False)):
             if request.path.startswith("/static/"):
                 response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -410,6 +435,7 @@ def create_app(config_class="config.Config"):
             "app_build_sha": app.config.get("APP_BUILD_SHA", "local"),
             "app_build_time": app.config.get("APP_BUILD_TIME", ""),
             "static_asset_version": static_asset_version,
+            "csp_script_nonce": getattr(g, "csp_script_nonce", ""),
         }
 
     @app.errorhandler(RequestEntityTooLarge)

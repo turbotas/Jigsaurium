@@ -44,6 +44,9 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `LOG_LEVEL`: application logging level.
 - `CANONICAL_HOST`: expected public host per environment.
 - `CANONICAL_HOST_ENFORCEMENT`: host-policy mode (`strict` to reject non-canonical hosts with HTTP 421, `off` to disable app-layer host checks).
+- `HSTS_MAX_AGE_SECONDS`: HSTS `max-age` value for HTTPS responses in test/prod (default `31536000`).
+- `HSTS_INCLUDE_SUBDOMAINS`: include `includeSubDomains` in HSTS header when truthy (default `1`).
+- `HSTS_PRELOAD`: include `preload` token in HSTS header when truthy (default `0`).
 - `MAX_CONTENT_LENGTH_BYTES`: optional hard cap for inbound request payload size (defaults to `33554432` / 32 MiB).
 - `SESSION_IDLE_TIMEOUT_MINUTES`: authenticated app-session inactivity timeout in minutes (default `120`).
 - `TRUSTED_PROXY_CIDRS`: comma-separated proxy CIDRs for header trust.
@@ -110,9 +113,18 @@ Host enforcement policy:
 - Record both raw remote socket address and resolved client chain.
 - Trust forwarded `proto`/`host` values only when request source matches `TRUSTED_PROXY_CIDRS` (or configured `TRUSTED_PROXY_HOPS` mode).
 
+## Security Header Policy
+
+- CSP uses nonce-based inline script allowlisting (`script-src 'self' 'nonce-...'`) and does not permit `unsafe-inline` scripts.
+- HSTS is applied on HTTPS responses in test/prod with default policy:
+  - `max-age=31536000`
+  - `includeSubDomains`
+  - `preload` disabled by default (enable via `HSTS_PRELOAD=1` only after preload-readiness review).
+
 ## Reverse-Proxy Hardening Checklist
 
 - Terminate TLS at the proxy; do not expose direct public HTTP to the Flask process.
+- Configure `Strict-Transport-Security` at the proxy edge for public HTTPS hosts (test/prod).
 - Restrict direct network access to the Flask service (private network / firewall allowlist / loopback-only bind where possible).
 - Ensure proxy overwrites inbound forwarding headers (do not pass client-supplied values through unchanged).
 - Set `TRUSTED_PROXY_CIDRS` to exact proxy CIDR(s) used by this environment.
@@ -193,6 +205,11 @@ location / {
 - Run `alembic upgrade head` in a clean environment.
 - Validate API health endpoint and key admin workflow.
 - Validate proxy header parsing behavior in each environment.
+- Validate HSTS on public HTTPS host:
+  - `curl -I https://<public-host>/ | findstr Strict-Transport-Security` (Windows)
+  - `curl -I https://<public-host>/ | grep -i Strict-Transport-Security` (Linux/macOS)
+- Validate CSP no-inline-script policy:
+  - inspect `Content-Security-Policy` response header and confirm `script-src` includes nonce and excludes `unsafe-inline`.
 
 ## CI/Test Execution Notes
 

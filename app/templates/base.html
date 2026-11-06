@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v=static_asset_version) }}">
   </head>
   <body class="govuk-template__body">
-    <script>
+    <script nonce="{{ csp_script_nonce }}">
       document.body.className += " js-enabled";
     </script>
     <a href="#main-content" class="govuk-skip-link" data-module="govuk-skip-link">Skip to main content</a>
@@ -57,7 +57,7 @@
       </div>
     </footer>
     <script src="{{ url_for('static', filename='vendor/govuk/govuk-frontend.min.js', v=static_asset_version) }}"></script>
-    <script>
+    <script nonce="{{ csp_script_nonce }}">
       if (window.GOVUKFrontend) {
         window.GOVUKFrontend.initAll();
       }

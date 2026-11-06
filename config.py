@@ -32,6 +32,16 @@ def _parse_bool(value, default=False):
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_canonical_host_enforcement(value):
+    normalized = str(value or "strict").strip().lower()
+    if normalized not in {"strict", "off"}:
+        raise ValueError(
+            "Invalid CANONICAL_HOST_ENFORCEMENT: expected one of strict/off, "
+            f"got {value!r}"
+        )
+    return normalized
+
+
 class Config:
     APP_ENV = os.getenv("APP_ENV", "dev")
     APP_VERSION = os.getenv("APP_VERSION", "0.0.0-dev")
@@ -41,6 +51,9 @@ class Config:
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     CANONICAL_HOST = os.getenv("CANONICAL_HOST", "localhost")
+    CANONICAL_HOST_ENFORCEMENT = _parse_canonical_host_enforcement(
+        os.getenv("CANONICAL_HOST_ENFORCEMENT", "strict")
+    )
     TRUSTED_PROXY_CIDRS = _parse_csv(os.getenv("TRUSTED_PROXY_CIDRS", ""))
     TRUSTED_PROXY_HOPS = _parse_optional_int(os.getenv("TRUSTED_PROXY_HOPS"), env_name="TRUSTED_PROXY_HOPS")
     TRUSTED_CLIENT_CIDRS = _parse_csv(os.getenv("TRUSTED_CLIENT_CIDRS", ""))
@@ -81,6 +94,12 @@ class Config:
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
     PREFERRED_URL_SCHEME = "https" if APP_ENV != "dev" else "http"
+    HSTS_MAX_AGE_SECONDS = _parse_optional_int(
+        os.getenv("HSTS_MAX_AGE_SECONDS"),
+        env_name="HSTS_MAX_AGE_SECONDS",
+    ) or 31536000
+    HSTS_INCLUDE_SUBDOMAINS = _parse_bool(os.getenv("HSTS_INCLUDE_SUBDOMAINS"), default=True)
+    HSTS_PRELOAD = _parse_bool(os.getenv("HSTS_PRELOAD"), default=False)
     STFD_ENABLED = _parse_bool(os.getenv("STFD_ENABLED"), default=False)
     STFD_ALLOW_LOCAL_LOGIN = _parse_bool(os.getenv("STFD_ALLOW_LOCAL_LOGIN"), default=False)
     STFD_APP_UNI = os.getenv("STFD_APP_UNI", "")

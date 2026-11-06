@@ -22,11 +22,13 @@
 - Authorization is capability-driven in v1; route handlers validate required capabilities and return `403` for authenticated callers that lack them.
 - Operational health endpoint `GET /api/v1/health` is allowed without authentication.
 - Mutating authenticated endpoints (`POST`, `PATCH`, `DELETE`) require an `X-CSRF-Token` header that matches the session CSRF token.
+- When canonical-host enforcement is enabled (`CANONICAL_HOST_ENFORCEMENT=strict`), requests received on a non-canonical host are rejected with `421 Misdirected Request` and API error code `misdirected_request`.
 
 ## Resource Endpoints (initial)
 
 - `GET /api/v1/jigsaws`
 - `GET /api/v1/health`
+- `GET /api/v1/system/health`
 - `GET /api/v1/auth/stfd/login-url`
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
@@ -85,8 +87,10 @@
 
 ## Health Endpoint Response
 
-- `GET /api/v1/health` returns:
+- `GET /api/v1/health` (public unauthenticated) returns minimal liveness payload:
   - `status`: static service status (`ok` when reachable)
+- `GET /api/v1/system/health` (administrator-only) returns extended runtime diagnostics:
+  - `status`: static service status (`ok`)
   - `environment`: current runtime environment (`dev`, `test`, `prod`)
   - `version`: deployed app version (`APP_VERSION`)
   - `build_sha`: source commit SHA (`APP_BUILD_SHA`)

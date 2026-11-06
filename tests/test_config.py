@@ -57,6 +57,29 @@ def test_config_parses_proxy_settings(monkeypatch):
 
 
 @pytest.mark.functional
+def test_config_parses_canonical_host_enforcement(monkeypatch):
+    monkeypatch.setenv("CANONICAL_HOST_ENFORCEMENT", "off")
+
+    importlib.reload(config)
+
+    assert config.Config.CANONICAL_HOST_ENFORCEMENT == "off"
+
+    monkeypatch.delenv("CANONICAL_HOST_ENFORCEMENT", raising=False)
+    importlib.reload(config)
+
+
+@pytest.mark.functional
+def test_config_invalid_canonical_host_enforcement_raises_actionable_error(monkeypatch):
+    monkeypatch.setenv("CANONICAL_HOST_ENFORCEMENT", "redirect")
+
+    with pytest.raises(ValueError, match="CANONICAL_HOST_ENFORCEMENT"):
+        importlib.reload(config)
+
+    monkeypatch.delenv("CANONICAL_HOST_ENFORCEMENT", raising=False)
+    importlib.reload(config)
+
+
+@pytest.mark.functional
 def test_config_invalid_trusted_proxy_hops_raises_actionable_error(monkeypatch):
     monkeypatch.setenv("TRUSTED_PROXY_HOPS", "abc")
 
@@ -75,4 +98,22 @@ def test_config_invalid_ai_budget_raises_actionable_error(monkeypatch):
         importlib.reload(config)
 
     monkeypatch.delenv("AI_DAILY_BUDGET_USD", raising=False)
+    importlib.reload(config)
+
+
+@pytest.mark.functional
+def test_config_parses_hsts_settings(monkeypatch):
+    monkeypatch.setenv("HSTS_MAX_AGE_SECONDS", "12345")
+    monkeypatch.setenv("HSTS_INCLUDE_SUBDOMAINS", "0")
+    monkeypatch.setenv("HSTS_PRELOAD", "1")
+
+    importlib.reload(config)
+
+    assert config.Config.HSTS_MAX_AGE_SECONDS == 12345
+    assert config.Config.HSTS_INCLUDE_SUBDOMAINS is False
+    assert config.Config.HSTS_PRELOAD is True
+
+    monkeypatch.delenv("HSTS_MAX_AGE_SECONDS", raising=False)
+    monkeypatch.delenv("HSTS_INCLUDE_SUBDOMAINS", raising=False)
+    monkeypatch.delenv("HSTS_PRELOAD", raising=False)
     importlib.reload(config)

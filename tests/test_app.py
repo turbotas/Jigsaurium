@@ -173,7 +173,7 @@ def test_api_health_returns_contract_shape(client):
     payload = response.get_json()
 
     assert payload["data"]["status"] == "ok"
-    assert payload["data"]["environment"] == "test"
+    assert list(payload["data"].keys()) == ["status"]
     assert payload["meta"]["request_id"].startswith("req_")
 
 
@@ -187,6 +187,62 @@ def test_security_headers_are_present_on_html_and_api_responses(client):
         assert response.headers["X-Frame-Options"] == "DENY"
         assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
         assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+        assert "script-src 'self' 'nonce-" in response.headers["Content-Security-Policy"]
+        assert "'unsafe-inline'" not in response.headers["Content-Security-Policy"]
+
+
+@pytest.mark.functional
+def test_home_route_applies_nonce_to_inline_scripts(client):
+    response = client.get("/")
+
+    html = response.get_data(as_text=True)
+    assert "<script nonce=\"" in html
+
+
+@pytest.mark.functional
+def test_hsts_header_present_for_https_in_non_dev(client):
+    response = client.get("/", base_url="https://localhost")
+
+    assert response.status_code == 200
+    assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+
+
+@pytest.mark.functional
+def test_hsts_header_absent_for_http(client):
+    response = client.get("/", base_url="http://localhost")
+
+    assert response.status_code == 200
+    assert "Strict-Transport-Security" not in response.headers
+
+
+@pytest.mark.functional
+def test_hsts_header_uses_trusted_forwarded_proto(client, app):
+    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.51.0/24"]
+    headers = {"X-Forwarded-Proto": "https"}
+
+    response = client.get(
+        "/",
+        headers=headers,
+        environ_overrides={"REMOTE_ADDR": "192.168.51.12"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+
+
+@pytest.mark.functional
+def test_hsts_header_ignores_untrusted_forwarded_proto(client, app):
+    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.51.0/24"]
+    headers = {"X-Forwarded-Proto": "https"}
+
+    response = client.get(
+        "/",
+        headers=headers,
+        environ_overrides={"REMOTE_ADDR": "198.51.100.20"},
+    )
+
+    assert response.status_code == 200
+    assert "Strict-Transport-Security" not in response.headers
 
 
 @pytest.mark.functional

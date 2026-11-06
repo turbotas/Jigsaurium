@@ -3997,6 +3997,13 @@ def _apply_ai_metadata_to_jigsaw(*, jigsaw, normalized_payload, overwrite_existi
 
 @api_v1_bp.get("/health")
 def health_check():
+    payload = {
+        "status": "ok",
+    }
+    return _success_response(payload)
+
+
+def _build_health_diagnostics_payload():
     image_embeddings_enabled = bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False))
     image_embeddings_payload = {
         "enabled": image_embeddings_enabled,
@@ -4016,7 +4023,7 @@ def health_check():
             }
         )
 
-    payload = {
+    return {
         "status": "ok",
         "environment": current_app.config["APP_ENV"],
         "version": current_app.config.get("APP_VERSION", "0.0.0-dev"),
@@ -4024,7 +4031,12 @@ def health_check():
         "build_time": current_app.config.get("APP_BUILD_TIME", ""),
         "image_embeddings": image_embeddings_payload,
     }
-    return _success_response(payload)
+
+
+@api_v1_bp.get("/system/health")
+@require_role("administrator")
+def system_health_diagnostics():
+    return _success_response(_build_health_diagnostics_payload())
 
 
 @api_v1_bp.get("/auth/stfd/login-url")

@@ -149,6 +149,7 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
         ("GET", "/api/v1/image-embeddings/diagnostics", None),
         ("GET", "/api/v1/security/blocked-ips", None),
         ("GET", "/api/v1/security/sessions", None),
+        ("GET", "/api/v1/system/health", None),
         ("GET", "/api/v1/system/database-backups", None),
         ("GET", "/api/v1/system/database-backups/1/download", None),
         ("GET", "/api/v1/jigsaws/1/images", None),
@@ -226,6 +227,20 @@ def test_api_users_returns_data_for_administrator(client, seeded_identity_data):
     assert len(payload["data"]) == 3
     assert payload["data"][0]["email"] == "admin@example.com"
     assert payload["data"][0]["roles"] == ["administrator"]
+    assert payload["meta"]["request_id"].startswith("req_")
+
+
+@pytest.mark.functional
+def test_system_health_diagnostics_returns_data_for_administrator(client, seeded_identity_data):
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+
+    response = client.get("/api/v1/system/health")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["data"]["status"] == "ok"
+    assert payload["data"]["environment"] == "test"
+    assert "image_embeddings" in payload["data"]
     assert payload["meta"]["request_id"].startswith("req_")
 
 
