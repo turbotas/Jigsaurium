@@ -430,10 +430,15 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#image-browser-crop-toggle")
 
         page.once("dialog", lambda dialog: dialog.accept())
-        page.click("#image-browser-delete")
-        page.wait_for_selector("text=Image deleted.")
-        page.keyboard.press("Escape")
-        page.wait_for_selector("#image-browser-modal", state="hidden")
+        with page.expect_response(
+            lambda response: response.request.method == "DELETE"
+            and "/api/v1/image-library/images/" in response.url
+        ) as delete_response_info:
+            page.click("#image-browser-delete")
+        assert delete_response_info.value.status == 200
+        if page.locator("#image-browser-modal").is_visible():
+            page.keyboard.press("Escape")
+            page.wait_for_selector("#image-browser-modal", state="hidden")
 
         page.click("#collection-tab-diary")
         page.wait_for_selector("#collection-diary-panel:not([hidden])")
@@ -489,7 +494,11 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
 
         page.click("#collection-tab-jigsaws")
         page.wait_for_selector("#collection-jigsaws-panel:not([hidden])")
-        assert page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(3).inner_text() != "-"
+        last_completed_text = (
+            page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("td").nth(3).inner_text().strip()
+        )
+        assert last_completed_text != "-"
+        assert ":" not in last_completed_text
 
         page.locator("#jigsaws-table-body tr", has_text="UI Smoke Puzzle").locator("button[data-jigsaw-edit]").click()
         assert page.locator("#jigsaw-edit-form").is_visible()

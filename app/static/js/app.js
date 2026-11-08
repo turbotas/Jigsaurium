@@ -1318,6 +1318,19 @@
     return parsedDate.toLocaleString();
   }
 
+  function toLocalDate(value) {
+    if (!value) {
+      return "-";
+    }
+
+    const parsedDate = new Date(value);
+    if (Number.isNaN(parsedDate.valueOf())) {
+      return "-";
+    }
+
+    return parsedDate.toLocaleDateString();
+  }
+
   function toIntegerLabel(value) {
     const parsed = Number(value || 0);
     if (!Number.isFinite(parsed)) {
@@ -1423,14 +1436,7 @@
   }
 
   function toCapturedLabel(image) {
-    if (!image || !image.captured_at) {
-      return "-";
-    }
-    const parsedDate = new Date(image.captured_at);
-    if (Number.isNaN(parsedDate.valueOf())) {
-      return "-";
-    }
-    return parsedDate.toLocaleDateString();
+    return toLocalDate(image?.captured_at);
   }
 
   function toDatetimeLocalValue(value) {
@@ -2855,7 +2861,7 @@
       piecesCell.dataset.mobileLabel = "Pieces";
       row.appendChild(piecesCell);
 
-      const lastCompletedCell = buildCell(toLocalTimestamp(jigsaw.last_completed_at));
+      const lastCompletedCell = buildCell(toLocalDate(jigsaw.last_completed_at));
       lastCompletedCell.dataset.mobileLabel = "Last completed";
       row.appendChild(lastCompletedCell);
 
