@@ -1130,6 +1130,52 @@ def test_image_library_list_supports_page_and_page_size(client, seeded_image_lib
 
 
 @pytest.mark.functional
+def test_image_library_list_includes_ai_suggestion_and_cropped_fields(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(_make_png_bytes()), "ai-fields-list.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    with app.app_context():
+        db_session = get_session()
+        image = db_session.get(JigsawImage, image_id)
+        assert image is not None
+        image.is_cropped = True
+        image.ai_suggested_tag = "Reference"
+        image.ai_suggested_corners_json = json.dumps(
+            [
+                {"x": 0.1, "y": 0.1},
+                {"x": 0.9, "y": 0.1},
+                {"x": 0.9, "y": 0.9},
+                {"x": 0.1, "y": 0.9},
+            ]
+        )
+        image.ai_suggestions_pending_review = True
+        image.ai_suggested_at = datetime.now(timezone.utc)
+        db_session.commit()
+
+    list_response = client.get("/api/v1/image-library/images?page=1&page_size=25")
+    assert list_response.status_code == 200
+    data = list_response.get_json()["data"]
+    row = next(item for item in data if int(item["id"]) == int(image_id))
+
+    assert row["is_cropped"] is True
+    assert row["ai_suggested_tag"] == "Reference"
+    assert row["ai_suggestions_pending_review"] is True
+    assert isinstance(row["ai_suggested_corners"], list)
+    assert len(row["ai_suggested_corners"]) == 4
+    assert isinstance(row["ai_suggested_at"], str)
+
+
+@pytest.mark.functional
 def test_admin_can_assign_unassigned_image_to_jigsaw(client, seeded_image_library_data):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 

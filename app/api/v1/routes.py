@@ -6017,6 +6017,11 @@ def list_image_library_images():
             captured_at=row.captured_at,
             captured_at_source=row.captured_at_source,
             user_comment=row.user_comment,
+            is_cropped=row.is_cropped,
+            ai_suggested_tag=row.ai_suggested_tag,
+            ai_suggested_corners_json=row.ai_suggested_corners_json,
+            ai_suggestions_pending_review=row.ai_suggestions_pending_review,
+            ai_suggested_at=row.ai_suggested_at,
             created_at=row.created_at,
         )
         for row in image_rows
