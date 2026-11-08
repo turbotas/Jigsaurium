@@ -307,3 +307,10 @@
 - Why: SQLite reduces first-run operational overhead without requiring a second persistence model.
 - Why: this preserves SQLAlchemy + Alembic migration patterns and avoids NoSQL model divergence.
 - Impact: CI and maintainer validation must continue to guard against engine-specific SQL behavior differences.
+
+## 2026-11-06 - Canonical Host Enforcement Policy
+
+- Decision: enforce canonical host at the app layer with `CANONICAL_HOST_ENFORCEMENT=strict`, returning `421 Misdirected Request` for host mismatches.
+- Why: runtime traffic is proxy-terminated but proxy controls may be outside direct ownership; app-layer enforcement closes direct-IP/backdoor host gaps.
+- Decision: provide `CANONICAL_HOST_ENFORCEMENT=off` as an explicit opt-out for local/dev contributor workflows.
+- Why: open-source/local setups may not always have canonical DNS/host routing available.

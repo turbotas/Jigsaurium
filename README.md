@@ -49,7 +49,6 @@ Jigsaurium/
   requirements/
   scripts/
   tests/
-  .env.example
   .gitignore
   config.py
   requirements.txt
@@ -66,8 +65,8 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
    - Windows (prod profile): `scripts\setup_venv.bat prod`
    - Linux/macOS (prod profile): `./scripts/setup_venv.sh prod`
 2. Create local environment file:
-    - Copy `.env.example` to `.env`, or
     - Copy `environments/dev.env.example` to `environments/dev.env.local`.
+    - Optional convenience for `run.py`: also copy `environments/dev.env.local` to `.env`.
    - Keep secrets in `*.local` files only (git-ignored).
 3. Apply migrations to your configured database:
    - Windows: `.venv\Scripts\python.exe -m alembic upgrade head`
@@ -115,6 +114,7 @@ To opt in, set `STARTUP_UPDATE_CHECK=1` before launching `run_simple`.
 
 - Git-safe templates are stored in `environments/*.example`.
 - Sensitive values go in `environments/*.local` and are ignored by Git.
+- Root `.env` is optional for local runs (`run.py` loads it when present); prefer maintaining `environments/dev.env.local` as the source file.
 - Environment templates available:
   - `environments/dev.env.example`
   - `environments/test.env.example`

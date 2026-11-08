@@ -23,3 +23,8 @@ These `*.local` files are ignored by Git.
 - Local development: load `environments/dev.env.local`.
 - Test environment: load `environments/test.env.local`.
 - Production environment: load `environments/prod.env.local`.
+- Optional local convenience: copy `environments/dev.env.local` to repo-root `.env` when using `run.py` (it calls `python-dotenv` on startup).
+
+## Notes
+
+- `AUTO_MIGRATE` is used by container startup (`scripts/docker_entrypoint.sh`) to run `alembic upgrade head` before launching the app.
