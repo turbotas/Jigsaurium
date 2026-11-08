@@ -152,6 +152,8 @@ def test_home_route_renders_expected_content(client):
     assert b"Filter jigsaws" in response.data
     assert b"id=\"jigsaws-pagination-top\"" in response.data
     assert b"Show all images" in response.data
+    assert b"id=\"jigsaw-detail-modal\"" in response.data
+    assert b"id=\"jigsaw-detail-images-body\"" in response.data
     assert b"id=\"admin-sections\" hidden" in response.data
     assert b"id=\"image-editor-context\"" in response.data
     assert b"data-enabled=\"0\"" in response.data

@@ -314,3 +314,10 @@
 - Why: runtime traffic is proxy-terminated but proxy controls may be outside direct ownership; app-layer enforcement closes direct-IP/backdoor host gaps.
 - Decision: provide `CANONICAL_HOST_ENFORCEMENT=off` as an explicit opt-out for local/dev contributor workflows.
 - Why: open-source/local setups may not always have canonical DNS/host routing available.
+
+## 2026-11-08 - In-Frame Jigsaw Detail Overlay
+
+- Decision: add a reusable in-frame "Jigsaw details" overlay panel in the SPA (instead of full-page navigation or browser popup).
+- Why: image-library and image-browser workflows need quick context switching to inspect one jigsaw and return immediately without losing filters, scroll state, or current image position.
+- Decision: make jigsaw references (for example in image-browser status and jigsaw inventory title cells) open that overlay.
+- Why: users can move directly from image cleanup/assignment context to full per-jigsaw detail (metadata, assigned images, diary entries) with fewer clicks and less disorientation.

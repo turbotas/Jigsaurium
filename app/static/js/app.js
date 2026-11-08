@@ -177,6 +177,11 @@
       suggestionsImageId: null,
       nameAssignImageId: null,
     },
+    jigsawDetail: {
+      isOpen: false,
+      jigsawId: null,
+      opener: null,
+    },
     imageEditor: {
       enabled: initialImageEditorContext.enabled,
       imageId: initialImageEditorContext.imageId,
@@ -356,6 +361,13 @@
     imageBrowserNameAssign: document.getElementById("image-browser-name-assign"),
     imageBrowserNameAssignClose: document.getElementById("image-browser-name-assign-close"),
     imageBrowserClose: document.getElementById("image-browser-close"),
+    jigsawDetailModal: document.getElementById("jigsaw-detail-modal"),
+    jigsawDetailTitle: document.getElementById("jigsaw-detail-title"),
+    jigsawDetailCloseButton: document.getElementById("jigsaw-detail-close"),
+    jigsawDetailSummary: document.getElementById("jigsaw-detail-summary"),
+    jigsawDetailMetadata: document.getElementById("jigsaw-detail-metadata"),
+    jigsawDetailImagesBody: document.getElementById("jigsaw-detail-images-body"),
+    jigsawDetailDiaryBody: document.getElementById("jigsaw-detail-diary-body"),
     diaryEntryForm: document.getElementById("diary-entry-form"),
     diaryEntryOpenButton: document.getElementById("diary-entry-open"),
     diaryEntrySubmitButton: document.getElementById("diary-entry-submit"),
@@ -1454,6 +1466,290 @@
     const payloadText = JSON.stringify(entry.payload ?? null, null, 2);
     elements.aiUsageDetailPayload.textContent = payloadText;
     elements.aiUsageDetailModal.hidden = false;
+  }
+
+  function clearJigsawDetailModalContent() {
+    if (elements.jigsawDetailSummary) {
+      elements.jigsawDetailSummary.textContent = "Loading details…";
+    }
+    if (elements.jigsawDetailMetadata) {
+      elements.jigsawDetailMetadata.innerHTML = "";
+    }
+    if (elements.jigsawDetailImagesBody) {
+      clearTableBody(elements.jigsawDetailImagesBody);
+      appendEmptyRow(elements.jigsawDetailImagesBody, 4, "Loading images…");
+    }
+    if (elements.jigsawDetailDiaryBody) {
+      clearTableBody(elements.jigsawDetailDiaryBody);
+      appendEmptyRow(elements.jigsawDetailDiaryBody, 4, "Loading diary entries…");
+    }
+  }
+
+  function closeJigsawDetailModal() {
+    if (!elements.jigsawDetailModal) {
+      return;
+    }
+    elements.jigsawDetailModal.hidden = true;
+    state.jigsawDetail.isOpen = false;
+    state.jigsawDetail.jigsawId = null;
+    const opener = state.jigsawDetail.opener;
+    state.jigsawDetail.opener = null;
+    if (opener && typeof opener.focus === "function") {
+      opener.focus();
+    }
+  }
+
+  function appendSummaryListRow(summaryList, label, value) {
+    if (!summaryList) {
+      return;
+    }
+    const row = document.createElement("div");
+    row.className = "govuk-summary-list__row";
+
+    const key = document.createElement("dt");
+    key.className = "govuk-summary-list__key";
+    key.textContent = String(label || "-");
+
+    const val = document.createElement("dd");
+    val.className = "govuk-summary-list__value";
+    val.textContent = String(value || "-");
+
+    row.appendChild(key);
+    row.appendChild(val);
+    summaryList.appendChild(row);
+  }
+
+  function renderJigsawDetailMetadata(jigsaw) {
+    if (!elements.jigsawDetailMetadata) {
+      return;
+    }
+    elements.jigsawDetailMetadata.innerHTML = "";
+    const rawStatus = String(jigsaw?.status || "").trim();
+    const normalizedStatus = rawStatus.toLowerCase();
+    if (normalizedStatus && normalizedStatus !== "available") {
+      appendSummaryListRow(elements.jigsawDetailMetadata, "Status", rawStatus.replace(/_/g, " "));
+    }
+    appendSummaryListRow(elements.jigsawDetailMetadata, "Manufacturer", jigsaw?.manufacturer || "-");
+    appendSummaryListRow(elements.jigsawDetailMetadata, "Artist", jigsaw?.artist || "-");
+    appendSummaryListRow(elements.jigsawDetailMetadata, "Series", jigsaw?.series_name || "-");
+    appendSummaryListRow(elements.jigsawDetailMetadata, "Series number", jigsaw?.series_number || "-");
+    appendSummaryListRow(elements.jigsawDetailMetadata, "Dimensions (cm)", jigsaw?.dimensions_cm || "-");
+    appendSummaryListRow(elements.jigsawDetailMetadata, "Condition", jigsaw?.condition || "-");
+    appendSummaryListRow(elements.jigsawDetailMetadata, "Tags", jigsaw?.tags || "-");
+    appendSummaryListRow(elements.jigsawDetailMetadata, "Last completed", toLocalDate(jigsaw?.last_completed_at));
+    appendSummaryListRow(elements.jigsawDetailMetadata, "Description", jigsaw?.description || "-");
+  }
+
+  function renderJigsawDetailImages(images, options = {}) {
+    if (!elements.jigsawDetailImagesBody) {
+      return;
+    }
+    clearTableBody(elements.jigsawDetailImagesBody);
+
+    if (!options.canRead) {
+      appendEmptyRow(elements.jigsawDetailImagesBody, 4, "You do not have permission to view assigned images.");
+      return;
+    }
+
+    const rows = (Array.isArray(images) ? images : []).filter(
+      (image) => toImageTagKey(image?.tag) !== toImageTagKey(IMAGE_BROWSER_TAG_COMPLETED),
+    );
+    if (rows.length === 0) {
+      appendEmptyRow(elements.jigsawDetailImagesBody, 4, "No assigned box/reference images found. Completed images appear in diary entries.");
+      return;
+    }
+
+    const canEditImages = currentUserHasCapability("image.upload");
+    const canOpenOriginalImages = Boolean(state.user);
+
+    rows.forEach((image) => {
+      const row = document.createElement("tr");
+      row.className = "govuk-table__row";
+
+      const thumbnailCell = document.createElement("td");
+      thumbnailCell.className = "govuk-table__cell app-thumbnail-cell";
+      const thumbnailWidget = buildThumbnailWidget(image?.thumbnail_url || image?.content_url || "", {
+        altText: `${image?.tag || "Jigsaw"} image`,
+        previewUrl: image?.preview_url || image?.content_url || "",
+        openUrl: canOpenOriginalImages ? (image?.content_url || "") : (image?.preview_url || image?.thumbnail_url || ""),
+        openInPopup: Boolean(canEditImages && Number(image?.id || 0) > 0),
+        popupImageId: Number(image?.id || 0),
+      });
+      thumbnailCell.appendChild(thumbnailWidget);
+      row.appendChild(thumbnailCell);
+
+      const tagCell = document.createElement("td");
+      tagCell.className = "govuk-table__cell";
+      tagCell.textContent = String(image?.tag || "-");
+      row.appendChild(tagCell);
+
+      const capturedCell = document.createElement("td");
+      capturedCell.className = "govuk-table__cell";
+      capturedCell.textContent = image?.captured_at ? toLocalTimestamp(image.captured_at) : "Unknown";
+      row.appendChild(capturedCell);
+
+      const actionCell = document.createElement("td");
+      actionCell.className = "govuk-table__cell";
+      if (canEditImages && Number(image?.id || 0) > 0) {
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "govuk-button govuk-button--secondary app-inline-button";
+        editButton.setAttribute("data-module", "govuk-button");
+        editButton.dataset.imageEdit = String(Number(image.id));
+        editButton.textContent = "Edit image";
+        actionCell.appendChild(editButton);
+      } else {
+        actionCell.textContent = "-";
+      }
+      row.appendChild(actionCell);
+
+      elements.jigsawDetailImagesBody.appendChild(row);
+    });
+  }
+
+  function renderJigsawDetailDiary(entries, options = {}) {
+    if (!elements.jigsawDetailDiaryBody) {
+      return;
+    }
+    clearTableBody(elements.jigsawDetailDiaryBody);
+
+    if (!options.canRead) {
+      appendEmptyRow(elements.jigsawDetailDiaryBody, 4, "You do not have permission to view diary entries.");
+      return;
+    }
+
+    const rows = Array.isArray(entries)
+      ? [...entries].sort((left, right) => {
+        const leftTime = Date.parse(String(left?.completed_at || ""));
+        const rightTime = Date.parse(String(right?.completed_at || ""));
+        const leftScore = Number.isFinite(leftTime) ? leftTime : Number.NEGATIVE_INFINITY;
+        const rightScore = Number.isFinite(rightTime) ? rightTime : Number.NEGATIVE_INFINITY;
+        return rightScore - leftScore;
+      })
+      : [];
+    if (rows.length === 0) {
+      appendEmptyRow(elements.jigsawDetailDiaryBody, 4, "No diary entries found.");
+      return;
+    }
+
+    const sourceImagesById = options.sourceImagesById instanceof Map ? options.sourceImagesById : new Map();
+    const canEditImages = currentUserHasCapability("image.upload");
+    const canOpenOriginalImages = Boolean(state.user);
+
+    rows.forEach((entry) => {
+      const row = document.createElement("tr");
+      row.className = "govuk-table__row";
+
+      const completedCell = document.createElement("td");
+      completedCell.className = "govuk-table__cell";
+      completedCell.textContent = entry?.completed_at ? toLocalTimestamp(entry.completed_at) : "-";
+      row.appendChild(completedCell);
+
+      const sourceImageCell = document.createElement("td");
+      sourceImageCell.className = "govuk-table__cell app-thumbnail-cell";
+      const sourceImageId = Number(entry?.source_image_id || 0);
+      const sourceImage = sourceImageId > 0 ? sourceImagesById.get(sourceImageId) : null;
+      if (sourceImage) {
+        const sourceThumb = buildThumbnailWidget(sourceImage?.thumbnail_url || sourceImage?.content_url || "", {
+          altText: "Completion source image",
+          previewUrl: sourceImage?.preview_url || sourceImage?.content_url || "",
+          openUrl: canOpenOriginalImages
+            ? (sourceImage?.content_url || "")
+            : (sourceImage?.preview_url || sourceImage?.thumbnail_url || ""),
+          openInPopup: Boolean(canEditImages && Number(sourceImage?.id || 0) > 0),
+          popupImageId: Number(sourceImage?.id || 0),
+          widthPx: 92,
+        });
+        sourceImageCell.appendChild(sourceThumb);
+      } else {
+        sourceImageCell.textContent = "-";
+      }
+      row.appendChild(sourceImageCell);
+
+      const difficultyCell = document.createElement("td");
+      difficultyCell.className = "govuk-table__cell";
+      difficultyCell.textContent = Number(entry?.difficulty || 0) > 0 ? String(entry.difficulty) : "-";
+      row.appendChild(difficultyCell);
+
+      const notesCell = document.createElement("td");
+      notesCell.className = "govuk-table__cell";
+      notesCell.textContent = String(entry?.notes || "-");
+      row.appendChild(notesCell);
+
+      elements.jigsawDetailDiaryBody.appendChild(row);
+    });
+  }
+
+  async function openJigsawDetailModal(jigsawId, options = {}) {
+    const resolvedJigsawId = Number(jigsawId || 0);
+    if (!resolvedJigsawId || !elements.jigsawDetailModal) {
+      return;
+    }
+
+    state.jigsawDetail.isOpen = true;
+    state.jigsawDetail.jigsawId = resolvedJigsawId;
+    state.jigsawDetail.opener = options.opener || null;
+    elements.jigsawDetailModal.hidden = false;
+
+    if (elements.jigsawDetailTitle) {
+      elements.jigsawDetailTitle.textContent = "Jigsaw details";
+    }
+    clearJigsawDetailModalContent();
+
+    const canReadImages = currentUserHasCapability("image.manage_library");
+    const canReadDiary = currentUserHasCapability("diary.read");
+
+    try {
+      const [jigsawResponse, imageResponse, diaryResponse] = await Promise.all([
+        apiRequest(`/api/v1/jigsaws/${resolvedJigsawId}`),
+        canReadImages
+          ? apiRequest(`/api/v1/jigsaws/${resolvedJigsawId}/images`)
+          : Promise.resolve({ data: [] }),
+        canReadDiary
+          ? apiRequest(`/api/v1/jigsaws/${resolvedJigsawId}/diary-entries`)
+          : Promise.resolve({ data: [] }),
+      ]);
+
+      const jigsaw = jigsawResponse?.data || null;
+      if (!jigsaw) {
+        throw new Error("Jigsaw was not found.");
+      }
+
+      if (elements.jigsawDetailTitle) {
+        const title = String(jigsaw?.title || "Jigsaw details");
+        elements.jigsawDetailTitle.textContent = title;
+      }
+      if (elements.jigsawDetailSummary) {
+        const rawStatus = String(jigsaw?.status || "").trim();
+        const normalizedStatus = rawStatus.toLowerCase();
+        const statusLabel = normalizedStatus && normalizedStatus !== "available"
+          ? rawStatus.replace(/_/g, " ")
+          : "";
+        const piecesLabel = jigsaw?.piece_count ? `${jigsaw.piece_count} pieces` : "piece count unknown";
+        elements.jigsawDetailSummary.textContent = statusLabel ? `${statusLabel} · ${piecesLabel}` : piecesLabel;
+      }
+
+      renderJigsawDetailMetadata(jigsaw);
+      renderJigsawDetailImages(imageResponse?.data, { canRead: canReadImages });
+      const sourceImagesById = new Map((Array.isArray(imageResponse?.data) ? imageResponse.data : [])
+        .map((image) => [Number(image?.id || 0), image])
+        .filter(([imageId]) => imageId > 0));
+      renderJigsawDetailDiary(diaryResponse?.data, { canRead: canReadDiary, sourceImagesById });
+      if (elements.jigsawDetailCloseButton) {
+        elements.jigsawDetailCloseButton.focus();
+      }
+    } catch (error) {
+      if (elements.jigsawDetailSummary) {
+        elements.jigsawDetailSummary.textContent = "Could not load jigsaw details.";
+      }
+      if (elements.jigsawDetailMetadata) {
+        elements.jigsawDetailMetadata.innerHTML = "";
+        appendSummaryListRow(elements.jigsawDetailMetadata, "Error", error?.message || "Unknown error");
+      }
+      renderJigsawDetailImages([], { canRead: false });
+      renderJigsawDetailDiary([], { canRead: false, sourceImagesById: new Map() });
+      showFeedback(error.message || "Could not load jigsaw details.", true);
+    }
   }
 
   function toCapturedLabel(image) {
@@ -3063,9 +3359,12 @@
       const titleWrap = document.createElement("div");
       titleWrap.className = "app-jigsaw-title-cell";
 
-      const titleText = document.createElement("span");
-      titleText.textContent = String(jigsaw.title || "-");
-      titleWrap.appendChild(titleText);
+      const titleButton = document.createElement("button");
+      titleButton.type = "button";
+      titleButton.className = "app-inline-link-button";
+      titleButton.dataset.jigsawView = String(jigsaw.id);
+      titleButton.textContent = String(jigsaw.title || `Jigsaw #${Number(jigsaw.id)}`);
+      titleWrap.appendChild(titleButton);
 
       if (canDetachJigsawImages && preferredImage?.id) {
         const detachMainImageButton = document.createElement("button");
@@ -5031,22 +5330,51 @@
     const total = filtered.length;
     const totalUnfiltered = Array.isArray(state.imageLibraryImages) ? state.imageLibraryImages.length : 0;
     const index = state.imageBrowser.index + 1;
-    const association = item.jigsaw_id ? `assigned to jigsaw ${item.jigsaw_id}` : "unassigned";
+    const hasAssignment = Number(item.jigsaw_id || 0) > 0;
     const capturedAtLabel = item.captured_at ? toLocalTimestamp(item.captured_at) : "-";
     const captureSourceLabel = item.captured_at_source || "unknown";
-    const dirty = browserHasPendingEdits() ? " | unsaved edits" : "";
-    const currentSave = isImageBrowserSaveInFlight(item.id) ? " | saving image..." : "";
+    const dirty = browserHasPendingEdits() ? " · unsaved edits" : "";
+    const currentSave = isImageBrowserSaveInFlight(item.id) ? " · saving image..." : "";
     const inFlightTotal = getImageBrowserInFlightSaveCount();
     const backgroundSaves = Math.max(0, inFlightTotal - (isImageBrowserSaveInFlight(item.id) ? 1 : 0));
     const backgroundSaveLabel = backgroundSaves > 0
-      ? ` | ${backgroundSaves} save${backgroundSaves === 1 ? "" : "s"} running in background`
+      ? ` · ${backgroundSaves} save${backgroundSaves === 1 ? "" : "s"} running in background`
       : "";
 
+    elements.imageBrowserStatus.innerHTML = "";
+
+    const primaryLine = document.createElement("p");
+    primaryLine.className = "app-image-browser__status-line";
     if (standaloneMode) {
-      elements.imageBrowserStatus.textContent = `Image editor | id: ${item.id || "-"} | ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association} | captured: ${capturedAtLabel} (${captureSourceLabel})${dirty}${currentSave}${backgroundSaveLabel}`;
+      primaryLine.textContent = `Image editor · ${item.tag || "untagged"}`;
     } else {
-      elements.imageBrowserStatus.textContent = `Image ${index}/${total} (filtered from ${totalUnfiltered}) | id: ${item.id || "-"} | ${item.filename || "(unnamed)"} | tag: ${item.tag || "-"} | ${association} | captured: ${capturedAtLabel} (${captureSourceLabel})${dirty}${currentSave}${backgroundSaveLabel}`;
+      const filteredLabel = totalUnfiltered > total ? ` · filtered from ${totalUnfiltered}` : "";
+      primaryLine.textContent = `Image ${index} of ${total} · ${item.tag || "untagged"}${filteredLabel}`;
     }
+
+    const secondaryLine = document.createElement("p");
+    secondaryLine.className = "app-image-browser__status-line";
+    secondaryLine.appendChild(document.createTextNode("Jigsaw: "));
+    if (hasAssignment) {
+      const jigsawLink = document.createElement("button");
+      jigsawLink.type = "button";
+      jigsawLink.className = "app-inline-link-button";
+      jigsawLink.dataset.jigsawView = String(item.jigsaw_id);
+      jigsawLink.textContent = getJigsawTitleById(item.jigsaw_id);
+      secondaryLine.appendChild(jigsawLink);
+    } else {
+      secondaryLine.appendChild(document.createTextNode("Unassigned"));
+    }
+    secondaryLine.appendChild(document.createTextNode(` · Captured: ${capturedAtLabel === "-" ? "Unknown" : capturedAtLabel}`));
+    secondaryLine.appendChild(document.createTextNode(` · ID: ${item.id || "-"}${dirty}${currentSave}${backgroundSaveLabel}`));
+
+    const tertiaryLine = document.createElement("p");
+    tertiaryLine.className = "app-image-browser__status-line";
+    tertiaryLine.textContent = `Filename: ${item.filename || "(unnamed)"} · Source: ${captureSourceLabel}`;
+
+    elements.imageBrowserStatus.appendChild(primaryLine);
+    elements.imageBrowserStatus.appendChild(secondaryLine);
+    elements.imageBrowserStatus.appendChild(tertiaryLine);
     syncImageBrowserActionButtons();
     syncImageBrowserSaveButton();
   }
@@ -6187,6 +6515,14 @@
       return;
     }
 
+    if (state.jigsawDetail.isOpen) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeJigsawDetailModal();
+      }
+      return;
+    }
+
     const activeTag = String(event.target?.tagName || "").toUpperCase();
     if (activeTag === "INPUT" || activeTag === "TEXTAREA" || activeTag === "SELECT") {
       return;
@@ -6325,7 +6661,7 @@
 
     if (!Array.isArray(entries) || entries.length === 0) {
       clearPagination(elements.diaryPagination);
-      appendEmptyRow(tableBody, 7, emptyMessage);
+      appendEmptyRow(tableBody, 6, emptyMessage);
       return;
     }
 
@@ -6338,15 +6674,19 @@
       const isFormalDiaryEntry = entry?.entry_type !== "orphan_completed_image";
 
       const sourceImageUrls = getDiaryEntryImageUrls(entry);
-      const jigsawLabel = isFormalDiaryEntry
-        ? getJigsawTitleById(entry.jigsaw_id)
-        : "Unlinked completion";
-      const identifierLabel = isFormalDiaryEntry
-        ? String(entry.id)
-        : `Image #${Number(entry?.source_image_id || entry?.id || 0)}`;
-
-      row.appendChild(buildCell(identifierLabel));
-      row.appendChild(buildCell(jigsawLabel));
+      const jigsawCell = document.createElement("td");
+      jigsawCell.className = "govuk-table__cell";
+      if (isFormalDiaryEntry && Number(entry?.jigsaw_id || 0) > 0) {
+        const jigsawLink = document.createElement("button");
+        jigsawLink.type = "button";
+        jigsawLink.className = "app-inline-link-button";
+        jigsawLink.dataset.jigsawView = String(Number(entry.jigsaw_id));
+        jigsawLink.textContent = getJigsawTitleById(entry.jigsaw_id);
+        jigsawCell.appendChild(jigsawLink);
+      } else {
+        jigsawCell.textContent = "Unlinked completion";
+      }
+      row.appendChild(jigsawCell);
       row.appendChild(
         buildThumbnailCell(sourceImageUrls.thumbnailUrl, {
           altText: `Completed image for diary entry ${entry.id}`,
@@ -6581,9 +6921,20 @@
         const dayMeta = document.createElement("p");
         dayMeta.className = "app-diary-calendar-day__meta";
         dayMeta.classList.add("govuk-body-s", "govuk-!-margin-bottom-0");
-        dayMeta.textContent = sortedDayEntries.length > 1
+        const dayMetaLabel = sortedDayEntries.length > 1
           ? `${jigsawTitle} (+${sortedDayEntries.length - 1} more)`
           : jigsawTitle;
+        const jigsawId = Number(primaryEntry?.jigsaw_id || 0);
+        if (jigsawId > 0) {
+          const jigsawLink = document.createElement("button");
+          jigsawLink.type = "button";
+          jigsawLink.className = "app-inline-link-button";
+          jigsawLink.dataset.jigsawView = String(jigsawId);
+          jigsawLink.textContent = dayMetaLabel;
+          dayMeta.appendChild(jigsawLink);
+        } else {
+          dayMeta.textContent = dayMetaLabel;
+        }
         dayCell.appendChild(dayMeta);
       }
 
@@ -7675,6 +8026,7 @@
       renderAiUsageDiagnostics(null);
       renderImageEmbeddingDiagnostics(null);
       closeAiUsageDetailModal();
+      closeJigsawDetailModal();
       clearBulkUploadFiles();
       clearBulkCreateProgress();
       closeImageBrowser();
@@ -8810,6 +9162,19 @@
       return;
     }
 
+    const jigsawViewButton = event.target.closest("[data-jigsaw-view]");
+    if (jigsawViewButton) {
+      event.preventDefault();
+      clearFeedback();
+      const jigsawId = Number(jigsawViewButton.getAttribute("data-jigsaw-view") || "0");
+      if (!jigsawId) {
+        showFeedback("Could not determine which jigsaw to open.", true);
+        return;
+      }
+      await openJigsawDetailModal(jigsawId, { opener: jigsawViewButton });
+      return;
+    }
+
     const imageEditButton = event.target.closest("[data-image-edit]");
     if (imageEditButton) {
       event.preventDefault();
@@ -9856,6 +10221,10 @@
     window.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && state.authDialogOpen) {
         closeAuthDialog();
+        return;
+      }
+      if (event.key === "Escape" && state.jigsawDetail.isOpen) {
+        closeJigsawDetailModal();
       }
     });
 
@@ -10039,6 +10408,23 @@
 
     if (elements.imageBrowserClose) {
       elements.imageBrowserClose.addEventListener("click", closeImageBrowser);
+    }
+
+    if (elements.imageBrowserStatus) {
+      elements.imageBrowserStatus.addEventListener("click", async (event) => {
+        const jigsawViewButton = event.target.closest("[data-jigsaw-view]");
+        if (!jigsawViewButton) {
+          return;
+        }
+        event.preventDefault();
+        clearFeedback();
+        const jigsawId = Number(jigsawViewButton.getAttribute("data-jigsaw-view") || "0");
+        if (!jigsawId) {
+          showFeedback("Could not determine which jigsaw to open.", true);
+          return;
+        }
+        await openJigsawDetailModal(jigsawId, { opener: jigsawViewButton });
+      });
     }
 
     if (elements.imageBrowserPrev) {
@@ -10326,6 +10712,10 @@
       elements.imageLibraryTableBody.addEventListener("click", handleTableActions);
     }
 
+    if (elements.jigsawDetailImagesBody) {
+      elements.jigsawDetailImagesBody.addEventListener("click", handleTableActions);
+    }
+
     if (elements.imageBrowserSuggestionsList) {
       elements.imageBrowserSuggestionsList.addEventListener("click", handleTableActions);
     }
@@ -10400,6 +10790,18 @@
       elements.aiUsageDetailModal.addEventListener("click", (event) => {
         if (event.target === elements.aiUsageDetailModal) {
           closeAiUsageDetailModal();
+        }
+      });
+    }
+
+    if (elements.jigsawDetailCloseButton) {
+      elements.jigsawDetailCloseButton.addEventListener("click", closeJigsawDetailModal);
+    }
+
+    if (elements.jigsawDetailModal) {
+      elements.jigsawDetailModal.addEventListener("click", (event) => {
+        if (event.target === elements.jigsawDetailModal) {
+          closeJigsawDetailModal();
         }
       });
     }

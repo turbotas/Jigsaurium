@@ -1106,6 +1106,31 @@
   margin-bottom: 0;
 }
 
+.app-image-browser__status {
+  display: grid;
+  gap: 2px;
+}
+
+.app-image-browser__status-line {
+  margin: 0;
+}
+
+.app-inline-link-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: #1d70b8;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
+.app-inline-link-button:focus-visible {
+  outline: 3px solid #ffdd00;
+  outline-offset: 2px;
+}
+
 .app-image-browser__viewport {
   flex: 1 1 auto;
   min-height: 0;
@@ -1309,4 +1334,39 @@
   padding: 12px;
   max-height: 55vh;
   overflow: auto;
+}
+
+.app-jigsaw-detail-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(11, 12, 12, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.app-jigsaw-detail-modal[hidden] {
+  display: none !important;
+}
+
+.app-jigsaw-detail-modal__panel {
+  width: min(1080px, 96vw);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  border-radius: 6px;
+  background: #fff;
+  padding: 16px;
+}
+
+.app-jigsaw-detail-modal__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.app-jigsaw-detail-table {
+  margin-bottom: 0;
 }

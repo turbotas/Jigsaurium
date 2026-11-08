@@ -648,7 +648,7 @@
               <h4 id="image-browser-title" class="govuk-heading-m govuk-!-margin-bottom-1">Image browser</h4>
               <button id="image-browser-close" type="button" class="govuk-button govuk-button--warning govuk-!-margin-bottom-0 app-image-browser__close-button" data-module="govuk-button">Close Image Browser</button>
             </div>
-            <p id="image-browser-status" class="govuk-hint govuk-!-margin-bottom-0"></p>
+            <div id="image-browser-status" class="govuk-hint govuk-!-margin-bottom-0 app-image-browser__status"></div>
           </div>
 
           <div class="app-image-browser__controls govuk-!-margin-bottom-3">
@@ -768,6 +768,49 @@
         </div>
       </div>
 
+      <div id="jigsaw-detail-modal" class="app-jigsaw-detail-modal" hidden>
+        <div class="app-jigsaw-detail-modal__panel" role="dialog" aria-modal="true" aria-labelledby="jigsaw-detail-title">
+          <div class="app-jigsaw-detail-modal__header">
+            <h4 id="jigsaw-detail-title" class="govuk-heading-m govuk-!-margin-bottom-1">Jigsaw details</h4>
+            <button id="jigsaw-detail-close" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Close</button>
+          </div>
+          <p id="jigsaw-detail-summary" class="govuk-hint govuk-!-margin-bottom-3">Loading details…</p>
+
+          <h5 class="govuk-heading-s govuk-!-margin-bottom-2">Metadata</h5>
+          <dl id="jigsaw-detail-metadata" class="govuk-summary-list govuk-!-margin-bottom-5"></dl>
+
+          <h5 class="govuk-heading-s govuk-!-margin-bottom-2">Assigned images</h5>
+          <div class="table-scroll-wrap govuk-!-margin-bottom-5">
+            <table class="govuk-table app-jigsaw-detail-table">
+              <thead class="govuk-table__head">
+                <tr class="govuk-table__row">
+                  <th class="govuk-table__header">Thumbnail</th>
+                  <th class="govuk-table__header">Tag</th>
+                  <th class="govuk-table__header">Captured</th>
+                  <th class="govuk-table__header">Action</th>
+                </tr>
+              </thead>
+              <tbody id="jigsaw-detail-images-body" class="govuk-table__body"></tbody>
+            </table>
+          </div>
+
+          <h5 class="govuk-heading-s govuk-!-margin-bottom-2">Diary entries</h5>
+          <div class="table-scroll-wrap">
+            <table class="govuk-table app-jigsaw-detail-table">
+              <thead class="govuk-table__head">
+                <tr class="govuk-table__row">
+                  <th class="govuk-table__header">Completed</th>
+                  <th class="govuk-table__header">Source image</th>
+                  <th class="govuk-table__header">Difficulty</th>
+                  <th class="govuk-table__header">Notes</th>
+                </tr>
+              </thead>
+              <tbody id="jigsaw-detail-diary-body" class="govuk-table__body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
     <div id="collection-diary-panel" class="app-section-panel">
 
     <section class="govuk-!-margin-top-6" aria-labelledby="jigsaw-diary-heading">
@@ -872,7 +915,6 @@
             <caption id="diary-entries-caption" class="govuk-table__caption govuk-table__caption--m">Recent diary entries and unlinked completed images (most recent first)</caption>
             <thead class="govuk-table__head">
               <tr class="govuk-table__row">
-                <th class="govuk-table__header" data-sort-list="diary" data-sort-field="id">ID</th>
                 <th class="govuk-table__header" data-sort-list="diary" data-sort-field="jigsaw_title">Jigsaw</th>
                 <th class="govuk-table__header">Completed image</th>
                 <th class="govuk-table__header" data-sort-list="diary" data-sort-field="completed_at">Completed</th>

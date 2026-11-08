@@ -58,6 +58,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
   - Add (quick-add: title + piece count), edit, archive/retire, restore.
   - Track condition, piece count, and status.
   - Search by title, piece count, availability, and tags.
+  - Open an in-frame jigsaw details panel from jigsaw/image contexts to review one jigsaw's metadata, assigned images, and diary history without leaving current SPA state.
 - Completion diary:
   - Log completions per jigsaw with optional 1-5 difficulty rating and notes.
   - View diary entries as any authenticated user.
