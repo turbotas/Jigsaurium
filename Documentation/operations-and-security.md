@@ -104,6 +104,7 @@ Host enforcement policy:
   - Linux/macOS: `.venv/bin/python scripts/prefetch_embedding_model.py`
 - Optional: pass `--token` or set `HF_TOKEN` for higher download limits.
 - With `IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY=1`, startup and embedding requests fail fast if that local path is missing or incomplete.
+- Development exception: when `APP_ENV=dev`, startup warm-load logs a warning and continues if the configured local model path is missing, even when startup fail-fast is enabled. This prevents local boot failures after env-file changes; embedding endpoints remain unavailable until the model is prefetched or embeddings are disabled.
 
 ## Proxy Header Handling
 

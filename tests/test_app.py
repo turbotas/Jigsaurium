@@ -1,6 +1,7 @@
 import flask
 import pytest
 import re
+import app as app_module
 
 from app import create_app
 
@@ -82,6 +83,47 @@ def test_create_app_allows_default_secret_key_in_dev_environment():
 
     app = create_app(DevConfig)
     assert app.config["SECRET_KEY"] == "dev-secret-key"
+
+
+@pytest.mark.functional
+def test_create_app_skips_missing_local_embedding_model_on_dev_startup(monkeypatch):
+    def _raise_missing_model(*_args, **_kwargs):
+        raise RuntimeError("Configured embedding model path does not exist: .hf-models/clip-vit-base-patch32")
+
+    monkeypatch.setattr(app_module, "warm_embedding_runtime", _raise_missing_model)
+
+    class DevConfig:
+        APP_ENV = "dev"
+        SECRET_KEY = "dev-secret-key"
+        TESTING = True
+        IMAGE_EMBEDDINGS_ENABLED = True
+        IMAGE_EMBEDDINGS_WARM_ON_STARTUP = True
+        IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR = True
+        IMAGE_EMBEDDING_MODEL_LOCAL_PATH = ".hf-models/clip-vit-base-patch32"
+
+    app = create_app(DevConfig)
+
+    assert app.config["IMAGE_EMBEDDINGS_ENABLED"] is True
+
+
+@pytest.mark.functional
+def test_create_app_keeps_fail_fast_missing_local_embedding_model_outside_dev(monkeypatch):
+    def _raise_missing_model(*_args, **_kwargs):
+        raise RuntimeError("Configured embedding model path does not exist: /opt/models/clip-vit-base-patch32")
+
+    monkeypatch.setattr(app_module, "warm_embedding_runtime", _raise_missing_model)
+
+    class TestConfig:
+        APP_ENV = "test"
+        SECRET_KEY = "this-is-a-long-enough-test-secret"
+        TESTING = True
+        IMAGE_EMBEDDINGS_ENABLED = True
+        IMAGE_EMBEDDINGS_WARM_ON_STARTUP = True
+        IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR = True
+        IMAGE_EMBEDDING_MODEL_LOCAL_PATH = "/opt/models/clip-vit-base-patch32"
+
+    with pytest.raises(RuntimeError, match="Configured embedding model path does not exist"):
+        create_app(TestConfig)
 
 
 @pytest.mark.functional

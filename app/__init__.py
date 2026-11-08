@@ -22,6 +22,11 @@ from app.request_security import (
 )
 
 
+def _is_missing_local_embedding_model_error(error):
+    message = str(error or "")
+    return "Configured embedding model path does not exist:" in message
+
+
 def _is_valid_absolute_http_url(value):
     if not isinstance(value, str):
         return False
@@ -196,8 +201,21 @@ def _warm_embeddings_on_startup(app):
                 "load_seconds": round(float(result.get("duration_seconds", 0.0)), 3),
             },
         )
-    except Exception:
+    except Exception as error:
         app.logger.exception("image_embeddings_startup_warm_failed")
+        app_env = str(app.config.get("APP_ENV", "dev") or "dev").strip().lower()
+        if app_env == "dev" and _is_missing_local_embedding_model_error(error):
+            app.logger.warning(
+                "image_embeddings_startup_warm_skipped_missing_local_model",
+                extra={
+                    "model_local_path": model_local_path or None,
+                    "hint": (
+                        "Run scripts/prefetch_embedding_model.py to vendor the model, "
+                        "or set IMAGE_EMBEDDINGS_ENABLED=0 for Simple Mode."
+                    ),
+                },
+            )
+            return
         if bool(app.config.get("IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR", True)):
             raise
 
