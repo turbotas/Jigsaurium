@@ -71,4 +71,4 @@ node_modules/
 ijfw/
 
 # Local model cache artifacts
-.hfmodels/
+.hf-models/
