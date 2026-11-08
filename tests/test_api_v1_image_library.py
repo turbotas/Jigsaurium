@@ -114,6 +114,7 @@ def embedding_test_fallback(monkeypatch):
         ("GET", "/api/v1/image-library/bulk-create-jigsaws/1/items", None, None),
         ("PATCH", "/api/v1/image-library/images/1/assign", None, {"jigsaw_id": 1}),
         ("PATCH", "/api/v1/image-library/images/1/tag", None, {"tag": "Box"}),
+        ("PATCH", "/api/v1/image-library/images/1/ai-suggestions", None, {"action": "accept"}),
         ("DELETE", "/api/v1/image-library/images/1", None, None),
         ("POST", "/api/v1/image-embeddings/backfill", None, {}),
         ("GET", "/api/v1/image-embeddings/backfill/1", None, None),
@@ -1559,6 +1560,143 @@ def test_admin_can_overwrite_image_content(client, seeded_image_library_data):
 
 
 @pytest.mark.functional
+def test_image_overwrite_rejects_invalid_ai_suggestion_action(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(_make_png_bytes()), "invalid-action-source.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    overwrite_response = client.put(
+        f"/api/v1/image-library/images/{image_id}/content",
+        headers=_csrf_headers(),
+        data={
+            "ai_suggestion_action": "maybe",
+            "image": (BytesIO(_make_png_bytes(color=(200, 200, 10))), "overwrite.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert overwrite_response.status_code == 422
+    payload = overwrite_response.get_json()
+    assert payload["error"]["details"][0]["field"] == "ai_suggestion_action"
+
+
+@pytest.mark.functional
+def test_image_overwrite_mark_cropped_sets_flag_and_accepts_suggestion(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(_make_png_bytes()), "crop-source.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    with app.app_context():
+        db_session = get_session()
+        image = db_session.get(JigsawImage, image_id)
+        assert image is not None
+        image.ai_suggested_tag = "Box side"
+        image.ai_suggested_corners_json = json.dumps(
+            [
+                {"x": 0.1, "y": 0.1},
+                {"x": 0.9, "y": 0.1},
+                {"x": 0.9, "y": 0.9},
+                {"x": 0.1, "y": 0.9},
+            ]
+        )
+        image.ai_suggestions_pending_review = True
+        db_session.commit()
+
+    overwrite_response = client.put(
+        f"/api/v1/image-library/images/{image_id}/content",
+        headers=_csrf_headers(),
+        data={
+            "mark_cropped": "1",
+            "ai_suggestion_action": "accepted",
+            "image": (BytesIO(_make_png_bytes(color=(20, 200, 20))), "crop-updated.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert overwrite_response.status_code == 200
+    payload = overwrite_response.get_json()["data"]
+    assert payload["is_cropped"] is True
+    assert payload["ai_suggestions_pending_review"] is False
+    assert payload["ai_suggested_tag"] == "Box side"
+
+
+@pytest.mark.functional
+def test_admin_can_reject_image_ai_suggestions(client, seeded_image_library_data, app):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(_make_png_bytes()), "reject-ai-source.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    with app.app_context():
+        db_session = get_session()
+        image = db_session.get(JigsawImage, image_id)
+        assert image is not None
+        image.ai_suggested_tag = "Reference"
+        image.ai_suggested_corners_json = json.dumps(
+            [
+                {"x": 0.05, "y": 0.05},
+                {"x": 0.95, "y": 0.05},
+                {"x": 0.95, "y": 0.95},
+                {"x": 0.05, "y": 0.95},
+            ]
+        )
+        image.ai_suggestions_pending_review = True
+        image.ai_suggested_at = datetime.now(timezone.utc)
+        db_session.commit()
+
+    reject_response = client.patch(
+        f"/api/v1/image-library/images/{image_id}/ai-suggestions",
+        headers=_csrf_headers(),
+        json={"action": "reject"},
+    )
+
+    assert reject_response.status_code == 200
+    payload = reject_response.get_json()["data"]
+    assert payload["ai_suggestions_pending_review"] is False
+    assert payload["ai_suggested_tag"] is None
+    assert payload["ai_suggested_corners"] is None
+    assert payload["ai_suggested_at"] is None
+
+
+@pytest.mark.functional
+def test_review_image_ai_suggestions_validates_action(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    response = client.patch(
+        "/api/v1/image-library/images/1/ai-suggestions",
+        headers=_csrf_headers(),
+        json={"action": "later"},
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["details"][0]["field"] == "action"
+
+
+@pytest.mark.functional
 def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client, seeded_image_library_data, app, monkeypatch):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 
@@ -1592,6 +1730,16 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
                 "tags": ["landscape", "sunset"],
                 "dimensions_cm": "70 x 50 cm",
                 "description": "Inferred from box image",
+                "image_suggestion": {
+                    "tag": "Box side",
+                    "coordinate_space": "normalized",
+                    "corners": [
+                        {"x": 0.08, "y": 0.09},
+                        {"x": 0.92, "y": 0.09},
+                        {"x": 0.91, "y": 0.88},
+                        {"x": 0.07, "y": 0.9},
+                    ],
+                },
             },
             "provider_response": {
                 "choices": [
@@ -1628,7 +1776,11 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
     assert payload["jigsaw"]["series_number"] == "10"
     assert payload["jigsaw"]["manufacturer"] == "Ravensburger"
     assert payload["image"]["jigsaw_id"] == payload["jigsaw"]["id"]
-    assert payload["image"]["tag"] == "Box"
+    assert payload["image"]["tag"] == "Box side"
+    assert payload["image"]["ai_suggested_tag"] == "Box side"
+    assert payload["image"]["ai_suggestions_pending_review"] is True
+    assert isinstance(payload["image"]["ai_suggested_corners"], list)
+    assert len(payload["image"]["ai_suggested_corners"]) == 4
     assert payload["ai"]["prompt_tokens"] == 500
 
     with app.app_context():
@@ -1638,6 +1790,131 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
         payload = json.loads(usage_rows[0].payload_json)
         assert isinstance(payload.get("provider_response"), dict)
         assert "provider_response_text" in payload
+        assert payload["image_suggestions"]["suggested_tag"] == "Box side"
+        assert len(payload["image_suggestions"]["suggested_corners"]) == 4
+
+
+@pytest.mark.functional
+def test_create_jigsaw_from_image_ignores_invalid_corner_coordinate_space(client, seeded_image_library_data, app, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(_make_png_bytes(size=(48, 32))), "bad-space.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = "test-key"
+    app.config["AI_MODEL"] = "mock-vision"
+    app.config["AI_ENDPOINT_URL"] = "https://example.invalid/v1/chat/completions"
+    app.config["AI_DAILY_BUDGET_USD"] = 10.0
+
+    def fake_inference(_image):
+        return {
+            "metadata": {
+                "title": "Space Test",
+                "manufacturer": "Ravensburger",
+                "piece_count": 500,
+                "image_suggestion": {
+                    "tag": "Reference",
+                    "coordinate_space": "galactic",
+                    "corners": [
+                        {"x": 2, "y": 2},
+                        {"x": 40, "y": 2},
+                        {"x": 40, "y": 30},
+                        {"x": 2, "y": 30},
+                    ],
+                },
+            },
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "total_tokens": 14,
+            "provider_cost_usd": None,
+            "computed_cost_usd": None,
+            "final_cost_usd": 0.01,
+            "model": "mock-vision",
+            "endpoint_url": "https://example.invalid/v1/chat/completions",
+        }
+
+    monkeypatch.setattr("app.api.v1.routes._infer_jigsaw_metadata_from_image", fake_inference)
+
+    create_response = client.post(
+        f"/api/v1/image-library/images/{image_id}/create-jigsaw",
+        headers=_csrf_headers(),
+        json={},
+    )
+
+    assert create_response.status_code == 201
+    payload = create_response.get_json()["data"]
+    assert payload["image"]["tag"] == "Reference"
+    assert payload["image"]["ai_suggested_tag"] == "Reference"
+    assert payload["image"]["ai_suggested_corners"] is None
+
+
+@pytest.mark.functional
+def test_create_jigsaw_from_image_skips_corner_prompt_when_image_already_cropped(client, seeded_image_library_data, app, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "files": [(BytesIO(_make_png_bytes()), "already-cropped.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    image_id = upload_response.get_json()["data"]["created"][0]["id"]
+
+    with app.app_context():
+        db_session = get_session()
+        image = db_session.get(JigsawImage, image_id)
+        assert image is not None
+        image.is_cropped = True
+        db_session.commit()
+
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = "test-key"
+    app.config["AI_MODEL"] = "mock-vision"
+    app.config["AI_ENDPOINT_URL"] = "https://example.invalid/v1/chat/completions"
+    app.config["AI_DAILY_BUDGET_USD"] = 10.0
+
+    observed = {"include_image_suggestion": None}
+
+    def fake_infer_many(images, instruction_text, *, include_image_suggestion=False):
+        assert len(images) == 1
+        assert isinstance(instruction_text, str)
+        observed["include_image_suggestion"] = include_image_suggestion
+        return {
+            "metadata": {
+                "title": "Cropped Source",
+                "manufacturer": "Ravensburger",
+                "piece_count": 500,
+            },
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "total_tokens": 14,
+            "provider_cost_usd": None,
+            "computed_cost_usd": None,
+            "final_cost_usd": 0.01,
+            "model": "mock-vision",
+            "endpoint_url": "https://example.invalid/v1/chat/completions",
+        }
+
+    monkeypatch.setattr("app.api.v1.routes._infer_jigsaw_metadata_from_images", fake_infer_many)
+
+    create_response = client.post(
+        f"/api/v1/image-library/images/{image_id}/create-jigsaw",
+        headers=_csrf_headers(),
+        json={},
+    )
+
+    assert create_response.status_code == 201
+    assert observed["include_image_suggestion"] is False
 
 
 @pytest.mark.functional
@@ -2282,6 +2559,11 @@ def test_bulk_create_job_non_inline_kickstarts_thread_on_create_and_status_poll(
     assert upload_response.status_code == 201
     image_id = upload_response.get_json()["data"]["created"][0]["id"]
 
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = "test-key"
+    app.config["AI_MODEL"] = "mock-vision"
+    app.config["AI_ENDPOINT_URL"] = "https://example.invalid/v1/chat/completions"
+    app.config["AI_DAILY_BUDGET_USD"] = 10.0
     app.config["BULK_AI_CREATE_INLINE"] = False
     launched_job_ids = []
 

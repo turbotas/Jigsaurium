@@ -416,6 +416,8 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         assert page.locator("#image-browser-create-jigsaw").is_visible()
         assert page.locator("#image-browser-delete").is_visible()
         assert page.locator("#image-browser-crop-mode").is_visible()
+        assert page.locator("#image-browser-ai-accept").count() == 1
+        assert page.locator("#image-browser-ai-reject").count() == 1
         assert page.locator("#image-browser-crop-mode option[value='rectangle']").count() == 1
         assert page.locator("#image-browser-crop-mode option[value='perspective']").count() == 1
 

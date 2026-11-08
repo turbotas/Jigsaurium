@@ -139,6 +139,14 @@ AI_USAGE_STATUS_SUCCESS = "success"
 AI_USAGE_STATUS_ERROR = "error"
 AI_USAGE_STATUS_BLOCKED = "blocked"
 AI_BOX_IMAGE_TAG = "Box"
+AI_IMAGE_SUGGESTION_SPACE_NORMALIZED = "normalized"
+AI_IMAGE_SUGGESTION_SPACE_PIXEL = "pixel"
+AI_IMAGE_SUGGESTION_SPACE_UNKNOWN = "unknown"
+AI_IMAGE_SUGGESTION_ALLOWED_SPACES = {
+    AI_IMAGE_SUGGESTION_SPACE_NORMALIZED,
+    AI_IMAGE_SUGGESTION_SPACE_PIXEL,
+    AI_IMAGE_SUGGESTION_SPACE_UNKNOWN,
+}
 DIARY_ENTRY_NOTES_MAX_LENGTH = 4000
 DIARY_ENTRY_DIFFICULTY_MIN = 1
 DIARY_ENTRY_DIFFICULTY_MAX = 5
@@ -1049,6 +1057,11 @@ def _serialize_jigsaw_image(image):
         "captured_at": image.captured_at.isoformat() if image.captured_at else None,
         "captured_at_source": image.captured_at_source,
         "user_comment": image.user_comment,
+        "is_cropped": bool(getattr(image, "is_cropped", False)),
+        "ai_suggested_tag": getattr(image, "ai_suggested_tag", None),
+        "ai_suggested_corners": _deserialize_json_text(getattr(image, "ai_suggested_corners_json", None)),
+        "ai_suggestions_pending_review": bool(getattr(image, "ai_suggestions_pending_review", False)),
+        "ai_suggested_at": image.ai_suggested_at.isoformat() if getattr(image, "ai_suggested_at", None) else None,
         "created_at": image.created_at.isoformat() if image.created_at else None,
     }
 
@@ -1064,7 +1077,12 @@ def _serialize_jigsaw_image_fields(
     captured_at,
     captured_at_source,
     user_comment,
-    created_at,
+    is_cropped=False,
+    ai_suggested_tag=None,
+    ai_suggested_corners_json=None,
+    ai_suggestions_pending_review=False,
+    ai_suggested_at=None,
+    created_at=None,
     uploaded_by_user_id=None,
 ):
     urls = _build_image_urls(image_id, content_version)
@@ -1082,6 +1100,11 @@ def _serialize_jigsaw_image_fields(
         "captured_at": captured_at.isoformat() if captured_at else None,
         "captured_at_source": captured_at_source,
         "user_comment": user_comment,
+        "is_cropped": bool(is_cropped),
+        "ai_suggested_tag": ai_suggested_tag,
+        "ai_suggested_corners": _deserialize_json_text(ai_suggested_corners_json),
+        "ai_suggestions_pending_review": bool(ai_suggestions_pending_review),
+        "ai_suggested_at": ai_suggested_at.isoformat() if ai_suggested_at else None,
         "created_at": created_at.isoformat() if created_at else None,
     }
 
@@ -1098,6 +1121,11 @@ def _jigsaw_image_metadata_columns():
         JigsawImage.captured_at,
         JigsawImage.captured_at_source,
         JigsawImage.user_comment,
+        JigsawImage.is_cropped,
+        JigsawImage.ai_suggested_tag,
+        JigsawImage.ai_suggested_corners_json,
+        JigsawImage.ai_suggestions_pending_review,
+        JigsawImage.ai_suggested_at,
         JigsawImage.created_at,
     )
 
@@ -3599,8 +3627,8 @@ def _extract_json_object_from_text(raw_text):
     return parsed
 
 
-def _build_ai_image_prompt():
-    return (
+def _build_ai_image_prompt(*, include_image_suggestion=True):
+    base_prompt = (
         "You are extracting metadata from a jigsaw puzzle box image. "
         "Return one JSON object only, with exactly these keys and types: "
         "title (string|null), series_name (string|null), series_number (string|null), manufacturer (string|null), "
@@ -3613,9 +3641,28 @@ def _build_ai_image_prompt():
         "Do not guess missing values. "
         "piece_count must be an integer when present. "
         "tags must be either a comma-separated string or an array of short strings. "
+    )
+
+    if include_image_suggestion:
+        base_prompt += (
+            "Also include image_suggestion (object) with keys: "
+            "tag (string|null), coordinate_space (string), corners (array|null). "
+            "tag should classify image purpose as one of: Box, Box side, Completed, Reference; "
+            "use null when uncertain. "
+            "corners should contain exactly 4 points in reading order around the rectangular subject (top-left, top-right, bottom-right, bottom-left). "
+            "For most images, attempt corners even when imperfect. "
+            "Each point must be object with numeric x and y. "
+            "Set coordinate_space to one of normalized, pixel, unknown. "
+            "When normalized, x/y are between 0 and 1. "
+            "When pixel, x/y are absolute pixels in the source image. "
+            "If corners are not confidently available, set corners to null and coordinate_space to unknown. "
+        )
+
+    base_prompt += (
         "Do not include markdown, code fences, comments, or any text before/after the JSON object. "
         "Output must be parseable by json.loads without preprocessing."
     )
+    return base_prompt
 
 
 def _build_ai_usage_costs(result_payload):
@@ -3862,6 +3909,133 @@ def _normalize_ai_jigsaw_payload(raw_payload):
     }, None
 
 
+def _normalize_ai_suggested_tag(value):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    normalized = _normalize_known_image_tag(value)
+    if normalized in {
+        IMAGE_BROWSER_TAG_BOX,
+        IMAGE_BROWSER_TAG_BOX_FRONT,
+        IMAGE_BROWSER_TAG_BOX_SIDE,
+        IMAGE_BROWSER_TAG_BOX_BACK,
+        IMAGE_BROWSER_TAG_COMPLETED,
+        IMAGE_BROWSER_TAG_REFERENCE,
+    }:
+        return normalized
+    return None
+
+
+def _extract_image_pixel_dimensions(image_data):
+    if Image is None or not image_data:
+        return None, None
+    try:
+        with Image.open(BytesIO(image_data)) as image_obj:
+            width, height = image_obj.size
+            width = int(width or 0)
+            height = int(height or 0)
+            if width <= 0 or height <= 0:
+                return None, None
+            return width, height
+    except Exception:
+        return None, None
+
+
+def _parse_ai_corner_point(raw_point):
+    if not isinstance(raw_point, dict):
+        return None
+    try:
+        x_value = float(raw_point.get("x"))
+        y_value = float(raw_point.get("y"))
+    except (TypeError, ValueError):
+        return None
+    if not (x_value == x_value and y_value == y_value):  # NaN guard
+        return None
+    return {"x": x_value, "y": y_value}
+
+
+def _normalize_ai_suggested_corners(raw_corners, *, coordinate_space, image_width, image_height):
+    if not isinstance(raw_corners, list) or len(raw_corners) != 4:
+        return None
+
+    parsed_points = []
+    for raw_point in raw_corners:
+        parsed_point = _parse_ai_corner_point(raw_point)
+        if parsed_point is None:
+            return None
+        parsed_points.append(parsed_point)
+
+    if coordinate_space == AI_IMAGE_SUGGESTION_SPACE_PIXEL:
+        if not image_width or not image_height:
+            return None
+        normalized_points = []
+        for point in parsed_points:
+            normalized_x = point["x"] / float(image_width)
+            normalized_y = point["y"] / float(image_height)
+            if normalized_x < -0.05 or normalized_x > 1.05 or normalized_y < -0.05 or normalized_y > 1.05:
+                return None
+            normalized_points.append(
+                {
+                    "x": round(min(max(normalized_x, 0.0), 1.0), 6),
+                    "y": round(min(max(normalized_y, 0.0), 1.0), 6),
+                }
+            )
+        return normalized_points
+
+    if coordinate_space == AI_IMAGE_SUGGESTION_SPACE_NORMALIZED:
+        normalized_points = []
+        for point in parsed_points:
+            if point["x"] < -0.05 or point["x"] > 1.05 or point["y"] < -0.05 or point["y"] > 1.05:
+                return None
+            normalized_points.append(
+                {
+                    "x": round(min(max(point["x"], 0.0), 1.0), 6),
+                    "y": round(min(max(point["y"], 0.0), 1.0), 6),
+                }
+            )
+        return normalized_points
+
+    return None
+
+
+def _normalize_ai_image_suggestions(raw_payload, *, image):
+    if not isinstance(raw_payload, dict):
+        return {
+            "suggested_tag": None,
+            "suggested_corners": None,
+            "has_suggestion": False,
+        }
+
+    image_suggestion = raw_payload.get("image_suggestion")
+    if not isinstance(image_suggestion, dict):
+        image_suggestion = raw_payload
+
+    suggested_tag = _normalize_ai_suggested_tag(image_suggestion.get("tag") or image_suggestion.get("image_type"))
+
+    raw_coordinate_space = str(image_suggestion.get("coordinate_space") or "").strip().lower()
+    if raw_coordinate_space not in AI_IMAGE_SUGGESTION_ALLOWED_SPACES:
+        raw_coordinate_space = AI_IMAGE_SUGGESTION_SPACE_UNKNOWN
+
+    image_width = image_height = None
+    if raw_coordinate_space == AI_IMAGE_SUGGESTION_SPACE_PIXEL:
+        image_width, image_height = _extract_image_pixel_dimensions(getattr(image, "image_data", None))
+
+    suggested_corners = _normalize_ai_suggested_corners(
+        image_suggestion.get("corners"),
+        coordinate_space=raw_coordinate_space,
+        image_width=image_width,
+        image_height=image_height,
+    )
+
+    has_suggestion = suggested_tag is not None or bool(suggested_corners)
+    return {
+        "suggested_tag": suggested_tag,
+        "suggested_corners": suggested_corners,
+        "has_suggestion": has_suggestion,
+    }
+
+
 def _extract_ai_message_text(content):
     if isinstance(content, str):
         return content
@@ -3879,7 +4053,7 @@ def _extract_ai_message_text(content):
     return ""
 
 
-def _infer_jigsaw_metadata_from_images(images, instruction_text):
+def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_image_suggestion=False):
     if not current_app.config.get("AI_ENABLED", False):
         raise RuntimeError("AI image inference is disabled")
 
@@ -3911,7 +4085,7 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text):
         "temperature": 0,
         "response_format": {"type": "json_object"},
         "messages": [
-            {"role": "system", "content": _build_ai_image_prompt()},
+            {"role": "system", "content": _build_ai_image_prompt(include_image_suggestion=include_image_suggestion)},
             {"role": "user", "content": user_content},
         ],
     }
@@ -3986,7 +4160,12 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text):
 
 
 def _infer_jigsaw_metadata_from_image(image):
-    return _infer_jigsaw_metadata_from_images([image], "Extract jigsaw metadata from this image.")
+    include_image_suggestion = not bool(getattr(image, "is_cropped", False))
+    return _infer_jigsaw_metadata_from_images(
+        [image],
+        "Extract jigsaw metadata from this image.",
+        include_image_suggestion=include_image_suggestion,
+    )
 
 
 def _is_missing_jigsaw_value(value):
@@ -5620,6 +5799,11 @@ def list_jigsaw_images(jigsaw_id):
             captured_at=row.captured_at,
             captured_at_source=row.captured_at_source,
             user_comment=row.user_comment,
+            is_cropped=row.is_cropped,
+            ai_suggested_tag=row.ai_suggested_tag,
+            ai_suggested_corners_json=row.ai_suggested_corners_json,
+            ai_suggestions_pending_review=row.ai_suggestions_pending_review,
+            ai_suggested_at=row.ai_suggested_at,
             created_at=row.created_at,
         )
         for row in image_rows
@@ -6538,9 +6722,13 @@ def set_image_library_item_tag(image_id):
         return _error_response("not_found", "Jigsaw image was not found.", 404)
 
     if image.tag == tag:
+        if bool(getattr(image, "ai_suggestions_pending_review", False)):
+            image.ai_suggestions_pending_review = False
+            db_session.commit()
         return _success_response(_serialize_jigsaw_image(image))
 
     image.tag = tag
+    image.ai_suggestions_pending_review = False
 
     if image.jigsaw_id is not None:
         jigsaw = db_session.get(Jigsaw, image.jigsaw_id)
@@ -6561,6 +6749,73 @@ def set_image_library_item_tag(image_id):
     )
     db_session.commit()
 
+    return _success_response(_serialize_jigsaw_image(image))
+
+
+@api_v1_bp.patch("/image-library/images/<int:image_id>/ai-suggestions")
+@require_auth
+def review_image_library_ai_suggestions(image_id):
+    if not _current_user_has_capability("image.tag"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
+    payload, error = _parse_json_object()
+    if error is not None:
+        return error
+
+    action = str(payload.get("action") or "").strip().lower()
+    if action not in {"accept", "reject"}:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "action", "issue": "must be one of: accept, reject"}],
+        )
+
+    apply_tag = bool(payload.get("apply_tag", True))
+
+    db_session = get_session()
+    image = db_session.get(JigsawImage, image_id)
+    if image is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    previous_tag = image.tag
+    if action == "accept":
+        if apply_tag and image.ai_suggested_tag:
+            image.tag = _normalize_known_image_tag(image.ai_suggested_tag)
+            if image.jigsaw_id is not None and image.tag != previous_tag:
+                jigsaw = db_session.get(Jigsaw, image.jigsaw_id)
+                if jigsaw is not None:
+                    _maybe_create_diary_entry_from_image(
+                        db_session=db_session,
+                        jigsaw=jigsaw,
+                        image=image,
+                        trigger="ai_suggestion_accept",
+                        created_by_user_id=g.current_user.id,
+                    )
+        image.ai_suggestions_pending_review = False
+    else:
+        image.ai_suggestions_pending_review = False
+        image.ai_suggested_tag = None
+        image.ai_suggested_corners_json = None
+        image.ai_suggested_at = None
+
+    _record_audit_event(
+        action="jigsaw.image_ai_suggestions_reviewed",
+        entity_type="jigsaw_image",
+        entity_id=image.id,
+        payload={
+            "review_action": action,
+            "apply_tag": bool(apply_tag),
+            "tag_before": previous_tag,
+            "tag_after": image.tag,
+            "pending_review": bool(image.ai_suggestions_pending_review),
+        },
+    )
+    db_session.commit()
     return _success_response(_serialize_jigsaw_image(image))
 
 
@@ -6657,6 +6912,16 @@ def replace_image_library_item_content(image_id):
     if error is not None:
         return error
 
+    mark_cropped = _is_truthy_form_value(request.form.get("mark_cropped"))
+    ai_suggestion_action = str(request.form.get("ai_suggestion_action") or "").strip().lower()
+    if ai_suggestion_action not in {"", "accepted", "rejected"}:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "ai_suggestion_action", "issue": "must be one of: accepted, rejected"}],
+        )
+
     previous_hash = image.image_sha256
     new_content_hash = _compute_image_sha256(image_data)
     captured_at, captured_at_source, captured_at_raw = _extract_image_captured_at(image_data)
@@ -6669,10 +6934,19 @@ def replace_image_library_item_content(image_id):
     image.preview_mime_type = variants["preview_mime_type"]
     image.preview_data = variants["preview_data"]
     image.content_version = _normalize_image_content_version(getattr(image, "content_version", 1)) + 1
+    image.is_cropped = bool(getattr(image, "is_cropped", False) or mark_cropped)
     if captured_at is not None:
         image.captured_at = captured_at
         image.captured_at_source = captured_at_source
         image.captured_at_raw = captured_at_raw
+
+    if ai_suggestion_action == "accepted" or mark_cropped:
+        image.ai_suggestions_pending_review = False
+    elif ai_suggestion_action == "rejected":
+        image.ai_suggestions_pending_review = False
+        image.ai_suggested_tag = None
+        image.ai_suggested_corners_json = None
+        image.ai_suggested_at = None
 
     _record_audit_event(
         action="jigsaw.image_content_overwritten",
@@ -6684,6 +6958,8 @@ def replace_image_library_item_content(image_id):
             "mime_type": image.mime_type,
             "size_bytes": len(image_data),
             "captured_at_updated": captured_at is not None,
+            "mark_cropped": bool(mark_cropped),
+            "ai_suggestion_action": ai_suggestion_action or None,
         },
     )
     db_session.commit()
@@ -6777,6 +7053,11 @@ def create_jigsaw_from_image(image_id):
         db_session.commit()
         return _error_response("bad_gateway", "AI metadata could not be normalized.", 502)
 
+    image_suggestions = _normalize_ai_image_suggestions(
+        inference.get("metadata"),
+        image=image,
+    )
+
     jigsaw = Jigsaw(
         title=normalized_payload["title"],
         series_name=normalized_payload["series_name"],
@@ -6795,7 +7076,15 @@ def create_jigsaw_from_image(image_id):
     db_session.flush()
 
     image.jigsaw_id = jigsaw.id
-    image.tag = AI_BOX_IMAGE_TAG
+    image.tag = image_suggestions["suggested_tag"] or AI_BOX_IMAGE_TAG
+    image.ai_suggested_tag = image_suggestions["suggested_tag"]
+    image.ai_suggested_corners_json = (
+        json.dumps(image_suggestions["suggested_corners"], sort_keys=True)
+        if image_suggestions["suggested_corners"]
+        else None
+    )
+    image.ai_suggestions_pending_review = bool(image_suggestions["has_suggestion"])
+    image.ai_suggested_at = datetime.now(timezone.utc) if image_suggestions["has_suggestion"] else None
 
     usage_event = _record_ai_usage_event(
         db_session=db_session,
@@ -6813,6 +7102,7 @@ def create_jigsaw_from_image(image_id):
         payload={
             "metadata": normalized_payload,
             "raw_metadata": inference.get("metadata"),
+            "image_suggestions": image_suggestions,
             "provider_response": inference.get("provider_response"),
             "provider_response_text": inference.get("provider_response_text"),
             "created_jigsaw_id": jigsaw.id,
@@ -6827,6 +7117,8 @@ def create_jigsaw_from_image(image_id):
             "image_id": image.id,
             "ai_usage_event_id": usage_event.id,
             "cost_usd": str(inference.get("final_cost_usd") or Decimal("0")),
+            "ai_suggested_tag": image.ai_suggested_tag,
+            "ai_suggestions_pending_review": bool(image.ai_suggestions_pending_review),
         },
     )
     db_session.commit()

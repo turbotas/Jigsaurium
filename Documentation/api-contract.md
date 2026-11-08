@@ -68,6 +68,7 @@
 - `DELETE /api/v1/image-library/images/{image_id}`
 - `PATCH /api/v1/image-library/images/{image_id}/assign`
 - `PATCH /api/v1/image-library/images/{image_id}/tag`
+- `PATCH /api/v1/image-library/images/{image_id}/ai-suggestions`
 - `PUT /api/v1/image-library/images/{image_id}/content`
 - `POST /api/v1/image-library/images/{image_id}/create-jigsaw`
 - `POST /api/v1/image-library/bulk-create-jigsaws`
@@ -338,6 +339,12 @@
   - Image content hash (`SHA-256`) is used for duplicate suppression; uploading identical bytes returns the existing image instead of creating a duplicate row.
   - Image payloads include optional capture metadata: `captured_at` (UTC ISO 8601) and `captured_at_source`.
   - Image payloads include optional `user_comment` (caller-uploaded feedback/notes for that image).
+  - Image payloads include AI review/cropping fields:
+    - `is_cropped` (boolean)
+    - `ai_suggested_tag` (nullable string)
+    - `ai_suggested_corners` (nullable array of 4 normalized `{x,y}` points)
+    - `ai_suggestions_pending_review` (boolean)
+    - `ai_suggested_at` (nullable UTC ISO 8601)
   - `GET /api/v1/jigsaws/{id}/images/{image_id}/content` remains supported for jigsaw-associated images.
 
 - Image library endpoint notes:
@@ -365,13 +372,22 @@
   - `PATCH /api/v1/image-library/images/{image_id}/assign` assigns an image to one jigsaw; reassignment to a different jigsaw returns `409`.
   - `DELETE /api/v1/image-library/images/{image_id}` is administrator-only and permanently deletes the image record.
   - `PATCH /api/v1/image-library/images/{image_id}/tag` requires `image.tag` capability and updates image tag/classification (for example `Box`, `Completed`) even when image is unassigned.
+  - `PATCH /api/v1/image-library/images/{image_id}/ai-suggestions` requires `image.tag` capability and accepts JSON body:
+    - `action`: `accept` or `reject`
+    - `apply_tag` (optional boolean, default `true`)
+  - Accept marks suggestions as reviewed (and may apply `ai_suggested_tag` when `apply_tag=true`); reject clears stored AI suggestion fields.
   - Known built-in tag variants are normalized to canonical title-case values: `Box`, `Box front`, `Box side`, `Box back`, `Reference`, `Completed`, `In progress`.
   - `PUT /api/v1/image-library/images/{image_id}/content` is admin-only and overwrites the stored image bytes in-place (used by rotate/crop workflows).
+  - `PUT /api/v1/image-library/images/{image_id}/content` accepts optional multipart fields:
+    - `mark_cropped` (`1|true|yes|on`) to persist `is_cropped=true`
+    - `ai_suggestion_action` (`accepted|rejected`) to mark AI suggestion review outcome during overwrite
   - Overwrite operations preserve the original dedupe hash so future uploads of the original source bytes still clash as duplicates.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` is admin-only and creates a new jigsaw from AI-extracted image metadata.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` only works for unassigned images; assigned images return `409`.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` returns `409` when AI is disabled (`AI_ENABLED=0`) or when AI provider configuration is incomplete.
-  - Successful create-from-image sets the associated image tag to `Box`.
+  - Successful create-from-image stores AI image suggestions (tag and optional 4-corner crop) for UI review.
+  - Create-from-image applies AI-suggested tag when valid; fallback remains `Box`.
+  - AI corner suggestions are requested for all images unless `is_cropped=true`; normalized and pixel suggestions are accepted and persisted in normalized coordinates.
   - `POST /api/v1/image-library/bulk-create-jigsaws` is admin-only and queues (or runs inline in test mode) one create-from-image action per provided image id.
   - `POST /api/v1/image-library/bulk-create-jigsaws` requires JSON body with `image_ids` as a non-empty list of positive integers (max 500).
   - `POST /api/v1/image-library/bulk-create-jigsaws` returns `409` when create-from-image AI is disabled or not fully configured.
