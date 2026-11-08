@@ -69,3 +69,6 @@ node_modules/
 # IJFW local tooling artifacts
 .ijfw/
 ijfw/
+
+# Local model cache artifacts
+.hfmodels/
