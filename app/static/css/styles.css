@@ -686,6 +686,69 @@
   font-weight: 700;
 }
 
+.app-diary-jigsaw-picker {
+  border: 1px solid #b1b4b6;
+  border-radius: 6px;
+  background: #fff;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.app-diary-jigsaw-picker__empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #505a5f;
+}
+
+.app-diary-jigsaw-picker__item {
+  border: 2px solid #d8dcdf;
+  border-radius: 6px;
+  background: #f8f8f8;
+  color: #0b0c0c;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: 108px 1fr;
+  gap: 8px;
+  align-items: start;
+  text-align: left;
+  cursor: pointer;
+  font-family: "GDS Transport", arial, sans-serif;
+}
+
+.app-diary-jigsaw-picker__item:hover {
+  border-color: #1d70b8;
+  background: #eef4fa;
+}
+
+.app-diary-jigsaw-picker__item.is-selected {
+  border-color: #1d70b8;
+  background: #dfefff;
+}
+
+.app-diary-jigsaw-picker__title {
+  margin: 0;
+  font-weight: 700;
+  color: #0b0c0c;
+}
+
+.app-diary-jigsaw-picker__meta {
+  margin: 4px 0 0;
+  color: #505a5f;
+  font-size: 0.9rem;
+}
+
+.app-diary-composer-status {
+  margin-top: 8px;
+}
+
+.app-diary-composer-status.is-error {
+  border-left-color: #d4351c;
+}
+
 .app-diary-calendar-weekdays {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));

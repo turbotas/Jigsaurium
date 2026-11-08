@@ -714,6 +714,8 @@
                 </div>
                 <button id="image-browser-crop-toggle" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Crop</button>
                 <button id="image-browser-crop-apply" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Apply crop</button>
+                <button id="image-browser-ai-accept" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Use AI suggestion</button>
+                <button id="image-browser-ai-reject" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Reject AI suggestion</button>
                 <button id="image-browser-reset" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Reset image</button>
                 <button id="image-browser-save-create" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Save create</button>
                 <button id="image-browser-save" type="button" class="govuk-button" data-module="govuk-button">Save overwrite</button>
@@ -771,13 +773,33 @@
     <section class="govuk-!-margin-top-6" aria-labelledby="jigsaw-diary-heading">
       <h3 id="jigsaw-diary-heading" class="govuk-heading-m">Completion diary</h3>
       <p class="govuk-body">Log each completion with a difficulty rating (1 = easy, 5 = very hard) and notes. Existing entries can be edited or deleted from the table below.</p>
-      <form id="diary-entry-form" class="govuk-!-margin-bottom-4">
+
+      <div class="govuk-form-group govuk-!-margin-bottom-3">
+        <label class="govuk-label" for="diary-feed-jigsaw-id">Filter diary feed</label>
+        <select id="diary-feed-jigsaw-id" class="govuk-select">
+          <option value="">All completed jigsaws (recent first)</option>
+        </select>
+      </div>
+
+      <button id="diary-entry-open" type="button" class="govuk-button" data-module="govuk-button">Add diary entry</button>
+
+      <form id="diary-entry-form" class="govuk-!-margin-bottom-4" hidden>
+        <h4 class="govuk-heading-s">New completion entry</h4>
+        <p class="govuk-hint">Use a completion photo where possible. Completion date priority: image metadata first, then your selected date/time, then current time.</p>
+
+        <div class="govuk-form-group">
+          <label class="govuk-label" for="diary-jigsaw-search">Find jigsaw</label>
+          <input id="diary-jigsaw-search" class="govuk-input" type="search" autocomplete="off" spellcheck="false" placeholder="Filter by title, artist, manufacturer, tags, or piece count">
+        </div>
+
+        <div id="diary-jigsaw-picker-list" class="app-diary-jigsaw-picker govuk-!-margin-bottom-4" aria-live="polite"></div>
+
         <div class="govuk-grid-row">
           <div class="govuk-grid-column-one-third">
             <div class="govuk-form-group">
               <label class="govuk-label" for="diary-jigsaw-id">Jigsaw</label>
               <select id="diary-jigsaw-id" name="jigsaw_id" class="govuk-select" required>
-                <option value="">All completed jigsaws (recent first)</option>
+                <option value="">Choose jigsaw</option>
               </select>
             </div>
           </div>
@@ -802,12 +824,32 @@
             </div>
           </div>
         </div>
+
+        <div class="govuk-form-group">
+          <label class="govuk-label">Completion image (optional but recommended)</label>
+          <div id="diary-image-dropzone" class="app-dropzone" role="button" tabindex="0" aria-describedby="diary-image-dropzone-hint">
+            <p class="govuk-body govuk-!-margin-bottom-2"><strong>Drag and drop one image here</strong></p>
+            <p id="diary-image-dropzone-hint" class="govuk-hint govuk-!-margin-bottom-2">Accepted: image files only.</p>
+            <div class="app-mobile-intake-actions">
+              <button id="diary-image-browse-button" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Choose file from gallery</button>
+              <button id="diary-image-camera-button" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Capture with camera</button>
+              <button id="diary-image-clear-button" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Clear image</button>
+            </div>
+            <input id="diary-image-file" class="app-mobile-intake-file-input" type="file" accept="image/*">
+            <input id="diary-image-camera" class="app-mobile-intake-file-input" type="file" accept="image/*" capture="environment">
+            <div id="diary-image-preview" class="app-mobile-intake-preview">No image selected.</div>
+          </div>
+        </div>
+
         <div class="govuk-form-group">
           <label class="govuk-label" for="diary-notes">Notes</label>
           <textarea id="diary-notes" name="notes" class="govuk-textarea" rows="3" maxlength="4000"></textarea>
         </div>
-        <button id="diary-entry-submit" type="submit" class="govuk-button" data-module="govuk-button">Add diary entry</button>
-        <button id="diary-entry-cancel" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button" hidden>Cancel edit</button>
+        <div id="diary-composer-status" class="govuk-inset-text app-diary-composer-status" aria-live="polite" hidden>
+          <p id="diary-composer-status-text" class="govuk-body govuk-!-margin-bottom-0"></p>
+        </div>
+        <button id="diary-entry-submit" type="submit" class="govuk-button" data-module="govuk-button">Save diary entry</button>
+        <button id="diary-entry-cancel" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Cancel</button>
       </form>
 
       <div class="app-diary-view-controls govuk-!-margin-bottom-3">

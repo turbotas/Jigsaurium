@@ -121,6 +121,10 @@
     diaryEntries: [],
     diaryEditingEntryId: null,
     diarySelectionTouchedByUser: false,
+    diaryComposerOpen: false,
+    diaryComposerSearchQuery: "",
+    diaryComposerSelectedImageFile: null,
+    diaryComposerSelectedImagePreviewUrl: null,
     diaryViewMode: DIARY_VIEW_MODE_LIST,
     diaryCalendar: createInitialDiaryCalendarState(),
     bulkUploadFiles: [],
@@ -168,6 +172,8 @@
       dragStart: null,
       mimeType: "image/png",
       filename: "image.png",
+      aiSuggestionUsedForCurrentImage: false,
+      cropAppliedForCurrentImage: false,
       suggestionsImageId: null,
       nameAssignImageId: null,
     },
@@ -333,6 +339,8 @@
     imageBrowserCropToggle: document.getElementById("image-browser-crop-toggle"),
     imageBrowserCropMode: document.getElementById("image-browser-crop-mode"),
     imageBrowserCropApply: document.getElementById("image-browser-crop-apply"),
+    imageBrowserAiAccept: document.getElementById("image-browser-ai-accept"),
+    imageBrowserAiReject: document.getElementById("image-browser-ai-reject"),
     imageBrowserReset: document.getElementById("image-browser-reset"),
     imageBrowserSaveCreate: document.getElementById("image-browser-save-create"),
     imageBrowserSave: document.getElementById("image-browser-save"),
@@ -349,12 +357,25 @@
     imageBrowserNameAssignClose: document.getElementById("image-browser-name-assign-close"),
     imageBrowserClose: document.getElementById("image-browser-close"),
     diaryEntryForm: document.getElementById("diary-entry-form"),
+    diaryEntryOpenButton: document.getElementById("diary-entry-open"),
     diaryEntrySubmitButton: document.getElementById("diary-entry-submit"),
     diaryEntryCancelButton: document.getElementById("diary-entry-cancel"),
+    diaryFeedJigsawId: document.getElementById("diary-feed-jigsaw-id"),
+    diaryJigsawSearch: document.getElementById("diary-jigsaw-search"),
+    diaryJigsawPickerList: document.getElementById("diary-jigsaw-picker-list"),
     diaryJigsawId: document.getElementById("diary-jigsaw-id"),
     diaryCompletedAt: document.getElementById("diary-completed-at"),
     diaryDifficulty: document.getElementById("diary-difficulty"),
     diaryNotes: document.getElementById("diary-notes"),
+    diaryComposerStatus: document.getElementById("diary-composer-status"),
+    diaryComposerStatusText: document.getElementById("diary-composer-status-text"),
+    diaryImageDropzone: document.getElementById("diary-image-dropzone"),
+    diaryImageBrowseButton: document.getElementById("diary-image-browse-button"),
+    diaryImageCameraButton: document.getElementById("diary-image-camera-button"),
+    diaryImageClearButton: document.getElementById("diary-image-clear-button"),
+    diaryImageFileInput: document.getElementById("diary-image-file"),
+    diaryImageCameraInput: document.getElementById("diary-image-camera"),
+    diaryImagePreview: document.getElementById("diary-image-preview"),
     diaryViewModeButtons: Array.from(document.querySelectorAll("[data-diary-view-mode]")),
     diaryListRegion: document.getElementById("diary-list-region"),
     diaryCalendarRegion: document.getElementById("diary-calendar-region"),
@@ -994,7 +1015,7 @@
       return;
     }
     if (listKey === "diary") {
-      const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+      const selectedJigsawId = Number(elements.diaryFeedJigsawId?.value || "0");
       renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
       return;
     }
@@ -1865,33 +1886,129 @@
   }
 
   function populateDiaryJigsawOptions() {
-    if (!elements.diaryJigsawId) {
+    if (!elements.diaryJigsawId && !elements.diaryFeedJigsawId) {
       return;
     }
 
-    const currentJigsawId = elements.diaryJigsawId.value;
-    elements.diaryJigsawId.innerHTML = "";
-
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "All completed jigsaws (recent first)";
-    elements.diaryJigsawId.appendChild(placeholder);
-
     const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
-    sortedJigsaws.forEach((jigsaw) => {
-      const option = document.createElement("option");
-      option.value = String(jigsaw.id);
-      option.textContent = `${jigsaw.title} (id ${jigsaw.id})`;
-      elements.diaryJigsawId.appendChild(option);
+
+    if (elements.diaryJigsawId) {
+      const currentJigsawId = elements.diaryJigsawId.value;
+      elements.diaryJigsawId.innerHTML = "";
+
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Choose jigsaw";
+      elements.diaryJigsawId.appendChild(placeholder);
+
+      sortedJigsaws.forEach((jigsaw) => {
+        const option = document.createElement("option");
+        option.value = String(jigsaw.id);
+        option.textContent = String(jigsaw.title || "Untitled jigsaw");
+        elements.diaryJigsawId.appendChild(option);
+      });
+
+      if (currentJigsawId && sortedJigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
+        elements.diaryJigsawId.value = currentJigsawId;
+      }
+    }
+
+    if (elements.diaryFeedJigsawId) {
+      const currentFeedJigsawId = elements.diaryFeedJigsawId.value;
+      elements.diaryFeedJigsawId.innerHTML = "";
+
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "All completed jigsaws (recent first)";
+      elements.diaryFeedJigsawId.appendChild(placeholder);
+
+      sortedJigsaws.forEach((jigsaw) => {
+        const option = document.createElement("option");
+        option.value = String(jigsaw.id);
+        option.textContent = String(jigsaw.title || "Untitled jigsaw");
+        elements.diaryFeedJigsawId.appendChild(option);
+      });
+
+      if (currentFeedJigsawId && sortedJigsaws.some((jigsaw) => String(jigsaw.id) === currentFeedJigsawId)) {
+        elements.diaryFeedJigsawId.value = currentFeedJigsawId;
+      }
+      if (!state.diarySelectionTouchedByUser) {
+        elements.diaryFeedJigsawId.value = "";
+      }
+    }
+
+    renderDiaryJigsawPicker();
+  }
+
+  function getDiaryJigsawPickerSearchQuery() {
+    return String(state.diaryComposerSearchQuery || "").trim().toLowerCase();
+  }
+
+  function renderDiaryJigsawPicker() {
+    if (!elements.diaryJigsawPickerList) {
+      return;
+    }
+
+    while (elements.diaryJigsawPickerList.firstChild) {
+      elements.diaryJigsawPickerList.removeChild(elements.diaryJigsawPickerList.firstChild);
+    }
+
+    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    const searchQuery = getDiaryJigsawPickerSearchQuery();
+    const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.jigsawThumbnailImages);
+
+    const filteredJigsaws = Array.isArray(state.jigsaws)
+      ? state.jigsaws
+        .filter((jigsaw) => jigsawMatchesSearchQuery(jigsaw, searchQuery))
+        .sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")))
+      : [];
+
+    if (filteredJigsaws.length === 0) {
+      const emptyMessage = document.createElement("p");
+      emptyMessage.className = "govuk-body-s app-diary-jigsaw-picker__empty";
+      emptyMessage.textContent = "No matching jigsaws found.";
+      elements.diaryJigsawPickerList.appendChild(emptyMessage);
+      return;
+    }
+
+    filteredJigsaws.forEach((jigsaw) => {
+      const jigsawId = Number(jigsaw.id || 0);
+      const itemButton = document.createElement("button");
+      itemButton.type = "button";
+      itemButton.className = "app-diary-jigsaw-picker__item";
+      itemButton.dataset.diaryJigsawPick = String(jigsawId);
+      itemButton.setAttribute("aria-pressed", selectedJigsawId === jigsawId ? "true" : "false");
+      if (selectedJigsawId === jigsawId) {
+        itemButton.classList.add("is-selected");
+      }
+
+      const preferredImage = preferredImagesByJigsawId.get(jigsawId);
+      const thumbWrap = document.createElement("div");
+      thumbWrap.appendChild(
+        buildThumbnailWidget(preferredImage?.thumbnail_url || preferredImage?.content_url, {
+          altText: `Thumbnail for ${jigsaw.title || "jigsaw"}`,
+          previewUrl: preferredImage?.preview_url || preferredImage?.content_url,
+          openUrl: preferredImage?.preview_url || preferredImage?.thumbnail_url || preferredImage?.content_url || "",
+          fallbackText: "No image",
+          widthPx: 100,
+        }),
+      );
+
+      const details = document.createElement("div");
+      const title = document.createElement("p");
+      title.className = "app-diary-jigsaw-picker__title";
+      title.textContent = String(jigsaw.title || `Jigsaw #${jigsawId}`);
+      details.appendChild(title);
+
+      const meta = document.createElement("p");
+      meta.className = "app-diary-jigsaw-picker__meta";
+      meta.textContent = jigsaw.piece_count ? `${jigsaw.piece_count} pieces` : "Piece count unknown";
+      details.appendChild(meta);
+
+      itemButton.appendChild(thumbWrap);
+      itemButton.appendChild(details);
+      elements.diaryJigsawPickerList.appendChild(itemButton);
     });
-
-    if (currentJigsawId && sortedJigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
-      elements.diaryJigsawId.value = currentJigsawId;
-    }
-
-    if (!state.diarySelectionTouchedByUser) {
-      elements.diaryJigsawId.value = "";
-    }
   }
 
   function getJigsawTitleById(jigsawId) {
@@ -1987,10 +2104,7 @@
     state.diaryEditingEntryId = null;
 
     if (elements.diaryEntrySubmitButton) {
-      elements.diaryEntrySubmitButton.textContent = "Add diary entry";
-    }
-    if (elements.diaryEntryCancelButton) {
-      elements.diaryEntryCancelButton.hidden = true;
+      elements.diaryEntrySubmitButton.textContent = "Save diary entry";
     }
     if (elements.diaryJigsawId) {
       elements.diaryJigsawId.disabled = false;
@@ -2007,6 +2121,108 @@
     if (elements.diaryNotes) {
       elements.diaryNotes.value = "";
     }
+    clearDiaryComposerImageSelection();
+    clearDiaryComposerStatus();
+    renderDiaryJigsawPicker();
+  }
+
+  function openDiaryComposer() {
+    state.diaryComposerOpen = true;
+    if (elements.diaryEntryForm) {
+      elements.diaryEntryForm.hidden = false;
+    }
+    if (elements.diaryEntryOpenButton) {
+      elements.diaryEntryOpenButton.hidden = true;
+    }
+    clearDiaryComposerStatus();
+  }
+
+  function closeDiaryComposer() {
+    state.diaryComposerOpen = false;
+    resetDiaryEntryFormEditingState({ keepJigsawSelection: false });
+    if (elements.diaryEntryForm) {
+      elements.diaryEntryForm.hidden = true;
+    }
+    if (elements.diaryEntryOpenButton) {
+      elements.diaryEntryOpenButton.hidden = false;
+    }
+    if (elements.diaryJigsawSearch) {
+      elements.diaryJigsawSearch.value = "";
+    }
+    state.diaryComposerSearchQuery = "";
+    clearDiaryComposerStatus();
+    renderDiaryJigsawPicker();
+  }
+
+  function setDiaryComposerImageSelection(file) {
+    clearDiaryComposerImageSelection();
+    if (!(file instanceof File)) {
+      return;
+    }
+    state.diaryComposerSelectedImageFile = file;
+    state.diaryComposerSelectedImagePreviewUrl = URL.createObjectURL(file);
+    renderDiaryComposerImagePreview();
+  }
+
+  function clearDiaryComposerImageSelection() {
+    state.diaryComposerSelectedImageFile = null;
+    if (state.diaryComposerSelectedImagePreviewUrl) {
+      try {
+        URL.revokeObjectURL(state.diaryComposerSelectedImagePreviewUrl);
+      } catch {
+        // Ignore revoke failures.
+      }
+    }
+    state.diaryComposerSelectedImagePreviewUrl = null;
+    if (elements.diaryImageFileInput) {
+      elements.diaryImageFileInput.value = "";
+    }
+    if (elements.diaryImageCameraInput) {
+      elements.diaryImageCameraInput.value = "";
+    }
+    renderDiaryComposerImagePreview();
+  }
+
+  function renderDiaryComposerImagePreview() {
+    if (!elements.diaryImagePreview) {
+      return;
+    }
+
+    while (elements.diaryImagePreview.firstChild) {
+      elements.diaryImagePreview.removeChild(elements.diaryImagePreview.firstChild);
+    }
+
+    const selectedFile = state.diaryComposerSelectedImageFile;
+    const selectedPreviewUrl = state.diaryComposerSelectedImagePreviewUrl;
+    if (!selectedFile || !selectedPreviewUrl) {
+      elements.diaryImagePreview.textContent = "No image selected.";
+      return;
+    }
+
+    const image = document.createElement("img");
+    image.className = "app-mobile-intake-preview__image";
+    image.src = selectedPreviewUrl;
+    image.alt = "Selected completion image";
+
+    const meta = document.createElement("p");
+    meta.className = "govuk-body-s govuk-!-margin-bottom-0";
+    meta.textContent = `${selectedFile.name || "(unnamed)"} • ${Math.max(1, Math.round((selectedFile.size || 0) / 1024))} KB`;
+
+    elements.diaryImagePreview.appendChild(image);
+    elements.diaryImagePreview.appendChild(meta);
+  }
+
+  function setDiaryComposerStatus(message, { isError = false, visible = true } = {}) {
+    if (!elements.diaryComposerStatus || !elements.diaryComposerStatusText) {
+      return;
+    }
+    elements.diaryComposerStatus.classList.toggle("is-error", Boolean(isError));
+    elements.diaryComposerStatus.hidden = !visible;
+    elements.diaryComposerStatusText.textContent = String(message || "");
+  }
+
+  function clearDiaryComposerStatus() {
+    setDiaryComposerStatus("", { visible: false, isError: false });
   }
 
   function beginDiaryEntryEdit(entryId) {
@@ -2034,6 +2250,7 @@
       return;
     }
 
+    openDiaryComposer();
     state.diaryEditingEntryId = resolvedEntryId;
     rememberEditorScrollPosition("diary");
     if (elements.diaryJigsawId) {
@@ -2052,9 +2269,8 @@
     if (elements.diaryEntrySubmitButton) {
       elements.diaryEntrySubmitButton.textContent = "Save diary entry";
     }
-    if (elements.diaryEntryCancelButton) {
-      elements.diaryEntryCancelButton.hidden = false;
-    }
+    clearDiaryComposerImageSelection();
+    renderDiaryJigsawPicker();
     if (elements.diaryEntryForm) {
       scrollToEditor(elements.diaryEntryForm);
     }
@@ -2421,7 +2637,7 @@
       clearDatabaseBackupPollTimer();
       state.databaseBackups = [];
       renderDatabaseBackups([]);
-      resetDiaryEntryFormEditingState({ keepJigsawSelection: false });
+      closeDiaryComposer();
       state.authProvider = null;
       state.currentSessionIdentifier = null;
       elements.sessionSummary.textContent = "Not signed in.";
@@ -2569,6 +2785,9 @@
     if (state.diaryEditingEntryId && !canUpdateDiaryAny && !canUpdateDiaryOwn) {
       resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
     }
+    if (!canCreateDiary && state.diaryComposerOpen) {
+      closeDiaryComposer();
+    }
     if (elements.jigsawCreateForm) {
       elements.jigsawCreateForm.hidden = !canCreateJigsaw;
     }
@@ -2596,11 +2815,15 @@
     if (elements.diaryEntrySubmitButton) {
       elements.diaryEntrySubmitButton.disabled = !canCreateDiary;
     }
-    if (elements.diaryEntryCancelButton && !canUpdateDiaryAny && !canUpdateDiaryOwn) {
-      elements.diaryEntryCancelButton.hidden = true;
+    if (elements.diaryEntryOpenButton) {
+      elements.diaryEntryOpenButton.hidden = !canCreateDiary || state.diaryComposerOpen;
+      elements.diaryEntryOpenButton.disabled = !canCreateDiary;
     }
     if (elements.diaryJigsawId) {
       elements.diaryJigsawId.disabled = !canCreateDiary;
+    }
+    if (elements.diaryJigsawSearch) {
+      elements.diaryJigsawSearch.disabled = !canCreateDiary;
     }
     if (elements.diaryCompletedAt) {
       elements.diaryCompletedAt.disabled = !canCreateDiary;
@@ -2610,6 +2833,15 @@
     }
     if (elements.diaryNotes) {
       elements.diaryNotes.disabled = !canCreateDiary;
+    }
+    if (elements.diaryImageBrowseButton) {
+      elements.diaryImageBrowseButton.disabled = !canCreateDiary;
+    }
+    if (elements.diaryImageCameraButton) {
+      elements.diaryImageCameraButton.disabled = !canCreateDiary;
+    }
+    if (elements.diaryImageClearButton) {
+      elements.diaryImageClearButton.disabled = !canCreateDiary;
     }
     if (elements.accountUsername) {
       elements.accountUsername.value = state.user.display_name || "";
@@ -3968,6 +4200,39 @@
     return filtered[index] || null;
   }
 
+  function parseAiSuggestedCorners(item) {
+    if (!item || !Array.isArray(item.ai_suggested_corners) || item.ai_suggested_corners.length !== 4) {
+      return null;
+    }
+    const parsed = [];
+    for (const point of item.ai_suggested_corners) {
+      if (!point || typeof point !== "object") {
+        return null;
+      }
+      const x = Number(point.x);
+      const y = Number(point.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+      }
+      parsed.push({
+        x: Math.min(Math.max(x, 0), 1),
+        y: Math.min(Math.max(y, 0), 1),
+      });
+    }
+    return parsed;
+  }
+
+  function imageHasPendingAiSuggestion(item) {
+    if (!item || !item.ai_suggestions_pending_review) {
+      return false;
+    }
+    return Boolean(item.ai_suggested_tag) || Boolean(parseAiSuggestedCorners(item));
+  }
+
+  function shouldOfferAiCornerSuggestion(item) {
+    return Boolean(item && !item.is_cropped && parseAiSuggestedCorners(item));
+  }
+
   function setImageBrowserIndexByImageId(imageId) {
     const filtered = getImageBrowserFilteredImages();
     if (!imageId || filtered.length === 0) {
@@ -4675,6 +4940,16 @@
       closeImageBrowserNameAssignModal();
     }
 
+    const canReviewAiSuggestion = Boolean(item && imageHasPendingAiSuggestion(item) && currentUserHasCapability("image.tag"));
+    if (elements.imageBrowserAiAccept) {
+      elements.imageBrowserAiAccept.hidden = !canReviewAiSuggestion;
+      elements.imageBrowserAiAccept.disabled = !canReviewAiSuggestion;
+    }
+    if (elements.imageBrowserAiReject) {
+      elements.imageBrowserAiReject.hidden = !canReviewAiSuggestion;
+      elements.imageBrowserAiReject.disabled = !canReviewAiSuggestion;
+    }
+
     if (standaloneMode) {
       return;
     }
@@ -4782,6 +5057,8 @@
     state.imageBrowser.workingImage = null;
     state.imageBrowser.rotationDegrees = 0;
     state.imageBrowser.cropMode = false;
+    state.imageBrowser.aiSuggestionUsedForCurrentImage = false;
+    state.imageBrowser.cropAppliedForCurrentImage = false;
     clearImageBrowserCropSelection();
     state.imageBrowser.mimeType = "image/png";
     state.imageBrowser.filename = "image.png";
@@ -4882,6 +5159,11 @@
         mimeType: state.imageBrowser.mimeType,
         filename: state.imageBrowser.filename,
       });
+    }
+
+    if (shouldOfferAiCornerSuggestion(item)) {
+      await applyAiSuggestedCornersToCropSelection(item);
+      showFeedback("AI corner suggestion loaded. Adjust if needed, then apply crop and save overwrite.");
     }
 
     await redrawImageBrowserCanvas();
@@ -5544,11 +5826,108 @@
     state.imageBrowser.workingImage = await loadImageElementFromDataUrl(state.imageBrowser.workingDataUrl);
     state.imageBrowser.rotationDegrees = 0;
     state.imageBrowser.cropMode = false;
+    state.imageBrowser.cropAppliedForCurrentImage = true;
     clearImageBrowserCropSelection();
     showFeedback(isPerspectiveCropModeSelected()
       ? "Transform crop applied locally. Save overwrite to persist changes."
       : "Crop applied locally. Save overwrite to persist changes.");
     await redrawImageBrowserCanvas();
+  }
+
+  async function applyAiSuggestedCornersToCropSelection(item) {
+    const normalizedCorners = parseAiSuggestedCorners(item);
+    if (!normalizedCorners || !state.imageBrowser.workingImage) {
+      return false;
+    }
+
+    const imageWidth = Number(state.imageBrowser.workingImage.naturalWidth || state.imageBrowser.workingImage.width || 0);
+    const imageHeight = Number(state.imageBrowser.workingImage.naturalHeight || state.imageBrowser.workingImage.height || 0);
+    if (!imageWidth || !imageHeight) {
+      return false;
+    }
+
+    state.imageBrowser.cropModeType = IMAGE_BROWSER_CROP_MODE_PERSPECTIVE;
+    state.imageBrowser.cropMode = true;
+    state.imageBrowser.cropPerspectivePoints = normalizedCorners.map((point) => ({
+      x: point.x * imageWidth,
+      y: point.y * imageHeight,
+    }));
+    state.imageBrowser.cropPerspectivePreviewPoint = null;
+    state.imageBrowser.cropPerspectiveActivePointIndex = -1;
+    state.imageBrowser.aiSuggestionUsedForCurrentImage = true;
+    await redrawImageBrowserCanvas();
+    return true;
+  }
+
+  async function reviewImageBrowserAiSuggestions(action, options = {}) {
+    const item = getCurrentImageBrowserItem();
+    if (!item || !item.id) {
+      return null;
+    }
+
+    const payload = await apiRequest(`/api/v1/image-library/images/${item.id}/ai-suggestions`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        action,
+        apply_tag: options.applyTag !== false,
+      }),
+    });
+
+    const updatedImage = payload?.data || null;
+    if (updatedImage && Number(updatedImage.id) > 0) {
+      const updatedImageId = Number(updatedImage.id);
+      state.imageLibraryImages = Array.isArray(state.imageLibraryImages)
+        ? state.imageLibraryImages.map((entry) => (Number(entry.id) === updatedImageId ? { ...entry, ...updatedImage } : entry))
+        : [];
+      renderImageLibraryImages(state.imageLibraryImages);
+      updateImageBrowserStatus();
+    }
+    return updatedImage;
+  }
+
+  async function acceptImageBrowserAiSuggestion() {
+    const item = getCurrentImageBrowserItem();
+    if (!item || !imageHasPendingAiSuggestion(item)) {
+      showFeedback("No pending AI suggestion for this image.", true);
+      return;
+    }
+
+    try {
+      const updated = await reviewImageBrowserAiSuggestions("accept", { applyTag: true });
+      const activeItem = updated || getCurrentImageBrowserItem();
+      if (shouldOfferAiCornerSuggestion(activeItem || item)) {
+        const didLoad = await applyAiSuggestedCornersToCropSelection(activeItem || item);
+        if (didLoad) {
+          showFeedback("AI suggestion accepted. Corner guide loaded; apply crop and save overwrite to persist.");
+          return;
+        }
+      }
+      showFeedback("AI suggestion accepted.");
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
+  }
+
+  async function rejectImageBrowserAiSuggestion() {
+    const item = getCurrentImageBrowserItem();
+    if (!item || !imageHasPendingAiSuggestion(item)) {
+      showFeedback("No pending AI suggestion for this image.", true);
+      return;
+    }
+
+    const confirmed = window.confirm("Reject and clear this AI suggestion for the current image?");
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await reviewImageBrowserAiSuggestions("reject", { applyTag: false });
+      state.imageBrowser.aiSuggestionUsedForCurrentImage = false;
+      showFeedback("AI suggestion rejected and cleared.");
+      await redrawImageBrowserCanvas();
+    } catch (error) {
+      showFeedback(error.message, true);
+    }
   }
 
   async function resetImageBrowserEdits() {
@@ -5582,6 +5961,8 @@
     state.imageBrowser.workingImage = await loadImageElementFromDataUrl(state.imageBrowser.sourceDataUrl);
     state.imageBrowser.rotationDegrees = 0;
     state.imageBrowser.cropMode = false;
+    state.imageBrowser.aiSuggestionUsedForCurrentImage = false;
+    state.imageBrowser.cropAppliedForCurrentImage = false;
     clearImageBrowserCropSelection();
     showFeedback("Image reset to stored version.");
     await redrawImageBrowserCanvas();
@@ -5642,6 +6023,12 @@
 
     const formData = new FormData();
     formData.append("image", blob, state.imageBrowser.filename || `image-${item.id}.png`);
+    if (state.imageBrowser.cropAppliedForCurrentImage) {
+      formData.append("mark_cropped", "1");
+    }
+    if (state.imageBrowser.aiSuggestionUsedForCurrentImage) {
+      formData.append("ai_suggestion_action", "accepted");
+    }
 
     state.imageBrowserSavingImageIds[String(savedImageId)] = true;
     updateImageBrowserStatus();
@@ -6443,12 +6830,14 @@
         renderImageBrowserNameSelectionPreview();
       }
       renderJigsaws(state.jigsaws);
+      renderDiaryJigsawPicker();
     } catch (_error) {
       state.jigsawThumbnailImages = [];
       if (elements.imageBrowserNameAssignModal && !elements.imageBrowserNameAssignModal.hidden) {
         renderImageBrowserNameSelectionPreview();
       }
       renderJigsaws(state.jigsaws);
+      renderDiaryJigsawPicker();
     }
   }
 
@@ -6561,7 +6950,7 @@
   }
 
   async function loadDiaryEntriesForSelected() {
-    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    const selectedJigsawId = Number(elements.diaryFeedJigsawId?.value || "0");
     const effectiveSelectedJigsawId = state.diarySelectionTouchedByUser ? selectedJigsawId : 0;
     if (!state.user) {
       state.diaryEntries = [];
@@ -6579,8 +6968,8 @@
       return;
     }
 
-    if (!state.diarySelectionTouchedByUser && elements.diaryJigsawId) {
-      elements.diaryJigsawId.value = "";
+    if (!state.diarySelectionTouchedByUser && elements.diaryFeedJigsawId) {
+      elements.diaryFeedJigsawId.value = "";
     }
     setDiaryEntriesCaption(effectiveSelectedJigsawId);
 
@@ -6727,6 +7116,21 @@
     } catch (error) {
       showFeedback(error.message, true);
     }
+  }
+
+  async function findDiaryEntryBySourceImage(jigsawId, imageId) {
+    const resolvedJigsawId = Number(jigsawId || "0");
+    const resolvedImageId = Number(imageId || "0");
+    if (!resolvedJigsawId || !resolvedImageId) {
+      return null;
+    }
+
+    const payload = await apiRequest(`/api/v1/diary-feed?jigsaw_id=${resolvedJigsawId}&limit=500`);
+    const entries = Array.isArray(payload?.data) ? payload.data : [];
+    const matching = entries.find(
+      (entry) => entry?.entry_type !== "orphan_completed_image" && Number(entry?.source_image_id || 0) === resolvedImageId,
+    );
+    return matching || null;
   }
 
   async function handleImageBrowserSuggestMatch() {
@@ -7551,6 +7955,7 @@
   async function handleCreateDiaryEntry(event) {
     event.preventDefault();
     clearFeedback();
+    clearDiaryComposerStatus();
 
     if (!currentUserHasCapability("diary.create")) {
       showFeedback("You do not have permission to create diary entries.", true);
@@ -7572,6 +7977,7 @@
       difficulty: parseOptionalIntegerFormValue(formData.get("difficulty")),
       notes: String(formData.get("notes") || "").trim() || null,
     };
+    const completionImage = state.diaryComposerSelectedImageFile;
 
     if (editingEntryId && !payload.completed_at) {
       showFeedback("Completed at is required when editing a diary entry.", true);
@@ -7580,6 +7986,7 @@
 
     try {
       if (editingEntryId) {
+        setDiaryComposerStatus("Saving diary entry...");
         await apiRequest(`/api/v1/diary-entries/${editingEntryId}`, {
           method: "PATCH",
           body: JSON.stringify(payload),
@@ -7587,12 +7994,60 @@
         showFeedback("Diary entry updated.");
         resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
         restoreEditorScrollPosition("diary");
+        setDiaryComposerStatus("Diary entry saved.");
       } else {
-        await apiRequest(`/api/v1/jigsaws/${jigsawId}/diary-entries`, {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
-        showFeedback("Diary entry added.");
+        if (completionImage instanceof File) {
+          setDiaryComposerStatus("Uploading completion image...");
+          const imageUploadData = new FormData();
+          imageUploadData.append("tag", IMAGE_BROWSER_TAG_COMPLETED);
+          imageUploadData.append("comment", String(payload.notes || ""));
+          imageUploadData.append("image", completionImage, completionImage.name || "completed.jpg");
+
+          const uploadResponse = await apiRequest(`/api/v1/jigsaws/${jigsawId}/images`, {
+            method: "POST",
+            body: imageUploadData,
+          });
+          const uploadedImage = uploadResponse?.data || null;
+          const uploadedImageId = Number(uploadedImage?.id || "0");
+
+          const patchPayload = {};
+          if (payload.difficulty !== null && payload.difficulty !== undefined) {
+            patchPayload.difficulty = payload.difficulty;
+          }
+          const imageCapturedAt = String(uploadedImage?.captured_at || "").trim();
+          if (!imageCapturedAt && payload.completed_at) {
+            patchPayload.completed_at = payload.completed_at;
+          }
+
+          if (Object.keys(patchPayload).length > 0 && uploadedImageId > 0) {
+            setDiaryComposerStatus("Finalising diary details...");
+            const createdEntry = await findDiaryEntryBySourceImage(jigsawId, uploadedImageId);
+            const createdEntryId = Number(createdEntry?.id || "0");
+            if (createdEntryId > 0) {
+              const canUpdateAny = currentUserHasCapability("diary.update_any");
+              const canUpdateOwn = currentUserHasCapability("diary.update_own");
+              const canUpdateEntry = canUpdateAny
+                || (canUpdateOwn && Number(createdEntry?.created_by_user_id || 0) === Number(state.user?.id || 0));
+              if (canUpdateEntry) {
+                await apiRequest(`/api/v1/diary-entries/${createdEntryId}`, {
+                  method: "PATCH",
+                  body: JSON.stringify(patchPayload),
+                });
+              }
+            }
+          }
+
+          showFeedback("Completion image uploaded and diary entry added.");
+          setDiaryComposerStatus("Completion image uploaded and diary entry saved.");
+        } else {
+          setDiaryComposerStatus("Creating diary entry...");
+          await apiRequest(`/api/v1/jigsaws/${jigsawId}/diary-entries`, {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          showFeedback("Diary entry added.");
+          setDiaryComposerStatus("Diary entry saved.");
+        }
         if (elements.diaryCompletedAt) {
           elements.diaryCompletedAt.value = "";
         }
@@ -7602,9 +8057,11 @@
         if (elements.diaryNotes) {
           elements.diaryNotes.value = "";
         }
+        clearDiaryComposerImageSelection();
       }
       await Promise.all([loadDiaryEntriesForSelected(), loadJigsaws(), loadAuditEvents()]);
     } catch (error) {
+      setDiaryComposerStatus(error.message, { isError: true, visible: true });
       showFeedback(error.message, true);
     }
   }
@@ -8958,6 +9415,102 @@
     loadDiaryEntriesForSelected();
   }
 
+  function handleDiaryEntryOpen() {
+    clearFeedback();
+    openDiaryComposer();
+    const feedSelectedJigsawId = Number(elements.diaryFeedJigsawId?.value || "0");
+    const composerSelectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    if (feedSelectedJigsawId > 0 && composerSelectedJigsawId <= 0 && elements.diaryJigsawId) {
+      elements.diaryJigsawId.value = String(feedSelectedJigsawId);
+      renderDiaryJigsawPicker();
+    }
+    if (elements.diaryEntryForm) {
+      scrollToEditor(elements.diaryEntryForm);
+    }
+  }
+
+  function handleDiaryComposerSearchInput(event) {
+    state.diaryComposerSearchQuery = String(event.currentTarget?.value || "").trim().toLowerCase();
+    renderDiaryJigsawPicker();
+  }
+
+  function handleDiaryJigsawPickerClick(event) {
+    const button = event.target?.closest("[data-diary-jigsaw-pick]");
+    if (!(button instanceof HTMLButtonElement)) {
+      return;
+    }
+
+    const selectedJigsawId = Number(button.dataset.diaryJigsawPick || "0");
+    if (!selectedJigsawId || !elements.diaryJigsawId) {
+      return;
+    }
+
+    elements.diaryJigsawId.value = String(selectedJigsawId);
+    renderDiaryJigsawPicker();
+  }
+
+  function handleDiaryComposerJigsawChange() {
+    renderDiaryJigsawPicker();
+  }
+
+  function handleDiaryImageBrowseClick() {
+    elements.diaryImageFileInput?.click();
+  }
+
+  function handleDiaryImageCameraClick() {
+    elements.diaryImageCameraInput?.click();
+  }
+
+  function handleDiaryImageInputChange(event) {
+    const files = event.currentTarget?.files;
+    if (!files || files.length === 0) {
+      return;
+    }
+    const file = files[0];
+    if (!file || !String(file.type || "").toLowerCase().startsWith("image/")) {
+      showFeedback("Please select an image file.", true);
+      return;
+    }
+    setDiaryComposerImageSelection(file);
+  }
+
+  function handleDiaryImageClear() {
+    clearDiaryComposerImageSelection();
+  }
+
+  function handleDiaryImageDropzoneDragOver(event) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    elements.diaryImageDropzone?.classList.add("is-dragover");
+  }
+
+  function handleDiaryImageDropzoneDragLeave(event) {
+    event.preventDefault();
+    elements.diaryImageDropzone?.classList.remove("is-dragover");
+  }
+
+  function handleDiaryImageDropzoneDrop(event) {
+    event.preventDefault();
+    elements.diaryImageDropzone?.classList.remove("is-dragover");
+    const files = event.dataTransfer?.files;
+    if (!files || files.length === 0) {
+      return;
+    }
+    const file = files[0];
+    if (!file || !String(file.type || "").toLowerCase().startsWith("image/")) {
+      showFeedback("Please drop an image file.", true);
+      return;
+    }
+    setDiaryComposerImageSelection(file);
+  }
+
+  function handleDiaryImageDropzoneKeyDown(event) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      elements.diaryImageFileInput?.click();
+    }
+  }
+
   function handleDiaryViewModeClick(event) {
     const button = event.target?.closest("[data-diary-view-mode]");
     if (!(button instanceof HTMLButtonElement)) {
@@ -8970,32 +9523,37 @@
     }
 
     setDiaryViewMode(selectedMode);
-    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    const selectedJigsawId = Number(elements.diaryFeedJigsawId?.value || "0");
     renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
   }
 
   function handleDiaryCalendarPreviousMonth() {
     shiftDiaryCalendarMonth(-1);
-    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    const selectedJigsawId = Number(elements.diaryFeedJigsawId?.value || "0");
     renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
   }
 
   function handleDiaryCalendarNextMonth() {
     shiftDiaryCalendarMonth(1);
-    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    const selectedJigsawId = Number(elements.diaryFeedJigsawId?.value || "0");
     renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
   }
 
   function handleDiaryCalendarCurrentMonth() {
     resetDiaryCalendarToCurrentMonth();
-    const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+    const selectedJigsawId = Number(elements.diaryFeedJigsawId?.value || "0");
     renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
   }
 
   function handleDiaryEntryCancelEdit() {
     clearFeedback();
-    resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
-    restoreEditorScrollPosition("diary");
+    const wasEditing = Number(state.diaryEditingEntryId || "0") > 0;
+    if (wasEditing) {
+      resetDiaryEntryFormEditingState({ keepJigsawSelection: true });
+      restoreEditorScrollPosition("diary");
+      return;
+    }
+    closeDiaryComposer();
   }
 
   function handleJigsawImageSelectionChange() {
@@ -9109,7 +9667,7 @@
       return;
     }
     if (paginationKey === "diary") {
-      const selectedJigsawId = Number(elements.diaryJigsawId?.value || "0");
+      const selectedJigsawId = Number(elements.diaryFeedJigsawId?.value || "0");
       renderDiaryEntries(state.diaryEntries, getDiaryEntriesEmptyMessage(selectedJigsawId));
       return;
     }
@@ -9596,6 +10154,18 @@
       });
     }
 
+    if (elements.imageBrowserAiAccept) {
+      elements.imageBrowserAiAccept.addEventListener("click", () => {
+        acceptImageBrowserAiSuggestion();
+      });
+    }
+
+    if (elements.imageBrowserAiReject) {
+      elements.imageBrowserAiReject.addEventListener("click", () => {
+        rejectImageBrowserAiSuggestion();
+      });
+    }
+
     if (elements.imageBrowserReset) {
       elements.imageBrowserReset.addEventListener("click", () => {
         resetImageBrowserEdits();
@@ -9679,12 +10249,55 @@
       elements.diaryEntryForm.addEventListener("submit", handleCreateDiaryEntry);
     }
 
+    if (elements.diaryEntryOpenButton) {
+      elements.diaryEntryOpenButton.addEventListener("click", handleDiaryEntryOpen);
+    }
+
     if (elements.diaryEntryCancelButton) {
       elements.diaryEntryCancelButton.addEventListener("click", handleDiaryEntryCancelEdit);
     }
 
+    if (elements.diaryFeedJigsawId) {
+      elements.diaryFeedJigsawId.addEventListener("change", handleDiarySelectionChange);
+    }
+
     if (elements.diaryJigsawId) {
-      elements.diaryJigsawId.addEventListener("change", handleDiarySelectionChange);
+      elements.diaryJigsawId.addEventListener("change", handleDiaryComposerJigsawChange);
+    }
+
+    if (elements.diaryJigsawSearch) {
+      elements.diaryJigsawSearch.addEventListener("input", handleDiaryComposerSearchInput);
+    }
+
+    if (elements.diaryJigsawPickerList) {
+      elements.diaryJigsawPickerList.addEventListener("click", handleDiaryJigsawPickerClick);
+    }
+
+    if (elements.diaryImageBrowseButton) {
+      elements.diaryImageBrowseButton.addEventListener("click", handleDiaryImageBrowseClick);
+    }
+
+    if (elements.diaryImageCameraButton) {
+      elements.diaryImageCameraButton.addEventListener("click", handleDiaryImageCameraClick);
+    }
+
+    if (elements.diaryImageClearButton) {
+      elements.diaryImageClearButton.addEventListener("click", handleDiaryImageClear);
+    }
+
+    if (elements.diaryImageFileInput) {
+      elements.diaryImageFileInput.addEventListener("change", handleDiaryImageInputChange);
+    }
+
+    if (elements.diaryImageCameraInput) {
+      elements.diaryImageCameraInput.addEventListener("change", handleDiaryImageInputChange);
+    }
+
+    if (elements.diaryImageDropzone) {
+      elements.diaryImageDropzone.addEventListener("dragover", handleDiaryImageDropzoneDragOver);
+      elements.diaryImageDropzone.addEventListener("dragleave", handleDiaryImageDropzoneDragLeave);
+      elements.diaryImageDropzone.addEventListener("drop", handleDiaryImageDropzoneDrop);
+      elements.diaryImageDropzone.addEventListener("keydown", handleDiaryImageDropzoneKeyDown);
     }
 
     if (elements.diaryViewModeButtons.length > 0) {
