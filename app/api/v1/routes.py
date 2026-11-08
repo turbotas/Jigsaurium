@@ -4053,6 +4053,29 @@ def _extract_ai_message_text(content):
     return ""
 
 
+def _build_ai_prompt_audit_payload(images, instruction_text, *, include_image_suggestion):
+    image_refs = []
+    for image in images or []:
+        image_refs.append(
+            {
+                "id": int(getattr(image, "id", 0) or 0) or None,
+                "filename": getattr(image, "filename", None),
+                "mime_type": getattr(image, "mime_type", None),
+                "tag": getattr(image, "tag", None),
+                "jigsaw_id": getattr(image, "jigsaw_id", None),
+                "is_cropped": bool(getattr(image, "is_cropped", False)),
+            }
+        )
+
+    return {
+        "system_prompt": _build_ai_image_prompt(include_image_suggestion=include_image_suggestion),
+        "user_instruction": str(instruction_text or ""),
+        "include_image_suggestion": bool(include_image_suggestion),
+        "image_count": len(image_refs),
+        "image_refs": image_refs,
+    }
+
+
 def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_image_suggestion=False):
     if not current_app.config.get("AI_ENABLED", False):
         raise RuntimeError("AI image inference is disabled")
@@ -4080,12 +4103,19 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_imag
             }
         )
 
+    system_prompt = _build_ai_image_prompt(include_image_suggestion=include_image_suggestion)
+    prompt_audit = _build_ai_prompt_audit_payload(
+        images,
+        instruction_text,
+        include_image_suggestion=include_image_suggestion,
+    )
+
     request_payload = {
         "model": model,
         "temperature": 0,
         "response_format": {"type": "json_object"},
         "messages": [
-            {"role": "system", "content": _build_ai_image_prompt(include_image_suggestion=include_image_suggestion)},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
     }
@@ -4156,6 +4186,7 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_imag
         "final_cost_usd": cost_payload["final_cost_usd"],
         "model": model,
         "endpoint_url": endpoint_url,
+        "prompt_audit": prompt_audit,
     }
 
 
@@ -6992,6 +7023,12 @@ def create_jigsaw_from_image(image_id):
 
     budget_usd = _to_decimal(current_app.config.get("AI_DAILY_BUDGET_USD"))
     current_spend = _get_daily_ai_spend(db_session)
+    include_image_suggestion = not bool(getattr(image, "is_cropped", False))
+    prompt_audit_payload = _build_ai_prompt_audit_payload(
+        [image],
+        "Extract jigsaw metadata from this image.",
+        include_image_suggestion=include_image_suggestion,
+    )
     if budget_usd is not None and budget_usd >= Decimal("0") and current_spend >= budget_usd:
         _record_ai_usage_event(
             db_session=db_session,
@@ -7003,7 +7040,11 @@ def create_jigsaw_from_image(image_id):
             error_code="daily_budget_exceeded",
             error_message="Daily AI budget has been reached.",
             final_cost_usd=Decimal("0"),
-            payload={"daily_spend_usd": str(current_spend), "daily_budget_usd": str(budget_usd)},
+            payload={
+                "daily_spend_usd": str(current_spend),
+                "daily_budget_usd": str(budget_usd),
+                "ai_prompt": prompt_audit_payload,
+            },
         )
         db_session.commit()
         return _error_response("conflict", "Daily AI budget has been reached for create-from-image.", 409)
@@ -7017,6 +7058,9 @@ def create_jigsaw_from_image(image_id):
                 "provider_status_code": error.status_code,
                 "provider_response_text": error.response_text,
             }
+        if error_payload is None:
+            error_payload = {}
+        error_payload["ai_prompt"] = prompt_audit_payload
         _record_ai_usage_event(
             db_session=db_session,
             operation=AI_IMAGE_CREATE_OPERATION,
@@ -7053,6 +7097,7 @@ def create_jigsaw_from_image(image_id):
                 "raw_metadata": inference.get("metadata"),
                 "provider_response": inference.get("provider_response"),
                 "provider_response_text": inference.get("provider_response_text"),
+                "ai_prompt": inference.get("prompt_audit") or prompt_audit_payload,
             },
         )
         db_session.commit()
@@ -7110,6 +7155,7 @@ def create_jigsaw_from_image(image_id):
             "image_suggestions": image_suggestions,
             "provider_response": inference.get("provider_response"),
             "provider_response_text": inference.get("provider_response_text"),
+            "ai_prompt": inference.get("prompt_audit") or prompt_audit_payload,
             "created_jigsaw_id": jigsaw.id,
         },
     )
@@ -7194,24 +7240,6 @@ def enrich_jigsaw_from_images(jigsaw_id):
     if not (current_app.config.get("AI_API_KEY") and current_app.config.get("AI_ENDPOINT_URL") and current_app.config.get("AI_MODEL")):
         return _error_response("conflict", "AI enrichment is not fully configured.", 409)
 
-    budget_usd = _to_decimal(current_app.config.get("AI_DAILY_BUDGET_USD"))
-    current_spend = _get_daily_ai_spend(db_session)
-    if budget_usd is not None and budget_usd >= Decimal("0") and current_spend >= budget_usd:
-        _record_ai_usage_event(
-            db_session=db_session,
-            operation=AI_JIGSAW_ENRICH_OPERATION,
-            image_id=images[0].id if images else None,
-            status=AI_USAGE_STATUS_BLOCKED,
-            model=(current_app.config.get("AI_MODEL") or "").strip() or None,
-            endpoint_url=(current_app.config.get("AI_ENDPOINT_URL") or "").strip() or None,
-            error_code="daily_budget_exceeded",
-            error_message="Daily AI budget has been reached.",
-            final_cost_usd=Decimal("0"),
-            payload={"daily_spend_usd": str(current_spend), "daily_budget_usd": str(budget_usd), "jigsaw_id": jigsaw.id},
-        )
-        db_session.commit()
-        return _error_response("conflict", "Daily AI budget has been reached for enrichment.", 409)
-
     image_descriptors = [
         f"id={image.id}, tag={image.tag or '-'}, filename={image.filename or '-'}"
         for image in images
@@ -7226,6 +7254,34 @@ def enrich_jigsaw_from_images(jigsaw_id):
         f"description={jigsaw.description!r}. "
         "Image list: " + "; ".join(image_descriptors)
     )
+    prompt_audit_payload = _build_ai_prompt_audit_payload(
+        images,
+        instruction_text,
+        include_image_suggestion=False,
+    )
+
+    budget_usd = _to_decimal(current_app.config.get("AI_DAILY_BUDGET_USD"))
+    current_spend = _get_daily_ai_spend(db_session)
+    if budget_usd is not None and budget_usd >= Decimal("0") and current_spend >= budget_usd:
+        _record_ai_usage_event(
+            db_session=db_session,
+            operation=AI_JIGSAW_ENRICH_OPERATION,
+            image_id=images[0].id if images else None,
+            status=AI_USAGE_STATUS_BLOCKED,
+            model=(current_app.config.get("AI_MODEL") or "").strip() or None,
+            endpoint_url=(current_app.config.get("AI_ENDPOINT_URL") or "").strip() or None,
+            error_code="daily_budget_exceeded",
+            error_message="Daily AI budget has been reached.",
+            final_cost_usd=Decimal("0"),
+            payload={
+                "daily_spend_usd": str(current_spend),
+                "daily_budget_usd": str(budget_usd),
+                "jigsaw_id": jigsaw.id,
+                "ai_prompt": prompt_audit_payload,
+            },
+        )
+        db_session.commit()
+        return _error_response("conflict", "Daily AI budget has been reached for enrichment.", 409)
 
     try:
         inference = _infer_jigsaw_metadata_from_images(images, instruction_text)
@@ -7233,6 +7289,7 @@ def enrich_jigsaw_from_images(jigsaw_id):
         error_payload = {
             "jigsaw_id": jigsaw.id,
             "image_ids": [image.id for image in images],
+            "ai_prompt": prompt_audit_payload,
         }
         if isinstance(runtime_error, AiProviderRequestError):
             error_payload["provider_status_code"] = runtime_error.status_code
@@ -7274,6 +7331,7 @@ def enrich_jigsaw_from_images(jigsaw_id):
                 "provider_response": inference.get("provider_response"),
                 "provider_response_text": inference.get("provider_response_text"),
                 "jigsaw_id": jigsaw.id,
+                "ai_prompt": inference.get("prompt_audit") or prompt_audit_payload,
             },
         )
         db_session.commit()
@@ -7306,6 +7364,7 @@ def enrich_jigsaw_from_images(jigsaw_id):
             "raw_metadata": inference.get("metadata"),
             "provider_response": inference.get("provider_response"),
             "provider_response_text": inference.get("provider_response_text"),
+            "ai_prompt": inference.get("prompt_audit") or prompt_audit_payload,
             "applied_fields": applied_fields,
             "skipped_fields": skipped_fields,
         },

@@ -1838,6 +1838,11 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
         assert "provider_response_text" in payload
         assert payload["image_suggestions"]["suggested_tag"] == "Box side"
         assert len(payload["image_suggestions"]["suggested_corners"]) == 4
+        assert isinstance(payload.get("ai_prompt"), dict)
+        assert payload["ai_prompt"]["include_image_suggestion"] is True
+        assert payload["ai_prompt"]["image_count"] == 1
+        assert "Extract jigsaw metadata from this image." in payload["ai_prompt"]["user_instruction"]
+        assert "image_url" not in json.dumps(payload["ai_prompt"])
 
 
 @pytest.mark.functional
@@ -2256,6 +2261,17 @@ def test_admin_can_enrich_jigsaw_from_assigned_images_non_destructive(client, se
     assert payload["ai"]["prompt_tokens"] == 610
     assert observed["count"] == 1
     assert observed["tags"] == ["Box"]
+
+    with app.app_context():
+        db_session = get_session()
+        usage_rows = db_session.query(AiUsageEvent).filter_by(operation="jigsaw_enrich_from_images", status="success").all()
+        assert len(usage_rows) == 1
+        usage_payload = json.loads(usage_rows[0].payload_json)
+        assert isinstance(usage_payload.get("ai_prompt"), dict)
+        assert usage_payload["ai_prompt"]["include_image_suggestion"] is False
+        assert usage_payload["ai_prompt"]["image_count"] == 1
+        assert "Use all provided box photos" in usage_payload["ai_prompt"]["user_instruction"]
+        assert "image_url" not in json.dumps(usage_payload["ai_prompt"])
 
 
 @pytest.mark.functional
