@@ -193,6 +193,69 @@ def test_forwarded_mode_uses_right_most_host_and_proto():
 
 
 @pytest.mark.functional
+def test_direct_connection_from_untrusted_address_is_rejected(client, app):
+    app.config["TRUSTED_PROXY_CIDRS"] = ["172.18.0.0/16"]
+
+    api_response = client.get("/api/v1/jigsaws", environ_overrides={"REMOTE_ADDR": "192.168.1.50"})
+    assert api_response.status_code == 403
+    assert api_response.get_json()["error"]["code"] == "forbidden"
+
+    page_response = client.get("/", environ_overrides={"REMOTE_ADDR": "192.168.1.50"})
+    assert page_response.status_code == 403
+
+
+@pytest.mark.functional
+def test_direct_connection_rejection_ignores_client_forwarding_headers(client, app):
+    app.config["TRUSTED_PROXY_CIDRS"] = ["172.18.0.0/16"]
+
+    response = client.get(
+        "/api/v1/jigsaws",
+        headers={"X-Forwarded-For": "172.18.0.5", "Forwarded": "for=172.18.0.5"},
+        environ_overrides={"REMOTE_ADDR": "192.168.1.50"},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize("remote_addr", ["172.18.0.5", "127.0.0.1", "::1"])
+def test_trusted_proxy_and_loopback_connections_are_allowed(client, app, remote_addr):
+    app.config["TRUSTED_PROXY_CIDRS"] = ["172.18.0.0/16"]
+
+    response = client.get("/api/v1/jigsaws", environ_overrides={"REMOTE_ADDR": remote_addr})
+
+    assert response.status_code == 200
+
+
+@pytest.mark.functional
+def test_liveness_health_endpoint_allows_direct_connections(client, app):
+    app.config["TRUSTED_PROXY_CIDRS"] = ["172.18.0.0/16"]
+
+    response = client.get("/api/v1/health", environ_overrides={"REMOTE_ADDR": "192.168.1.50"})
+
+    assert response.status_code == 200
+
+
+@pytest.mark.functional
+def test_direct_connections_allowed_when_requirement_disabled(client, app):
+    app.config["TRUSTED_PROXY_CIDRS"] = ["172.18.0.0/16"]
+    app.config["REQUIRE_TRUSTED_PROXY"] = False
+
+    response = client.get("/api/v1/jigsaws", environ_overrides={"REMOTE_ADDR": "192.168.1.50"})
+
+    assert response.status_code == 200
+
+
+@pytest.mark.functional
+def test_direct_connections_allowed_when_no_trusted_proxy_configured(client, app):
+    app.config["TRUSTED_PROXY_CIDRS"] = []
+
+    response = client.get("/api/v1/jigsaws", environ_overrides={"REMOTE_ADDR": "192.168.1.50"})
+
+    assert response.status_code == 200
+
+
+@pytest.mark.functional
 def test_invalid_trusted_proxy_header_fails_startup():
     from app import create_app
 

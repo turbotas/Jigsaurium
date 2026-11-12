@@ -249,6 +249,22 @@ def is_ip_in_cidrs(ip_text, cidrs):
     return _is_trusted_proxy_ip(normalized_ip, cidrs or [])
 
 
+def is_direct_connection_allowed(remote_addr, trusted_proxy_cidrs):
+    """Proxy-only policy: allow a socket peer only if it is a trusted proxy or loopback.
+
+    With no trusted proxy CIDRs configured there is no proxy to enforce, so everything is allowed.
+    """
+    trusted_proxy_list = [cidr for cidr in (trusted_proxy_cidrs or []) if str(cidr).strip()]
+    if not trusted_proxy_list:
+        return True
+    remote_ip = _parse_ip_candidate(remote_addr)
+    if remote_ip is None:
+        return False
+    if ip_address(remote_ip).is_loopback:
+        return True
+    return _is_trusted_proxy_ip(remote_ip, trusted_proxy_list)
+
+
 def resolve_client_request_context(
     *,
     remote_addr,
