@@ -7,7 +7,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-      day: monday
+      # Sunday, so its PR never races the Monday deps-refresh PR (master requires PRs to be up to date).
+      day: sunday
       time: "05:00"
       timezone: Etc/UTC
     groups:
