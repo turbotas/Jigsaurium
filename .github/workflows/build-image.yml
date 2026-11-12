@@ -1,0 +1,151 @@
+name: Build and Promote
+
+# After CI passes on a push to master: build the image once, publish it as sha-<12>, point `test`
+# at its digest (the NAS deploy agent then deploys it), and wait for approval to point `prod` at
+# the same digest. Approving an older run is refused once a newer build has replaced `test`.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: read
+  packages: write
+
+# No workflow-level concurrency: a run waiting days for prod approval must not block newer builds.
+jobs:
+  build:
+    name: Build and publish image
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    concurrency:
+      group: build-image
+      cancel-in-progress: false
+    permissions:
+      contents: write # push the release tag and create the GitHub Release
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+
+    steps:
+      - name: Checkout the commit CI tested
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Version: if this commit already has a vX.Y.Z tag (pushed by hand, e.g. to start a new minor
+      # or major), use it. Otherwise take the highest vX.Y.Z[-pre] tag and bump the patch; a
+      # pre-release (v0.2.0-rc1) is finalised instead (v0.2.0).
+      - name: Resolve version and image metadata
+        id: meta
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          OWNER_LOWER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          EXACT="$(git tag --points-at "$SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
+          if [ -n "$EXACT" ]; then
+            VERSION="$EXACT"; NEW_TAG=false
+          else
+            VERSION="$(git tag -l 'v*' | python3 -c '
+          import re, sys
+          best = None
+          for tag in sys.stdin.read().split():
+              m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?", tag)
+              if m:
+                  key = (int(m[1]), int(m[2]), int(m[3]), 0 if m[4] else 1)
+                  best = key if best is None or key > best else best
+          if best is None:
+              print("v0.0.1")
+          else:
+              major, minor, patch, stable = best
+              print(f"v{major}.{minor}.{patch + 1}" if stable else f"v{major}.{minor}.{patch}")')"
+            NEW_TAG=true
+          fi
+          echo "Version: ${VERSION} (new tag: ${NEW_TAG})"
+          {
+            echo "image_name=ghcr.io/${OWNER_LOWER}/jigsaurium"
+            echo "short_sha=${SHA::12}"
+            echo "version=${VERSION}"
+            echo "new_tag=${NEW_TAG}"
+            echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          provenance: true
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ${{ steps.meta.outputs.image_name }}:sha-${{ steps.meta.outputs.short_sha }}
+            ${{ steps.meta.outputs.image_name }}:${{ steps.meta.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            APP_BUILD_SHA=${{ github.event.workflow_run.head_sha }}
+            APP_BUILD_TIME=${{ steps.meta.outputs.build_time }}
+
+      - name: Record digest
+        env:
+          IMAGE_NAME: ${{ steps.meta.outputs.image_name }}
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### Image built"
+            echo "- Version: \`${VERSION}\`"
+            echo "- Tag: \`${IMAGE_NAME}:sha-${SHORT_SHA}\`"
+            echo "- Digest: \`${IMAGE_NAME}@${DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only after the image is published, so a failed build never leaves a tag without an image.
+      # (A tag pushed with the built-in token does not trigger container-release.yml.)
+      - name: Tag the commit and create the GitHub Release
+        if: steps.meta.outputs.new_tag == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git tag "$VERSION" "$SHA"
+          git push origin "refs/tags/${VERSION}"
+          gh release create "$VERSION" --verify-tag --generate-notes --title "$VERSION"
+
+  promote-test:
+    name: Promote to test
+    needs: build
+    uses: ./.github/workflows/promote-pointer-tag.yml
+    with:
+      source_ref: ${{ needs.build.outputs.digest }}
+      target_pointer: test
+
+  promote-prod:
+    name: Promote to prod (needs approval)
+    needs: [build, promote-test]
+    uses: ./.github/workflows/promote-pointer-tag.yml
+    with:
+      source_ref: ${{ needs.build.outputs.digest }}
+      target_pointer: prod
+      require_current_test: true

@@ -87,7 +87,11 @@ Human PR ───────────────────────�
 - Runs only after the same commit's CI passed (reusable-workflow `needs`, or `workflow_run`).
 - `docker/build-push-action` with GHA cache, `provenance: true`, `sbom: true`.
 - Tags `sha-<12>`; outputs the digest; writes it to the job summary.
-- Automatically calls the promote workflow for `test`.
+- Automatically calls the promote workflow for `test`, then for `prod` (waits for approval).
+- Jigsaurium: implemented as `build-image.yml` (`workflow_run` on CI success for pushes to
+  `master`) calling `promote-pointer-tag.yml`. Each build is an automatic patch release
+  (`vX.Y.Z` tag + GitHub Release); see `release-and-versioning.md`. A merge made with the built-in `GITHUB_TOKEN`
+  does not trigger CI on `master`, so it is not built (by design only Dependabot action bumps do that).
 
 ### 4.4 Release and prod (`release.yml`, `promote.yml`)
 
@@ -96,6 +100,11 @@ Human PR ───────────────────────�
 - `promote.yml` (manual `workflow_dispatch` plus `workflow_call`) takes `source_ref` and
   `target_pointer`. For `prod` it uses a GitHub **Environment** named `production` with a required
   reviewer, and checks that the same digest has a successful `test` deployment record.
+  Jigsaurium: the promote job runs in the Environment named after the pointer (`test`, `prod`);
+  `prod` has a required reviewer. From the build workflow it also refuses unless the digest is
+  still what `test` points at, so approving an outdated run cannot ship an untested image.
+  The `prod` Environment must exist with its reviewer **before** `build-image.yml` is merged, or
+  the first build would promote prod without asking.
 - Rollback = promote an earlier `vX.Y.Z` to `prod`. Same path, same approval.
 
 ## 5. TrueNAS deployment mechanism

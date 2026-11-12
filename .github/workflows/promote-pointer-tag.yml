@@ -1,5 +1,9 @@
 name: Promote Pointer Tag
 
+# Points a pointer tag (dev | test | prod) at an existing image. Nothing is rebuilt.
+# Runs in the GitHub Environment named after the pointer, so the "prod" environment's required
+# reviewer must approve before prod moves. Used manually (e.g. rollback: source_ref=v0.1.1,
+# target_pointer=prod) and by build-image.yml after every successful master build.
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +19,19 @@ on:
           - dev
           - test
           - prod
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+      target_pointer:
+        required: true
+        type: string
+      require_current_test:
+        description: "Refuse unless source_ref is the digest the test pointer has now"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,7 +39,9 @@ permissions:
 
 jobs:
   promote:
+    name: Promote to ${{ inputs.target_pointer }}
     runs-on: ubuntu-latest
+    environment: ${{ inputs.target_pointer }}
 
     steps:
       - name: Set up Docker Buildx
@@ -37,10 +56,13 @@ jobs:
 
       - name: Resolve image references
         id: refs
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          TARGET: ${{ inputs.target_pointer }}
         run: |
+          case "$TARGET" in dev|test|prod) ;; *) echo "::error::Unknown pointer '$TARGET'"; exit 1 ;; esac
           OWNER_LOWER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
           IMAGE_NAME="ghcr.io/${OWNER_LOWER}/jigsaurium"
-          SOURCE_REF="${{ inputs.source_ref }}"
 
           if [[ "$SOURCE_REF" == sha256:* ]]; then
             SOURCE_IMAGE="${IMAGE_NAME}@${SOURCE_REF}"
@@ -51,14 +73,30 @@ jobs:
           echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
           echo "source_image=${SOURCE_IMAGE}" >> "$GITHUB_OUTPUT"
 
-      - name: Promote pointer
+      - name: Check source is what test runs now
+        if: inputs.require_current_test
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          IMAGE_NAME: ${{ steps.refs.outputs.image_name }}
         run: |
-          docker buildx imagetools create \
-            --tag "${{ steps.refs.outputs.image_name }}:${{ inputs.target_pointer }}" \
-            "${{ steps.refs.outputs.source_image }}"
+          TEST_DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:test" --format '{{json .Manifest}}' | jq -r .digest)"
+          if [ "$TEST_DIGEST" != "$SOURCE_REF" ]; then
+            echo "::error::test now points at ${TEST_DIGEST}, not ${SOURCE_REF}. A newer build replaced it; approve that run instead."
+            exit 1
+          fi
+
+      - name: Promote pointer
+        env:
+          IMAGE_NAME: ${{ steps.refs.outputs.image_name }}
+          SOURCE_IMAGE: ${{ steps.refs.outputs.source_image }}
+          TARGET: ${{ inputs.target_pointer }}
+        run: docker buildx imagetools create --tag "${IMAGE_NAME}:${TARGET}" "${SOURCE_IMAGE}"
 
       - name: Show promoted digest
+        env:
+          IMAGE_NAME: ${{ steps.refs.outputs.image_name }}
+          TARGET: ${{ inputs.target_pointer }}
         run: |
-          INSPECT_OUTPUT="$(docker buildx imagetools inspect "${{ steps.refs.outputs.image_name }}:${{ inputs.target_pointer }}")"
-          DIGEST="$(printf '%s\n' "$INSPECT_OUTPUT" | sed -n 's/^Digest: //p' | head -n 1)"
-          echo "Promoted ${{ inputs.target_pointer }} -> ${DIGEST}"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:${TARGET}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "Promoted ${TARGET} -> ${DIGEST}"
+          echo "**${TARGET}** -> \`${IMAGE_NAME}@${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
