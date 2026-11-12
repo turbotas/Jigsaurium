@@ -9,9 +9,9 @@ HEALTH_SHA_FIELD=                           # optional: health JSON field compar
 #COMPOSE_PROJECT=ix-jigsaurium-test         # compose project of the app's containers (default ix-<APP_NAME>)
 HEALTH_TIMEOUT=900
 AUTO_APPLY=1                                # 0 = only log that an update is available
-STATE_DIR=/mnt/NAS1Pool1/apps/deploy-agent/state
+STATE_DIR=/mnt/<pool>/apps/deploy-agent/state
 # docker login ghcr.io credentials live here (read:packages PAT); created once with:
 #   DOCKER_CONFIG=$STATE_DIR/docker docker login ghcr.io -u <user>
-DOCKER_CONFIG_DIR=/mnt/NAS1Pool1/apps/deploy-agent/state/docker
+DOCKER_CONFIG_DIR=/mnt/<pool>/apps/deploy-agent/state/docker
 # Optional pre-deploy backup (deploy aborts if it fails). Generic DB dump from the app's own env file:
-BACKUP_CMD='/mnt/NAS1Pool1/apps/deploy-agent/backup-db.sh /mnt/NAS1Pool1/apps/jigsaurium-config/test.env /mnt/NAS1Pool1/backups/deploy-agent/jigsaurium-test 14'
+BACKUP_CMD='/mnt/<pool>/apps/deploy-agent/backup-db.sh /mnt/<pool>/apps/jigsaurium-config/test.env /mnt/<pool>/backups/deploy-agent/jigsaurium-test 14'

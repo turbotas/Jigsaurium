@@ -88,9 +88,9 @@ def test_member_cannot_list_or_terminate_security_sessions(app, seeded_session_i
 
 @pytest.mark.functional
 def test_admin_can_list_and_terminate_active_session_with_resolved_ip(app, seeded_session_identity_data):
-    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.51.0/24"]
+    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.100.0/24"]
     proxy_headers = {"X-Forwarded-For": "203.0.113.77"}
-    proxy_remote = {"REMOTE_ADDR": "192.168.51.12"}
+    proxy_remote = {"REMOTE_ADDR": "192.168.100.12"}
 
     admin_client = app.test_client()
     admin_login = _login(

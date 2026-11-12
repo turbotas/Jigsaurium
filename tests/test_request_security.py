@@ -17,7 +17,7 @@ def test_resolve_client_request_context_ignores_untrusted_forwarded_headers():
         remote_addr="198.51.100.20",
         forwarded_header='for="203.0.113.11"',
         x_forwarded_for_header="203.0.113.11",
-        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=None,
     )
 
@@ -29,22 +29,22 @@ def test_resolve_client_request_context_ignores_untrusted_forwarded_headers():
 @pytest.mark.functional
 def test_resolve_client_request_context_uses_forwarded_chain_for_trusted_proxy():
     context = resolve_client_request_context(
-        remote_addr="192.168.51.12",
-        forwarded_header='for="203.0.113.11";proto=https, for="192.168.51.99"',
+        remote_addr="192.168.100.12",
+        forwarded_header='for="203.0.113.11";proto=https, for="192.168.100.99"',
         x_forwarded_for_header=None,
-        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=None,
     )
 
-    assert context.remote_addr == "192.168.51.12"
+    assert context.remote_addr == "192.168.100.12"
     assert context.client_ip_resolved == "203.0.113.11"
-    assert context.forwarded_chain == "203.0.113.11, 192.168.51.99"
+    assert context.forwarded_chain == "203.0.113.11, 192.168.100.99"
 
 
 @pytest.mark.functional
 def test_resolve_client_request_context_uses_trusted_proxy_hops_from_right():
     context = resolve_client_request_context(
-        remote_addr="192.168.51.12",
+        remote_addr="192.168.100.12",
         forwarded_header=None,
         x_forwarded_for_header="198.51.100.7, 203.0.113.11",
         trusted_proxy_cidrs=[],
@@ -57,10 +57,10 @@ def test_resolve_client_request_context_uses_trusted_proxy_hops_from_right():
 @pytest.mark.functional
 def test_resolve_client_request_context_prefers_trusted_proxy_cidrs_when_both_modes_set():
     context = resolve_client_request_context(
-        remote_addr="192.168.51.12",
-        forwarded_header='for="203.0.113.11";proto=https, for="192.168.51.99"',
+        remote_addr="192.168.100.12",
+        forwarded_header='for="203.0.113.11";proto=https, for="192.168.100.99"',
         x_forwarded_for_header=None,
-        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=1,
     )
 
@@ -73,7 +73,7 @@ def test_resolve_client_request_context_requires_trusted_remote_when_cidrs_confi
         remote_addr="198.51.100.20",
         forwarded_header='for="203.0.113.11"',
         x_forwarded_for_header=None,
-        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=1,
     )
 
@@ -83,10 +83,10 @@ def test_resolve_client_request_context_requires_trusted_remote_when_cidrs_confi
 @pytest.mark.functional
 def test_resolve_console_log_ip_prefers_forwarded_value_for_trusted_proxy():
     resolved_ip = resolve_console_log_ip(
-        remote_addr="192.168.51.12",
-        forwarded_header='for="203.0.113.11";proto=https, for="192.168.51.99"',
+        remote_addr="192.168.100.12",
+        forwarded_header='for="203.0.113.11";proto=https, for="192.168.100.99"',
         x_forwarded_for_header=None,
-        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=None,
     )
 
@@ -99,7 +99,7 @@ def test_resolve_console_log_ip_ignores_forwarded_value_for_untrusted_proxy():
         remote_addr="198.51.100.20",
         forwarded_header='for="203.0.113.11"',
         x_forwarded_for_header="203.0.113.11",
-        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=None,
     )
 
@@ -159,11 +159,11 @@ def test_canonical_host_enforcement_off_allows_non_canonical_host(client, app):
 @pytest.mark.functional
 def test_resolve_request_origin_context_uses_forwarded_scheme_host_for_trusted_proxy():
     context = resolve_request_origin_context(
-        remote_addr="192.168.51.12",
-        forwarded_header='for="203.0.113.11";proto=https;host="public.example.test", for="192.168.51.99"',
+        remote_addr="192.168.100.12",
+        forwarded_header='for="203.0.113.11";proto=https;host="public.example.test", for="192.168.100.99"',
         x_forwarded_proto_header="http",
         x_forwarded_host_header="ignored.example.test",
-        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=None,
         current_scheme="http",
         current_host="internal.local:5000",
@@ -176,11 +176,11 @@ def test_resolve_request_origin_context_uses_forwarded_scheme_host_for_trusted_p
 @pytest.mark.functional
 def test_resolve_request_origin_context_uses_x_forwarded_fallback_for_trusted_proxy():
     context = resolve_request_origin_context(
-        remote_addr="192.168.51.12",
+        remote_addr="192.168.100.12",
         forwarded_header='for="203.0.113.11"',
         x_forwarded_proto_header="https",
         x_forwarded_host_header="public-fallback.example.test",
-        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=None,
         current_scheme="http",
         current_host="internal.local:5000",
@@ -197,7 +197,7 @@ def test_resolve_request_origin_context_ignores_forwarded_scheme_host_for_untrus
         forwarded_header='for="203.0.113.11";proto=https;host="public.example.test"',
         x_forwarded_proto_header="https",
         x_forwarded_host_header="public-fallback.example.test",
-        trusted_proxy_cidrs=["192.168.51.0/24"],
+        trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=None,
         current_scheme="http",
         current_host="internal.local:5000",
@@ -210,8 +210,8 @@ def test_resolve_request_origin_context_ignores_forwarded_scheme_host_for_untrus
 @pytest.mark.functional
 def test_request_ban_triggers_after_five_consecutive_404(client, app):
     reset_request_security_state()
-    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.51.0/24"]
-    proxy_remote_addr = "192.168.51.12"
+    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.100.0/24"]
+    proxy_remote_addr = "192.168.100.12"
     headers = {"X-Forwarded-For": "203.0.113.77"}
 
     for _ in range(5):
@@ -237,8 +237,8 @@ def test_request_ban_triggers_after_five_consecutive_404(client, app):
 @pytest.mark.functional
 def test_request_ban_requires_consecutive_404_streak(client, app):
     reset_request_security_state()
-    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.51.0/24"]
-    proxy_remote_addr = "192.168.51.12"
+    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.100.0/24"]
+    proxy_remote_addr = "192.168.100.12"
     headers = {"X-Forwarded-For": "203.0.113.88"}
     request_kwargs = {
         "headers": headers,
@@ -259,9 +259,9 @@ def test_request_ban_requires_consecutive_404_streak(client, app):
 @pytest.mark.functional
 def test_request_ban_skips_trusted_client_cidrs(client, app):
     reset_request_security_state()
-    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.51.0/24"]
+    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.100.0/24"]
     app.config["TRUSTED_CLIENT_CIDRS"] = ["203.0.113.0/24"]
-    proxy_remote_addr = "192.168.51.12"
+    proxy_remote_addr = "192.168.100.12"
     headers = {"X-Forwarded-For": "203.0.113.77"}
 
     for _ in range(8):

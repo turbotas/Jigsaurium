@@ -261,13 +261,13 @@ def test_hsts_header_absent_for_http(client):
 
 @pytest.mark.functional
 def test_hsts_header_uses_trusted_forwarded_proto(client, app):
-    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.51.0/24"]
+    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.100.0/24"]
     headers = {"X-Forwarded-Proto": "https"}
 
     response = client.get(
         "/",
         headers=headers,
-        environ_overrides={"REMOTE_ADDR": "192.168.51.12"},
+        environ_overrides={"REMOTE_ADDR": "192.168.100.12"},
     )
 
     assert response.status_code == 200
@@ -276,7 +276,7 @@ def test_hsts_header_uses_trusted_forwarded_proto(client, app):
 
 @pytest.mark.functional
 def test_hsts_header_ignores_untrusted_forwarded_proto(client, app):
-    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.51.0/24"]
+    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.100.0/24"]
     headers = {"X-Forwarded-Proto": "https"}
 
     response = client.get(

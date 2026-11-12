@@ -148,7 +148,7 @@ location / {
 
 `TRUSTED_PROXY_CIDRS` examples:
 
-- Single reverse proxy host: `TRUSTED_PROXY_CIDRS=192.168.51.12/32`
+- Single reverse proxy host: `TRUSTED_PROXY_CIDRS=192.168.100.12/32`
 - Internal proxy subnet: `TRUSTED_PROXY_CIDRS=10.20.30.0/24`
 
 ## Request Logging Baseline
