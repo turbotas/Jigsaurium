@@ -109,6 +109,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Week number for the weekly OS package refresh
+        id: week
+        run: echo "value=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
       - name: Build image (not pushed)
         uses: docker/build-push-action@v7
         with:
@@ -120,6 +124,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
+            OS_REFRESH=${{ steps.week.outputs.value }}
             APP_VERSION=ci
             APP_BUILD_SHA=${{ github.sha }}
 

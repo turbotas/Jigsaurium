@@ -28,6 +28,12 @@ file), `agent.conf.example` (per app + environment).
 - Rollback always targets the digest of the image the container was running before the deploy
   (read from the container itself), never the mutable tag, including on the very first run.
 - `app.update` is called with `midclt call -j`, so the agent waits for the TrueNAS job and sees failures.
+  If the app is `STOPPED`/`CRASHED` afterwards (updating a stopped app only changes its config),
+  the agent starts it with `app.start`.
+- Apps that load a large model at start-up need a long Docker healthcheck `start_period` (e.g.
+  600s) and `HEALTH_TIMEOUT` (e.g. 900); otherwise Docker reports unhealthy and the agent rolls back.
+- Rolling back across a database migration does not work (the old code cannot read the newer
+  schema). If that happens, fix forward: deploy a newer image, or restore the pre-deploy dump.
 - Healthy means: the service container (compose labels `ix-<APP_NAME>` / `SERVICE`) runs the new
   image ID, its Docker healthcheck is `healthy` (or none is defined), and `HEALTH_URL` returns 2xx.
   If `HEALTH_SHA_FIELD` is set, that field in the health JSON must also match the image's

@@ -1,8 +1,7 @@
 FROM python:3.12-slim
 
-ARG APP_VERSION=0.0.0-dev
-ARG APP_BUILD_SHA=local
-ARG APP_BUILD_TIME=
+# Build metadata (APP_VERSION, APP_BUILD_SHA, APP_BUILD_TIME) is set at the end of this file so
+# that it does not invalidate the cached OS and Python layers on every build.
 ARG IMAGE_EMBEDDING_MODEL_NAME=openai/clip-vit-base-patch32
 ARG IMAGE_EMBEDDING_MODEL_REVISION=3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268
 ARG HF_TOKEN=
@@ -11,9 +10,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     APP_ENV=prod \
-    APP_VERSION=${APP_VERSION} \
-    APP_BUILD_SHA=${APP_BUILD_SHA} \
-    APP_BUILD_TIME=${APP_BUILD_TIME} \
     IMAGE_EMBEDDING_MODEL_NAME=${IMAGE_EMBEDDING_MODEL_NAME} \
     IMAGE_EMBEDDING_MODEL_REVISION=${IMAGE_EMBEDDING_MODEL_REVISION} \
     IMAGE_EMBEDDING_MODEL_LOCAL_PATH=/opt/models/clip-vit-base-patch32 \
@@ -27,8 +23,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Upgrade base-image OS packages so published security fixes are included even when the
-# python:3.12-slim tag has not been rebuilt yet.
-RUN apt-get update \
+# python:3.12-slim tag has not been rebuilt yet. CI passes OS_REFRESH=<ISO week> so this cached
+# layer (and the Python layer below it) is rebuilt at least weekly.
+ARG OS_REFRESH=
+RUN echo "OS package refresh: ${OS_REFRESH:-unset}" \
+    && apt-get update \
     && apt-get upgrade --yes \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
@@ -74,6 +73,13 @@ PY
 # of setuptools (pkg_resources) that vulnerability scanners flag.
 RUN python -m pip uninstall --yes pip \
     && rm -rf "$(python -c 'import ensurepip, os; print(os.path.dirname(ensurepip.__file__))')/_bundled"
+
+ARG APP_VERSION=0.0.0-dev
+ARG APP_BUILD_SHA=local
+ARG APP_BUILD_TIME=
+ENV APP_VERSION=${APP_VERSION} \
+    APP_BUILD_SHA=${APP_BUILD_SHA} \
+    APP_BUILD_TIME=${APP_BUILD_TIME}
 
 EXPOSE 5000
 
