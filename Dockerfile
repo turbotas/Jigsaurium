@@ -70,6 +70,11 @@ else:
     snapshot_download(**kwargs)
 PY
 
+# pip and the ensurepip installer wheels are not used at runtime; they carry an old vendored copy
+# of setuptools (pkg_resources) that vulnerability scanners flag.
+RUN python -m pip uninstall --yes pip \
+    && rm -rf "$(python -c 'import ensurepip, os; print(os.path.dirname(ensurepip.__file__))')/_bundled"
+
 EXPOSE 5000
 
 ENTRYPOINT ["./scripts/docker_entrypoint.sh"]

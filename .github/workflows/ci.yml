@@ -168,11 +168,11 @@ jobs:
       - name: Report Trivy findings
         run: |
           jq -r '.Results[]? | .Target as $t | .Vulnerabilities[]?
-            | "\(.Severity)\t\(.VulnerabilityID)\t\(.PkgName) \(.InstalledVersion) -> \(.FixedVersion)\t\(.PkgPath // $t)"' \
+            | "\(.Severity)\t\(.VulnerabilityID)\t\(.PkgName) \(.InstalledVersion) -> \(.FixedVersion)\t\(.PkgPath // $t)\t\((.Layer.CreatedBy // "") | .[0:80])"' \
             trivy.json | sort -u > findings.tsv
           if [ -s findings.tsv ]; then
             { echo "### Trivy: fixable HIGH/CRITICAL findings"; echo '```'; cat findings.tsv; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-            echo "Fixable HIGH/CRITICAL vulnerabilities (severity, id, package, location):"
+            echo "Fixable HIGH/CRITICAL vulnerabilities (severity, id, package, location, Dockerfile step):"
             column -t -s "$(printf '\t')" findings.tsv
             exit 1
           fi
