@@ -108,12 +108,28 @@ state_set() { # key value
   printf '%s=%s\n' "$1" "$2" >> "$STATE_FILE.tmp"; mv "$STATE_FILE.tmp" "$STATE_FILE"
 }
 
-apply_ref() { # ref -> app.update
-  local payload
+# TrueNAS app state: RUNNING | DEPLOYING | STOPPED | CRASHED | ...
+app_state() {
+  midclt call app.query "[[\"name\", \"=\", \"${APP_NAME}\"]]" \
+    | python3 -c 'import json, sys; r = json.load(sys.stdin); print(r[0].get("state", "") if r else "")'
+}
+
+apply_ref() { # ref -> app.update (+ app.start if the app is stopped)
+  local payload st out
   payload="$(midclt call app.config "$APP_NAME" | build_payload "$SERVICE" "$1")" || return 1
   if [ "$DRY_RUN" = 1 ]; then log "DRY-RUN payload: $payload"; return 0; fi
   # app.update is a middleware job: -j waits for it and exits non-zero if the job fails.
-  midclt call -j app.update "$APP_NAME" "$payload" >/dev/null
+  # Its progress output is kept quiet; the last lines are logged if it fails.
+  out="$(midclt call -j app.update "$APP_NAME" "$payload" 2>&1)" \
+    || { log "ERROR: app.update failed: $(printf '%s' "$out" | tail -n 3)"; return 1; }
+  # Updating a stopped app only changes its config; start it so the new image actually runs.
+  st="$(app_state)" || st=""
+  case "$st" in
+    STOPPED|CRASHED)
+      log "app is ${st}; starting it"
+      out="$(midclt call -j app.start "$APP_NAME" 2>&1)" \
+        || { log "ERROR: app.start failed: $(printf '%s' "$out" | tail -n 3)"; return 1; } ;;
+  esac
 }
 
 process() {

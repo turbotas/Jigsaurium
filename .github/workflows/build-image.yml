@@ -80,6 +80,7 @@ jobs:
             echo "version=${VERSION}"
             echo "new_tag=${NEW_TAG}"
             echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "os_refresh=$(date -u +%G-W%V)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
@@ -91,8 +92,8 @@ jobs:
           push: true
           provenance: true
           sbom: true
+          # Read-only: the CI run on master just before this has already written these layers.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
           tags: |
             ${{ steps.meta.outputs.image_name }}:sha-${{ steps.meta.outputs.short_sha }}
             ${{ steps.meta.outputs.image_name }}:${{ steps.meta.outputs.version }}
@@ -102,6 +103,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
             org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
           build-args: |
+            OS_REFRESH=${{ steps.meta.outputs.os_refresh }}
             APP_VERSION=${{ steps.meta.outputs.version }}
             APP_BUILD_SHA=${{ github.event.workflow_run.head_sha }}
             APP_BUILD_TIME=${{ steps.meta.outputs.build_time }}
