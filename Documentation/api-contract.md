@@ -30,6 +30,7 @@
 - `GET /api/v1/health`
 - `GET /api/v1/system/health`
 - `POST /api/v1/system/health/probe`
+- `GET /api/v1/system/proxy-diagnostics`
 - `GET /api/v1/auth/stfd/login-url`
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
@@ -110,6 +111,18 @@
     - `overall_status`: `down` if any enabled probe is down, else `degraded` if any is degraded, else `ok`.
     - `cache_seconds`
     - `probes.<name>`: `status`, `checked_at`, `latency_ms`, `cached`, `error_code`, `error_message`, `details` (AI: `model`, `endpoint_host`, `http_status`, `total_tokens`, `cost_usd`; embeddings: `model_key`, `model_was_loaded`, `vector_dim`, `vector_norm`, `stored_vector_dims`). Secrets such as the API key are never returned.
+- `GET /api/v1/system/proxy-diagnostics` (administrator-only, `Cache-Control: no-store`) reports what the reverse proxy does with forwarding headers; backs the **Reverse proxy headers** check on the Service Health tab:
+  - The caller sends probe headers: `X-Jigsaurium-Proxy-Probe: 1`, `Forwarded: for=192.0.2.1;proto=http;host="<host>:1"`, `X-Forwarded-For: 192.0.2.2`, `X-Forwarded-Host: <host>:1`, `X-Forwarded-Proto: http` (192.0.2.0/24 is a documentation-only range).
+  - Query: `probe_host` (optional, up to 255 chars): the host the browser used; defaults to the request host.
+  - Response `data`:
+    - `probe_sent`, `remote_addr`, `remote_is_trusted_proxy`
+    - `config`: `trusted_proxy_header`, `trusted_proxy_cidrs`, `trusted_proxy_hops`
+    - `received`: raw `host`, `forwarded`, `x_forwarded_for`, `x_forwarded_proto`, `x_forwarded_host`, `x_real_ip`
+    - `findings` (only when the probe was sent): per header (`forwarded`, `x_forwarded_for`, `x_forwarded_proto`, `x_forwarded_host`) one of `passed_through` (client value arrived unchanged), `appended` (proxy added its own value after it), `overwritten` (proxy replaced it), `stripped` (nothing arrived)
+    - `recommended_trusted_proxy_header`: `x-forwarded` when the proxy sets `X-Forwarded-For`, else `forwarded` when it sets `Forwarded`, else `null`
+    - `verdict`: `ok`, `warning` (for example host/proto pass through, or the request did not come from a trusted proxy), `unsafe` (the configured header family is client-controlled, or no trustworthy client-IP header exists), or `unknown` (no probe sent)
+    - `messages`: plain-language explanations
+    - `resolved_client_ip`, `resolved_scheme`, `resolved_host`
 
 ## Filtering, Sorting, Pagination
 
@@ -226,6 +239,7 @@
 - Repeated failed login attempts for the same client/IP + email are rate-limited; blocked attempts return `429` and include `Retry-After`.
 - Login throttle counters are persisted in shared database state so rate limits remain consistent across multi-worker/multi-instance app deployments.
 - When login rate limiting trips, the resolved client IP is also inserted/extended in `blocked_ips` for the same block window so all routes are temporarily blocked for that client.
+- A second, email-wide limit counts failures for one email across all client IPs; when it trips, login for that email returns `429` with `Retry-After` until the block window ends. It does not add `blocked_ips` entries.
 - Repeated request probing that yields 5 consecutive `404` responses from the same client IP triggers a 24-hour temporary block; blocked requests return `429` and include `Retry-After`.
 - Active blocked IP entries are persisted in the `blocked_ips` table and can be managed by administrators.
 
@@ -322,7 +336,7 @@
   - When pagination params are provided, response includes standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
   - `GET /api/v1/jigsaws/thumbnail-images` returns one preferred image per jigsaw for fast stock-list thumbnail rendering.
   - `GET /api/v1/jigsaws/thumbnail-images` is public for browse use; unauthenticated and non-admin callers exclude thumbnails linked to retired jigsaws.
-  - `GET /api/v1/images/{image_id}/content?variant=thumbnail|preview` is available to unauthenticated callers only for non-retired jigsaw-linked images.
+  - `GET /api/v1/images/{image_id}/content?variant=thumbnail|preview` is available to unauthenticated callers only for non-retired jigsaw-linked images. Guests receive only generated (re-encoded) derivatives; if a derivative could not be generated they get `404`, never the original bytes.
   - `GET /api/v1/images/{image_id}/content` (`variant=original`) remains authenticated-only.
   - `POST /api/v1/jigsaws` requires `jigsaw.create` capability and allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.
   - `PATCH /api/v1/jigsaws/{id}` requires `jigsaw.update` capability.
@@ -343,6 +357,7 @@
     - `image` (required file, image MIME type)
   - Accepted upload MIME types are raster formats only: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`.
   - SVG and other active image-document formats are rejected.
+  - File content must decode as one of those formats (the declared MIME type is not trusted); otherwise `422` with issue `file content is not a supported raster image`. The stored `mime_type` is the detected format.
   - Uploaded images are stored in the database for v1.
   - Image payloads include derivative URLs:
     - `content_url` (original, versioned with `v=<content_version>`)
@@ -377,6 +392,7 @@
   - Images uploaded through the image-library endpoint may be unassigned (`jigsaw_id = null`).
   - Accepted upload MIME types are raster formats only: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`.
   - SVG and other active image-document formats are rejected.
+  - File content must decode as one of those formats (the declared MIME type is not trusted); otherwise `422` with issue `file content is not a supported raster image`. The stored `mime_type` is the detected format.
   - `POST /api/v1/image-library/uploads` returns a summary: `created_count`, `skipped_count`, `metadata_backfilled_count`, and per-item `created` / `skipped` details.
   - Each skipped item may include a human-readable `reason` string; duplicate-content skips include association context when available (for example: `Image already exists, attached to jigsaw "Library Puzzle".`).
   - Hash duplicate handling applies to bulk imports too: duplicate image bytes are skipped and reported in `skipped`.

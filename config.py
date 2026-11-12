@@ -56,6 +56,8 @@ class Config:
     )
     TRUSTED_PROXY_CIDRS = _parse_csv(os.getenv("TRUSTED_PROXY_CIDRS", ""))
     TRUSTED_PROXY_HOPS = _parse_optional_int(os.getenv("TRUSTED_PROXY_HOPS"), env_name="TRUSTED_PROXY_HOPS")
+    # Which forwarding header family the proxy is known to set (or overwrite): x-forwarded | forwarded.
+    TRUSTED_PROXY_HEADER = os.getenv("TRUSTED_PROXY_HEADER", "x-forwarded")
     TRUSTED_CLIENT_CIDRS = _parse_csv(os.getenv("TRUSTED_CLIENT_CIDRS", ""))
     AI_ENABLED = _parse_bool(os.getenv("AI_ENABLED"), default=False)
     AI_API_KEY = os.getenv("AI_API_KEY", "")

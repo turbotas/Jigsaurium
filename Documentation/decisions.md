@@ -321,3 +321,17 @@
 - Why: image-library and image-browser workflows need quick context switching to inspect one jigsaw and return immediately without losing filters, scroll state, or current image position.
 - Decision: make jigsaw references (for example in image-browser status and jigsaw inventory title cells) open that overlay.
 - Why: users can move directly from image cleanup/assignment context to full per-jigsaw detail (metadata, assigned images, diary entries) with fewer clicks and less disorientation.
+
+## 2026-11-12 - Edge and Authentication Hardening After Public Release
+
+- Decision: trust exactly one forwarding header family, chosen by `TRUSTED_PROXY_HEADER` (`x-forwarded` by default, `forwarded` opt-in), and read right-most values only. This replaces "prefer RFC7239 `Forwarded`, fall back to `X-Forwarded-*`".
+- Why: most Nginx setups set only `X-Forwarded-*` and pass a client's own `Forwarded` header through, so preferring `Forwarded` let any client choose its IP, host and scheme (bypassing login throttling and IP bans, or getting another IP banned).
+- Decision: run the container with gunicorn (one threaded worker, see `gunicorn.conf.py`) instead of `flask run`.
+- Why: the Werkzeug development server is not built for hostile traffic; one process keeps the in-process background jobs, embedding model and 404-streak tracker working unchanged.
+- Decision: add an email-wide login failure limit across all client IPs (30 per 15 minutes) and run a dummy password-hash check for unknown accounts.
+- Why: the per-(IP, email) limit alone did not bound attempts spread across many IPs, and response timing revealed which emails had accounts.
+- Decision: verify upload bytes decode as a supported raster image, store the detected MIME type, and never serve original bytes to guests when derivatives are missing.
+- Why: the declared multipart/zip type is client-controlled, so members could otherwise host arbitrary files publicly on the app's domain.
+- Fix: import `DecompressionBombError` from `PIL.Image`. Under Pillow 13 the old `from PIL import DecompressionBombError` failed, which silently disabled Pillow in the API routes, so derivatives were never generated and guests were served original uploads (including EXIF location data). A regression test now asserts Pillow is loaded and guest previews carry no GPS EXIF.
+- Decision: require `SECRET_KEY` of at least 32 characters outside dev.
+- Why: the signed session cookie must resist offline guessing; 16 characters was too low a floor.

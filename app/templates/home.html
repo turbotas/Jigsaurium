@@ -1125,6 +1125,16 @@
         <p class="govuk-body govuk-!-margin-bottom-0 app-health-error" data-health-field="error" hidden></p>
       </div>
     </div>
+
+    <h3 id="proxy-diagnostics-heading" class="govuk-heading-m">Reverse proxy headers</h3>
+    <p class="govuk-body">Checks what the reverse proxy does with forwarding headers. Your browser sends deliberately fake values in <code>Forwarded</code>, <code>X-Forwarded-For</code>, <code>X-Forwarded-Host</code> and <code>X-Forwarded-Proto</code>; the app reports whether the proxy passed each one through, appended to it, overwrote it or removed it, and which <code>TRUSTED_PROXY_HEADER</code> setting is safe.</p>
+    <button id="proxy-diagnostics-run" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Check proxy headers</button>
+    <div id="proxy-diagnostics-status" class="govuk-hint govuk-!-margin-bottom-4" aria-live="polite"></div>
+    <div id="proxy-diagnostics-result" aria-labelledby="proxy-diagnostics-heading" hidden>
+      <p class="govuk-body">Result: <span id="proxy-diagnostics-verdict" class="app-ai-status-tag app-health-tag--unknown">Not checked</span></p>
+      <ul id="proxy-diagnostics-messages" class="govuk-list govuk-list--bullet"></ul>
+      <dl id="proxy-diagnostics-summary" class="govuk-summary-list"></dl>
+    </div>
   </section>
 
   <section id="ip-blocks-section" class="govuk-!-margin-top-8" aria-labelledby="ip-blocks-heading">

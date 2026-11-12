@@ -51,6 +51,8 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `SESSION_IDLE_TIMEOUT_MINUTES`: authenticated app-session inactivity timeout in minutes (default `120`).
 - `TRUSTED_PROXY_CIDRS`: comma-separated proxy CIDRs for header trust.
 - `TRUSTED_PROXY_HOPS`: optional fixed proxy depth if CIDR is not used.
+- `TRUSTED_PROXY_HEADER`: which forwarding header family the proxy sets or overwrites: `x-forwarded` (default; `X-Forwarded-For`/`-Proto`/`-Host`) or `forwarded` (RFC7239 `Forwarded`). Only that family is read; the other is ignored.
+- `GUNICORN_THREADS`, `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT`, `GUNICORN_KEEPALIVE`, `GUNICORN_MAX_REQUESTS`, `GUNICORN_MAX_REQUESTS_JITTER`, `GUNICORN_BIND`, `GUNICORN_LOG_LEVEL`: optional overrides for the container's WSGI server (defaults in `gunicorn.conf.py`).
 - `TRUSTED_CLIENT_CIDRS`: comma-separated client CIDRs exempt from automatic 404-streak IP blocking.
 - `STFD_ENABLED`: enable/disable STFD-backed authentication mode.
 - `STFD_ALLOW_LOCAL_LOGIN`: optional breakglass/fallback toggle; when `1`, local email/password login remains available while STFD is enabled.
@@ -108,8 +110,14 @@ Host enforcement policy:
 
 ## Proxy Header Handling
 
-- Prefer RFC7239 `Forwarded` header when present and trusted.
-- Accept `X-Forwarded-*` as compatibility fallback.
+- Trust exactly one forwarding header family, chosen by `TRUSTED_PROXY_HEADER`:
+  - `x-forwarded` (default): read `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host`; ignore `Forwarded`.
+  - `forwarded`: read RFC7239 `Forwarded` (`for`, `proto`, `host`); ignore `X-Forwarded-*`.
+- Why one family only: most proxies set one family and pass the other through from the client unchanged. Reading both (or preferring `Forwarded` when present) lets any client choose its own IP, host and scheme, which defeats login throttling and IP bans and lets a client get someone else's IP banned.
+- Use `forwarded` only when the proxy overwrites `Forwarded` on every request (see the Nginx example below).
+- To find out what the proxy does without access to its config, sign in as an administrator through the public URL and use **Service Health > Reverse proxy headers > Check proxy headers**. It sends fake forwarding headers and reports which ones the proxy passed through, appended to, overwrote or removed, plus the safe `TRUSTED_PROXY_HEADER` value. Re-run it after any proxy change.
+- Client IP: the right-most address in the chain that is not a trusted proxy (CIDR mode), or the `TRUSTED_PROXY_HOPS`-th address from the right (hops mode).
+- `proto`/`host`: the right-most value, which is the one the nearest proxy added.
 - Ignore forwarded headers from untrusted sources.
 - Record both raw remote socket address and resolved client chain.
 - Trust forwarded `proto`/`host` values only when request source matches `TRUSTED_PROXY_CIDRS` (or configured `TRUSTED_PROXY_HOPS` mode).
@@ -128,6 +136,9 @@ Host enforcement policy:
 - Configure `Strict-Transport-Security` at the proxy edge for public HTTPS hosts (test/prod).
 - Restrict direct network access to the Flask service (private network / firewall allowlist / loopback-only bind where possible).
 - Ensure proxy overwrites inbound forwarding headers (do not pass client-supplied values through unchanged).
+- Set `TRUSTED_PROXY_HEADER` to the header family the proxy actually overwrites. With only `$proxy_add_x_forwarded_for` (the common default, including Nginx Proxy Manager), keep `x-forwarded`.
+- Also clear the header family you are not using, so it never reaches the app: for example `proxy_set_header Forwarded "";` when using `x-forwarded`.
+- Bind the published container port to the address the proxy uses (for example `"192.168.1.10:5000:5000"`), not all interfaces, and keep `TRUSTED_PROXY_CIDRS` to the proxy's own address(es) rather than whole LAN or Docker ranges.
 - Set `TRUSTED_PROXY_CIDRS` to exact proxy CIDR(s) used by this environment.
 - Keep `CANONICAL_HOST` and `CANONICAL_HOST_ENFORCEMENT` aligned with deployed hostname policy.
 - Keep Flask app behind the proxy boundary; do not publish Flask listener directly to the internet.
@@ -191,13 +202,18 @@ location / {
 - Least-privilege role enforcement at API/service layer.
 - Security response headers are applied to all responses (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and `Cross-Origin-Resource-Policy`).
 - Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` outside dev.
-- In non-dev environments (`APP_ENV=test|prod`), startup fails when `SECRET_KEY` is missing, default/placeholder, or too short.
+- In non-dev environments (`APP_ENV=test|prod`), startup fails when `SECRET_KEY` is missing, default/placeholder, or shorter than 32 characters. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Changing it signs everyone out.
+- The container runs gunicorn (`gunicorn.conf.py`: one process, threaded, request timeouts and header limits), never the Flask/Werkzeug development server.
 - Server-side app sessions expire after the configured inactivity window (`SESSION_IDLE_TIMEOUT_MINUTES`, default 120 minutes).
-- Login endpoint enforces anti-brute-force throttling per client IP and email (15-minute block after repeated failures in the same window).
+- Login endpoint enforces anti-brute-force throttling per client IP and email (15-minute block after 10 failures in a 15-minute window).
+- Login endpoint also limits each email across all client IPs: 30 failures in a 15-minute window block further attempts for that email for 15 minutes (IP addresses are not blocked by this limit). A successful login clears both counters for that email.
+- Failed logins for unknown or password-less accounts still run a password-hash check, so response time does not reveal whether an email has an account.
 - When the login throttle trips, the resolved client IP is persisted in `blocked_ips` for the same block window so the client is blocked across all routes until expiry.
 - Runtime request shielding enforces a temporary client-IP ban when a caller produces 5 consecutive `404` responses; ban duration is 24 hours and uses resolved client IP from trusted proxy headers.
 - Blocked-IP entries are persisted in `blocked_ips` and can be listed/added/removed by administrators via API/UI.
 - Image upload endpoints accept raster image MIME types only (`image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`); SVG and other active/image-document formats are rejected.
+- The declared type is not trusted: uploaded bytes (including zip entries) must decode as one of those formats, and the stored MIME type is the detected one.
+- Unauthenticated callers only receive re-encoded thumbnail/preview derivatives. When a derivative could not be generated, guests get `404` rather than the original upload bytes.
 
 ## Release Checks (manual now, automated later)
 

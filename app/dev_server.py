@@ -43,6 +43,7 @@ def _resolve_remote_addr_for_log(handler):
             x_forwarded_for_header=environ.get("HTTP_X_FORWARDED_FOR"),
             trusted_proxy_cidrs=config.get("TRUSTED_PROXY_CIDRS", []),
             trusted_proxy_hops=config.get("TRUSTED_PROXY_HOPS"),
+            trusted_proxy_header=config.get("TRUSTED_PROXY_HEADER"),
         )
     except Exception:
         resolved_remote_addr = handler.address_string()

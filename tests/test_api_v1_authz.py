@@ -23,6 +23,7 @@ from app.models import (
 )
 from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
+from tests.image_fixtures import png_bytes
 
 
 @pytest.fixture()
@@ -884,7 +885,7 @@ def test_admin_can_upload_and_list_jigsaw_images(client, seeded_identity_data):
         headers=_csrf_headers(),
         data={
             "tag": "box front",
-            "image": (BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), "box-front.png", "image/png"),
+            "image": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")), "box-front.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
@@ -927,7 +928,7 @@ def test_unauthenticated_catalog_browse_can_fetch_thumbnail_and_preview_but_not_
         headers=_csrf_headers(),
         data={
             "tag": "box front",
-            "image": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"q" * 128), "guest-browse.png", "image/png"),
+            "image": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"q" * 128)), "guest-browse.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
@@ -957,7 +958,7 @@ def test_unauthenticated_catalog_browse_cannot_fetch_retired_jigsaw_thumbnails(c
         headers=_csrf_headers(),
         data={
             "tag": "box front",
-            "image": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"r" * 128), "retired-thumb.png", "image/png"),
+            "image": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"r" * 128)), "retired-thumb.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
@@ -983,7 +984,7 @@ def test_admin_can_upload_jigsaw_image_without_tag(client, seeded_identity_data)
         f"/api/v1/jigsaws/{jigsaw_id}/images",
         headers=_csrf_headers(),
         data={
-            "image": (BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), "untagged.png", "image/png"),
+            "image": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")), "untagged.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
@@ -998,7 +999,7 @@ def test_upload_jigsaw_image_ignores_duplicate_content_hash(client, seeded_ident
     _set_user_session(client, seeded_identity_data["admin_user_id"])
     jigsaw_id = seeded_identity_data["available_jigsaw_id"]
 
-    image_bytes = b"\x89PNG\r\n\x1a\n" + (b"d" * 128)
+    image_bytes = png_bytes(b"\x89PNG\r\n\x1a\n") + (b"d" * 128)
 
     first_response = client.post(
         f"/api/v1/jigsaws/{jigsaw_id}/images",
@@ -1039,7 +1040,7 @@ def test_admin_can_permanently_delete_jigsaw_and_images(client, seeded_identity_
         f"/api/v1/jigsaws/{jigsaw_id}/images",
         headers=_csrf_headers(),
         data={
-            "image": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"p" * 64), "delete-me.png", "image/png"),
+            "image": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"p" * 64)), "delete-me.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
@@ -1099,7 +1100,7 @@ def test_permanent_delete_cascades_related_loans(client, seeded_identity_data):
 def test_admin_can_upload_larger_jigsaw_image_payload(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["admin_user_id"])
     jigsaw_id = seeded_identity_data["available_jigsaw_id"]
-    large_png_payload = b"\x89PNG\r\n\x1a\n" + (b"x" * 200_000)
+    large_png_payload = png_bytes(b"\x89PNG\r\n\x1a\n") + (b"x" * 200_000)
 
     response = client.post(
         f"/api/v1/jigsaws/{jigsaw_id}/images",
@@ -1186,7 +1187,7 @@ def test_upload_jigsaw_image_rejects_empty_file(client, seeded_identity_data):
 def test_upload_jigsaw_image_rejects_payload_larger_than_limit(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["admin_user_id"])
     jigsaw_id = seeded_identity_data["available_jigsaw_id"]
-    too_large_payload = b"\x89PNG\r\n\x1a\n" + (b"x" * (8 * 1024 * 1024 + 1))
+    too_large_payload = png_bytes(b"\x89PNG\r\n\x1a\n") + (b"x" * (8 * 1024 * 1024 + 1))
 
     response = client.post(
         f"/api/v1/jigsaws/{jigsaw_id}/images",
@@ -1215,7 +1216,7 @@ def test_upload_jigsaw_image_rejects_tag_that_is_too_long(client, seeded_identit
         headers=_csrf_headers(),
         data={
             "tag": "t" * 65,
-            "image": (BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), "tag-too-long.png", "image/png"),
+            "image": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")), "tag-too-long.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
@@ -1320,19 +1321,14 @@ def test_member_cannot_access_users_loans_or_ai_diagnostics(client, seeded_ident
 def test_member_can_use_image_library_and_jigsaw_image_upload(client, seeded_identity_data):
     _set_user_session(client, seeded_identity_data["member_user_id"])
     jigsaw_id = seeded_identity_data["available_jigsaw_id"]
-    tiny_png = (
-        b"\x89PNG\r\n\x1a\n"
-        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
-        b"\x00\x00\x00\x0cIDAT\x08\x99c``\x00\x00\x00\x04\x00\x01\xf6\x178U"
-        b"\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
+    tiny_png = png_bytes(b"member-overwrite")
 
     upload_jigsaw_response = client.post(
         f"/api/v1/jigsaws/{jigsaw_id}/images",
         headers=_csrf_headers(),
         data={
             "tag": "completed",
-            "image": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"m" * 128), "member-upload.png", "image/png"),
+            "image": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"m" * 128)), "member-upload.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
@@ -1348,7 +1344,7 @@ def test_member_can_use_image_library_and_jigsaw_image_upload(client, seeded_ide
         headers=_csrf_headers(),
         data={
             "tag": "completed",
-            "files": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"n" * 128), "member-library.png", "image/png"),
+            "files": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"n" * 128)), "member-library.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
@@ -1408,7 +1404,7 @@ def test_mobile_capture_related_apis_reject_user_without_required_capabilities(a
         headers=_csrf_headers(),
         data={
             "tag": "completed",
-            "files": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"o" * 128), "restricted-library.png", "image/png"),
+            "files": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"o" * 128)), "restricted-library.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
@@ -1644,6 +1640,78 @@ def test_auth_login_rate_limit_counter_persists_in_database(app, client, seeded_
     )
     assert throttled_response.status_code == 429
     assert throttled_response.get_json()["error"]["code"] == "too_many_requests"
+
+
+@pytest.mark.functional
+def test_auth_login_rate_limits_email_across_many_client_ips(app, client, seeded_identity_data):
+    from app.api.v1.routes import LOGIN_RATE_LIMIT_EMAIL_MAX_ATTEMPTS
+
+    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.100.12/32"]
+    proxy_environ = {"REMOTE_ADDR": "192.168.100.12"}
+
+    def attempt(client_ip, email="admin@example.com"):
+        return client.post(
+            "/api/v1/auth/login",
+            json={"email": email, "password": "WrongPassword999!"},
+            headers={"X-Forwarded-For": client_ip},
+            environ_overrides=proxy_environ,
+        )
+
+    for index in range(LOGIN_RATE_LIMIT_EMAIL_MAX_ATTEMPTS):
+        assert attempt(f"203.0.113.{index + 1}").status_code == 401
+
+    throttled_response = attempt("198.51.100.200")
+    assert throttled_response.status_code == 429
+    assert throttled_response.get_json()["error"]["code"] == "too_many_requests"
+    assert int(throttled_response.headers["Retry-After"]) > 0
+
+    # The email-wide limit blocks only that email, not the IP addresses used.
+    assert attempt("198.51.100.200", email="member@example.com").status_code == 401
+    with app.app_context():
+        db_session = get_session()
+        assert db_session.query(BlockedIp).count() == 0
+
+
+@pytest.mark.functional
+def test_auth_login_successful_login_clears_email_wide_counter(app, client, seeded_identity_data):
+    for _ in range(3):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@example.com", "password": "WrongPassword999!"},
+        )
+        assert response.status_code == 401
+
+    with app.app_context():
+        db_session = get_session()
+        assert db_session.query(LoginThrottleCounter).filter_by(client_ip="*", email="admin@example.com").one().failed_count == 3
+
+    success_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@example.com", "password": "AdminPassword123!"},
+    )
+    assert success_response.status_code == 200
+
+    with app.app_context():
+        db_session = get_session()
+        assert db_session.query(LoginThrottleCounter).filter_by(email="admin@example.com").count() == 0
+
+
+@pytest.mark.functional
+def test_auth_login_unknown_email_still_runs_password_hash_check(client, seeded_identity_data, monkeypatch):
+    from app.api.v1 import routes as api_routes
+
+    calls = []
+    real_check = api_routes.check_password_hash
+    monkeypatch.setattr(api_routes, "check_password_hash", lambda *args: calls.append(1) or real_check(*args))
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "nobody@example.com", "password": "WrongPassword999!"},
+    )
+
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "authentication_failed"
+    assert calls == [1]
 
 
 @pytest.mark.functional

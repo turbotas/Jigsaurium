@@ -14,6 +14,7 @@ from app import image_embeddings as image_embeddings_module
 from app.models import AiUsageEvent, ImageEmbedding, Jigsaw, JigsawDiaryEntry, JigsawImage, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
 from PIL import Image
+from tests.image_fixtures import jpeg_bytes, png_bytes
 
 
 @pytest.fixture()
@@ -130,7 +131,7 @@ def test_image_library_endpoints_require_authentication(
         response = client.open(
             path,
             method=method,
-            data={"files": (BytesIO(b"\x89PNG\r\n\x1a\n"), "one.png", "image/png")},
+            data={"files": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n")), "one.png", "image/png")},
             content_type=content_type,
         )
     elif method in {"PATCH", "POST"} and json_payload is not None:
@@ -152,7 +153,7 @@ def test_borrower_can_use_shared_image_library_endpoints_but_not_admin_bulk_crea
     upload_response = client.post(
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
-        data={"files": (BytesIO(b"\x89PNG\r\n\x1a\n"), "one.png", "image/png")},
+        data={"files": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n")), "one.png", "image/png")},
         content_type="multipart/form-data",
     )
     assert upload_response.status_code == 201
@@ -163,6 +164,129 @@ def test_borrower_can_use_shared_image_library_endpoints_but_not_admin_bulk_crea
         json={"image_ids": [1]},
     )
     assert bulk_create_response.status_code == 403
+
+
+@pytest.mark.functional
+def test_image_library_upload_rejects_non_image_bytes_with_image_content_type(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={"files": (BytesIO(b"<html><script>alert(1)</script></html>"), "fake.png", "image/png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 422
+    issue = response.get_json()["error"]["details"][0]
+    assert issue["field"] == "files"
+    assert issue["issue"] == "file content is not a supported raster image"
+
+
+@pytest.mark.functional
+def test_image_library_upload_rejects_non_image_bytes_inside_zip(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    archive = _make_zip_file([("fake.jpg", b"MZ-not-really-a-jpeg" * 8)])
+    response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={"files": (archive, "batch.zip", "application/zip")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 422
+    assert response.get_json()["error"]["details"][0]["issue"] == "file content is not a supported raster image"
+
+
+@pytest.mark.functional
+def test_image_library_upload_stores_detected_type_not_declared_type(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={"files": (BytesIO(png_bytes(b"detected-type")), "mislabelled.jpg", "image/jpeg")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    created = response.get_json()["data"]["created"][0]
+    assert created["mime_type"] == "image/png"
+
+
+@pytest.mark.functional
+def test_guest_cannot_fetch_original_bytes_when_derivatives_are_missing(app, client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    jigsaw_id = seeded_image_library_data["jigsaw_id"]
+
+    upload_response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={"tag": "Box", "image": (BytesIO(png_bytes(b"no-derivatives")), "box.png", "image/png")},
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    uploaded = upload_response.get_json()["data"]
+
+    with app.app_context():
+        db_session = get_session()
+        image = db_session.get(JigsawImage, uploaded["id"])
+        image.thumbnail_data = None
+        image.thumbnail_mime_type = None
+        db_session.commit()
+
+    signed_in_response = client.get(uploaded["thumbnail_url"])
+    assert signed_in_response.status_code == 200
+
+    with client.session_transaction() as test_session:
+        test_session.clear()
+
+    assert client.get(uploaded["thumbnail_url"]).status_code == 404
+    assert client.get(uploaded["preview_url"]).status_code == 200
+
+
+@pytest.mark.functional
+def test_pillow_is_loaded_by_api_routes():
+    # A failing optional import silently disabled re-encoding (Pillow 13 moved DecompressionBombError).
+    from app.api.v1 import routes as api_routes
+
+    assert api_routes.Image is not None
+    assert api_routes.ImageOps is not None
+
+
+@pytest.mark.functional
+def test_guest_preview_is_re_encoded_without_exif_location(client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    jigsaw_id = seeded_image_library_data["jigsaw_id"]
+
+    source = Image.new("RGB", (800, 600), color=(120, 80, 40))
+    exif = Image.Exif()
+    exif[0x8825] = {1: "N", 2: (51.0, 30.0, 0.0), 3: "W", 4: (0.0, 7.0, 0.0)}  # GPS IFD
+    source_buffer = BytesIO()
+    source.save(source_buffer, format="JPEG", exif=exif)
+    original_bytes = source_buffer.getvalue()
+    with Image.open(BytesIO(original_bytes)) as check_original:
+        assert check_original.getexif().get_ifd(0x8825)
+
+    upload_response = client.post(
+        f"/api/v1/jigsaws/{jigsaw_id}/images",
+        headers=_csrf_headers(),
+        data={"tag": "Box", "image": (BytesIO(original_bytes), "box.jpg", "image/jpeg")},
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    uploaded = upload_response.get_json()["data"]
+
+    with client.session_transaction() as test_session:
+        test_session.clear()
+
+    preview_response = client.get(uploaded["preview_url"])
+    assert preview_response.status_code == 200
+    assert preview_response.data != original_bytes
+    with Image.open(BytesIO(preview_response.data)) as preview:
+        assert preview.width == 600
+        assert not preview.getexif().get_ifd(0x8825)
 
 
 @pytest.mark.functional
@@ -611,7 +735,7 @@ def test_admin_can_view_ai_usage_diagnostics(client, seeded_image_library_data, 
             tag="untagged",
             filename="diag.png",
             mime_type="image/png",
-            image_data=b"\x89PNG\r\n\x1a\n" + b"d" * 48,
+            image_data=png_bytes(b"\x89PNG\r\n\x1a\n" + b"d" * 48),
         )
         db_session.add(image)
         db_session.flush()
@@ -737,8 +861,8 @@ def test_admin_can_bulk_upload_multiple_unassigned_images(client, seeded_image_l
         headers=_csrf_headers(),
         data={
             "files": [
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"a" * 24), "first.png", "image/png"),
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"b" * 24), "second.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"a" * 24)), "first.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"b" * 24)), "second.png", "image/png"),
             ],
         },
         content_type="multipart/form-data",
@@ -768,7 +892,7 @@ def test_admin_can_fetch_jigsaw_thumbnail_images(client, seeded_image_library_da
         data={
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
             "tag": "Box",
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"x" * 24), "thumb-source.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 24)), "thumb-source.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -832,7 +956,7 @@ def test_admin_can_delete_image_library_item(client, seeded_image_library_data):
         headers=_csrf_headers(),
         data={
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"d" * 24), "delete-me.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"d" * 24)), "delete-me.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -860,7 +984,7 @@ def test_borrower_can_delete_unassigned_image_but_not_assigned_image(client, see
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"u" * 24), "borrower-unassigned.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"u" * 24)), "borrower-unassigned.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -872,7 +996,7 @@ def test_borrower_can_delete_unassigned_image_but_not_assigned_image(client, see
         headers=_csrf_headers(),
         data={
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"a" * 24), "borrower-assigned.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"a" * 24)), "borrower-assigned.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -903,7 +1027,7 @@ def test_admin_can_bulk_upload_images_with_optional_jigsaw_association(client, s
         data={
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
             "files": [
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"x" * 20), "associated.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 20)), "associated.png", "image/png"),
             ],
         },
         content_type="multipart/form-data",
@@ -920,9 +1044,9 @@ def test_bulk_upload_can_extract_images_from_zip_and_skip_non_images(client, see
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
     archive = _make_zip_file(
         [
-            ("photos/box-front.png", b"\x89PNG\r\n\x1a\n" + b"p" * 32),
+            ("photos/box-front.png", png_bytes(b"\x89PNG\r\n\x1a\n" + b"p" * 32)),
             ("notes/readme.txt", b"not-an-image"),
-            ("completed.jpg", b"\xff\xd8\xff" + b"j" * 64),
+            ("completed.jpg", jpeg_bytes(b"completed")),
         ]
     )
 
@@ -948,7 +1072,7 @@ def test_bulk_upload_can_extract_images_from_zip_and_skip_non_images(client, see
 def test_bulk_upload_skips_duplicate_image_content(client, seeded_image_library_data):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 
-    image_bytes = b"\x89PNG\r\n\x1a\n" + (b"dup" * 64)
+    image_bytes = png_bytes(b"\x89PNG\r\n\x1a\n") + (b"dup" * 64)
 
     first_upload = client.post(
         "/api/v1/image-library/uploads",
@@ -1012,7 +1136,7 @@ def test_bulk_upload_rejects_unknown_jigsaw_reference(client, seeded_image_libra
         headers=_csrf_headers(),
         data={
             "jigsaw_id": "999999",
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n"), "orphan.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n")), "orphan.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1028,7 +1152,7 @@ def test_unassigned_image_content_is_accessible_to_authenticated_users(client, s
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"c" * 24), "content.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"c" * 24)), "content.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1054,7 +1178,7 @@ def test_image_content_variant_query_is_validated(client, seeded_image_library_d
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"v" * 24), "variant.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"v" * 24)), "variant.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1075,7 +1199,7 @@ def test_image_variant_response_is_cacheable_when_content_version_is_present(cli
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"k" * 24), "cacheable.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"k" * 24)), "cacheable.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1115,9 +1239,9 @@ def test_image_library_list_supports_page_and_page_size(client, seeded_image_lib
         headers=_csrf_headers(),
         data={
             "files": [
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"m" * 24), "page-one.png", "image/png"),
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"n" * 24), "page-two.png", "image/png"),
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"o" * 24), "page-three.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"m" * 24)), "page-one.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"n" * 24)), "page-two.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"o" * 24)), "page-three.png", "image/png"),
             ],
         },
         content_type="multipart/form-data",
@@ -1193,7 +1317,7 @@ def test_admin_can_assign_unassigned_image_to_jigsaw(client, seeded_image_librar
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"d" * 24), "assign-me.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"d" * 24)), "assign-me.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1220,7 +1344,7 @@ def test_admin_can_unassign_assigned_image(client, seeded_image_library_data):
         headers=_csrf_headers(),
         data={
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"u" * 24), "assigned.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"u" * 24)), "assigned.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1255,7 +1379,7 @@ def test_assign_image_rejects_reassignment_to_different_jigsaw(client, seeded_im
         headers=_csrf_headers(),
         data={
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"e" * 24), "already-assigned.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"e" * 24)), "already-assigned.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1308,7 +1432,7 @@ def test_admin_can_set_image_tag_before_assignment(client, seeded_image_library_
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"g" * 24), "tag-me.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"g" * 24)), "tag-me.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1332,7 +1456,7 @@ def test_image_tag_update_normalizes_known_tags_to_camel_case(client, seeded_ima
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"h" * 24), "normalize-tag.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"h" * 24)), "normalize-tag.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1357,7 +1481,7 @@ def test_image_library_upload_normalizes_known_tags_to_camel_case(client, seeded
         headers=_csrf_headers(),
         data={
             "tag": "in-progress",
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"i" * 24), "normalize-upload-tag.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"i" * 24)), "normalize-upload-tag.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1376,7 +1500,7 @@ def test_reference_tag_normalizes_on_upload_and_patch(client, seeded_image_libra
         headers=_csrf_headers(),
         data={
             "tag": "reference-image",
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"r" * 24), "reference-upload.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"r" * 24)), "reference-upload.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1411,7 +1535,7 @@ def test_completed_tag_on_assigned_image_creates_diary_entry(client, seeded_imag
         headers=_csrf_headers(),
         data={
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"x" * 24), "done.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 24)), "done.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1449,7 +1573,7 @@ def test_assigning_completed_image_creates_diary_entry(client, seeded_image_libr
         headers=_csrf_headers(),
         data={
             "tag": "Completed",
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"y" * 24), "completed-first.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"y" * 24)), "completed-first.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1480,7 +1604,7 @@ def test_assigning_completed_image_with_naive_capture_time_does_not_crash(client
         headers=_csrf_headers(),
         data={
             "tag": "Completed",
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"m" * 24), "completed-naive.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"m" * 24)), "completed-naive.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1516,7 +1640,7 @@ def test_assigning_completed_image_with_naive_capture_time_does_not_crash(client
 def test_duplicate_upload_backfills_capture_metadata_when_missing(client, seeded_image_library_data, app, monkeypatch):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 
-    image_bytes = b"\x89PNG\r\n\x1a\n" + b"z" * 24
+    image_bytes = png_bytes(b"\x89PNG\r\n\x1a\n" + b"z" * 24)
 
     def no_capture(_image_data):
         return None, None, None
@@ -1570,7 +1694,7 @@ def test_duplicate_upload_backfills_capture_metadata_when_missing(client, seeded
 def test_admin_can_overwrite_image_content(client, seeded_image_library_data):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 
-    original_bytes = b"\x89PNG\r\n\x1a\n" + b"h" * 24
+    original_bytes = png_bytes(b"\x89PNG\r\n\x1a\n" + b"h" * 24)
 
     upload_response = client.post(
         "/api/v1/image-library/uploads",
@@ -1587,7 +1711,7 @@ def test_admin_can_overwrite_image_content(client, seeded_image_library_data):
         f"/api/v1/image-library/images/{image_id}/content",
         headers=_csrf_headers(),
         data={
-            "image": (BytesIO(b"\x89PNG\r\n\x1a\n" + b"i" * 96), "after.png", "image/png"),
+            "image": (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"i" * 96)), "after.png", "image/png"),
         },
         content_type="multipart/form-data",
     )
@@ -1598,7 +1722,7 @@ def test_admin_can_overwrite_image_content(client, seeded_image_library_data):
 
     content_response = client.get(updated["content_url"])
     assert content_response.status_code == 200
-    assert content_response.data == b"\x89PNG\r\n\x1a\n" + b"i" * 96
+    assert content_response.data == png_bytes(b"\x89PNG\r\n\x1a\n" + b"i" * 96)
 
     duplicate_original_response = client.post(
         "/api/v1/image-library/uploads",
@@ -1760,7 +1884,7 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"z" * 24), "create-me.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"z" * 24)), "create-me.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -1994,7 +2118,7 @@ def test_create_jigsaw_from_image_rejects_when_ai_disabled(client, seeded_image_
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"q" * 24), "disabled-ai.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"q" * 24)), "disabled-ai.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -2020,7 +2144,7 @@ def test_create_jigsaw_from_image_tolerates_messy_ai_payload_types(client, seede
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"m" * 24), "messy-payload.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"m" * 24)), "messy-payload.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -2082,7 +2206,7 @@ def test_create_jigsaw_from_image_invalid_payload_stores_provider_response(clien
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"r" * 24), "invalid-shape.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"r" * 24)), "invalid-shape.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -2135,7 +2259,7 @@ def test_create_jigsaw_from_image_respects_daily_budget(client, seeded_image_lib
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"k" * 24), "budget.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"k" * 24)), "budget.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -2176,7 +2300,7 @@ def test_create_jigsaw_from_image_rejects_already_assigned_images(client, seeded
         headers=_csrf_headers(),
         data={
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"m" * 24), "assigned.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"m" * 24)), "assigned.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -2204,7 +2328,7 @@ def test_admin_can_enrich_jigsaw_from_assigned_images_non_destructive(client, se
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
             "tag": "Box",
             "files": [
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"f" * 32), "front.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"f" * 32)), "front.png", "image/png"),
             ],
         },
         content_type="multipart/form-data",
@@ -2218,7 +2342,7 @@ def test_admin_can_enrich_jigsaw_from_assigned_images_non_destructive(client, se
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
             "tag": "Completed",
             "files": [
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"b" * 32), "completed.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"b" * 32)), "completed.png", "image/png"),
             ],
         },
         content_type="multipart/form-data",
@@ -2443,7 +2567,7 @@ def test_enrich_jigsaw_from_images_rejects_without_box_tagged_images(client, see
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
             "tag": "Completed",
             "files": [
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"c" * 32), "completed-only.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"c" * 32)), "completed-only.png", "image/png"),
             ],
         },
         content_type="multipart/form-data",
@@ -2476,7 +2600,7 @@ def test_enrich_jigsaw_from_images_rejects_when_ai_disabled(client, seeded_image
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
             "tag": "Box",
             "files": [
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"c" * 32), "box-for-disabled-enrich.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"c" * 32)), "box-for-disabled-enrich.png", "image/png"),
             ],
         },
         content_type="multipart/form-data",
@@ -2505,8 +2629,8 @@ def test_admin_can_start_bulk_create_jigsaws_job(client, seeded_image_library_da
         data={
             "tag": "Box",
             "files": [
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"a" * 32), "bulk-create-one.png", "image/png"),
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"b" * 32), "bulk-create-two.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"a" * 32)), "bulk-create-one.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"b" * 32)), "bulk-create-two.png", "image/png"),
             ],
         },
         content_type="multipart/form-data",
@@ -2588,7 +2712,7 @@ def test_admin_can_start_bulk_create_for_all_unassigned_box_images(client, seede
         headers=_csrf_headers(),
         data={
             "files": [
-                (BytesIO(b"\x89PNG\r\n\x1a\n" + b"d" * 32), "all-box-1.png", "image/png"),
+                (BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"d" * 32)), "all-box-1.png", "image/png"),
             ],
             "tag": "Box",
         },
@@ -2600,7 +2724,7 @@ def test_admin_can_start_bulk_create_for_all_unassigned_box_images(client, seede
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"e" * 32), "all-box-side.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"e" * 32)), "all-box-side.png", "image/png")],
             "tag": "Box side",
         },
         content_type="multipart/form-data",
@@ -2612,7 +2736,7 @@ def test_admin_can_start_bulk_create_for_all_unassigned_box_images(client, seede
         headers=_csrf_headers(),
         data={
             "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"f" * 32), "assigned-box.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"f" * 32)), "assigned-box.png", "image/png")],
             "tag": "Box",
         },
         content_type="multipart/form-data",
@@ -2670,7 +2794,7 @@ def test_bulk_create_jigsaws_rejects_when_ai_disabled(client, seeded_image_libra
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"z" * 24), "bulk-disabled.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"z" * 24)), "bulk-disabled.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -2696,7 +2820,7 @@ def test_bulk_create_unassigned_box_rejects_when_ai_disabled(client, seeded_imag
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"y" * 24), "bulk-unassigned-disabled.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"y" * 24)), "bulk-unassigned-disabled.png", "image/png")],
             "tag": "Box",
         },
         content_type="multipart/form-data",
@@ -2723,7 +2847,7 @@ def test_bulk_create_jigsaws_rejects_when_ai_not_fully_configured(client, seeded
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"c" * 32), "bulk-create-fail.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"c" * 32)), "bulk-create-fail.png", "image/png")],
         },
         content_type="multipart/form-data",
     )
@@ -2754,7 +2878,7 @@ def test_bulk_create_job_non_inline_kickstarts_thread_on_create_and_status_poll(
         "/api/v1/image-library/uploads",
         headers=_csrf_headers(),
         data={
-            "files": [(BytesIO(b"\x89PNG\r\n\x1a\n" + b"k" * 32), "bulk-kickstart.png", "image/png")],
+            "files": [(BytesIO(png_bytes(b"\x89PNG\r\n\x1a\n" + b"k" * 32)), "bulk-kickstart.png", "image/png")],
         },
         content_type="multipart/form-data",
     )

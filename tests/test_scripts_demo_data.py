@@ -13,7 +13,7 @@ from tests.migration_utils import upgrade_database_to_head
 def _build_test_app(database_url):
     class ScriptTestConfig:
         APP_ENV = "test"
-        SECRET_KEY = "script-test-secret"
+        SECRET_KEY = "script-test-secret-0123456789abcdef"
         TESTING = True
         DATABASE_URL = database_url
         LOG_LEVEL = "INFO"

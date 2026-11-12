@@ -75,6 +75,23 @@ def test_create_app_rejects_short_secret_key_in_non_dev_environment():
 
 
 @pytest.mark.functional
+@pytest.mark.parametrize("secret_length, should_start", [(31, False), (32, True)])
+def test_create_app_requires_32_character_secret_key_in_non_dev_environment(secret_length, should_start):
+    class SecretLengthConfig:
+        APP_ENV = "prod"
+        SECRET_KEY = "k" * secret_length
+        TESTING = True
+        DATABASE_URL = "sqlite+pysqlite:///:memory:"
+        CANONICAL_HOST = "localhost"
+
+    if should_start:
+        assert create_app(SecretLengthConfig).config["SECRET_KEY"] == "k" * secret_length
+    else:
+        with pytest.raises(RuntimeError, match="at least 32"):
+            create_app(SecretLengthConfig)
+
+
+@pytest.mark.functional
 def test_create_app_allows_default_secret_key_in_dev_environment():
     class DevConfig:
         APP_ENV = "dev"

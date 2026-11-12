@@ -7,6 +7,7 @@ from app import create_app
 from app.db import get_session
 from app.models import Role, User, UserRole
 from tests.migration_utils import upgrade_database_to_head
+from tests.image_fixtures import png_bytes
 
 
 playwright_sync_api = pytest.importorskip("playwright.sync_api")
@@ -18,7 +19,7 @@ def ui_server(tmp_path):
 
     class UITestConfig:
         APP_ENV = "test"
-        SECRET_KEY = "ui-test-secret-0123456789"
+        SECRET_KEY = "ui-test-secret-0123456789abcdefghij"
         TESTING = True
         DATABASE_URL = f"sqlite+pysqlite:///{db_path.as_posix()}"
         LOG_LEVEL = "INFO"
@@ -64,7 +65,7 @@ def ui_server_stfd_only(tmp_path):
 
     class UITestStfdOnlyConfig:
         APP_ENV = "test"
-        SECRET_KEY = "ui-test-secret-0123456789"
+        SECRET_KEY = "ui-test-secret-0123456789abcdefghij"
         TESTING = True
         DATABASE_URL = f"sqlite+pysqlite:///{db_path.as_posix()}"
         LOG_LEVEL = "INFO"
@@ -303,7 +304,7 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
             {
                 "name": "completed.png",
                 "mimeType": "image/png",
-                "buffer": b"\x89PNG\r\n\x1a\n" + (b"x" * 120_000),
+                "buffer": png_bytes(b"\x89PNG\r\n\x1a\n") + (b"x" * 120_000),
             },
         )
         page.click("#jigsaw-image-form button[type='submit']")
@@ -319,12 +320,12 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
                 {
                     "name": "bulk-one.png",
                     "mimeType": "image/png",
-                    "buffer": b"\x89PNG\r\n\x1a\n" + (b"a" * 4096),
+                    "buffer": png_bytes(b"\x89PNG\r\n\x1a\n") + (b"a" * 4096),
                 },
                 {
                     "name": "bulk-two.png",
                     "mimeType": "image/png",
-                    "buffer": b"\x89PNG\r\n\x1a\n" + (b"b" * 4096),
+                    "buffer": png_bytes(b"\x89PNG\r\n\x1a\n") + (b"b" * 4096),
                 },
             ],
         )
@@ -421,7 +422,10 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.wait_for_selector("#image-browser-modal:not([hidden])")
         assert page.locator("#image-browser-assign-previous").is_visible()
         assert page.locator("#image-browser-assign-next").is_visible()
-        assert page.locator("#image-browser-create-jigsaw").is_visible()
+        # AI is disabled in this config (Simple Mode), so the AI "Create jigsaw" control stays hidden.
+        # It only appeared visible before because the fake image bytes failed to load.
+        page.wait_for_selector("#image-browser-status:has-text('bulk-one.png')")
+        assert page.locator("#image-browser-create-jigsaw").is_hidden()
         assert page.locator("#image-browser-delete").is_visible()
         assert page.locator("#image-browser-crop-mode").is_visible()
         assert page.locator("#image-browser-ai-accept").count() == 1

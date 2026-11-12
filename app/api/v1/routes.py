@@ -18,6 +18,7 @@ from secrets import compare_digest, token_urlsafe
 from functools import wraps
 
 from flask import Blueprint, current_app, g, request, session
+from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy import delete as sa_delete
@@ -67,13 +68,19 @@ from app.models import (
 )
 from app.models.jigsaw import JigsawStatus
 from app.models.loan import LoanStatus
-from app.request_security import MANUAL_BLOCK_SOURCE, normalize_ip_address, upsert_blocked_ip
+from app.request_security import (
+    MANUAL_BLOCK_SOURCE,
+    analyse_proxy_header_probe,
+    normalize_host,
+    normalize_ip_address,
+    upsert_blocked_ip,
+)
 
 import jwt
 
 try:  # pragma: no cover - optional dependency fallback
     from PIL import Image, ImageOps, UnidentifiedImageError
-    from PIL import DecompressionBombError
+    from PIL.Image import DecompressionBombError
 except ImportError:  # pragma: no cover
     Image = None
     ImageOps = None
@@ -245,6 +252,10 @@ LOGIN_RATE_LIMIT_WINDOW_SECONDS = 15 * 60
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 10
 LOGIN_RATE_LIMIT_BLOCK_SECONDS = 15 * 60
 LOGIN_RATE_LIMIT_BLOCK_SOURCE = "auto_login_failures"
+# Email-wide limit across all client IPs, so attempts spread over many addresses are still bounded.
+# Stored in login_throttle_counters under this client_ip sentinel (never a valid IP address).
+LOGIN_RATE_LIMIT_EMAIL_MAX_ATTEMPTS = 30
+LOGIN_RATE_LIMIT_ANY_IP_KEY = "*"
 
 if Image is not None:
     Image.MAX_IMAGE_PIXELS = JIGSAW_IMAGE_MAX_PIXELS
@@ -2061,23 +2072,14 @@ def _load_login_throttle_counter(db_session, *, client_ip, email, for_update=Fal
     return db_session.execute(stmt).scalar_one_or_none()
 
 
-def _check_login_rate_limit(email):
-    client_ip, normalized_email = _login_rate_limit_identity(email)
-    now = datetime.now(timezone.utc)
-    db_session = get_session()
-    counter = _load_login_throttle_counter(db_session, client_ip=client_ip, email=normalized_email)
+def _check_login_throttle_counter(db_session, *, client_ip, email, now):
+    counter = _load_login_throttle_counter(db_session, client_ip=client_ip, email=email)
     if counter is None:
         return None
 
     blocked_until = _normalize_datetime_to_utc(counter.blocked_until)
     if blocked_until is not None and blocked_until > now:
-        retry_after_seconds = max(1, int((blocked_until - now).total_seconds()))
-        payload, status_code = _error_response(
-            "too_many_requests",
-            "Too many failed login attempts. Please try again later.",
-            429,
-        )
-        return payload, status_code, retry_after_seconds
+        return max(1, int((blocked_until - now).total_seconds()))
 
     window_started_at = _normalize_datetime_to_utc(counter.window_started_at)
     if window_started_at is not None and (now - window_started_at).total_seconds() > LOGIN_RATE_LIMIT_WINDOW_SECONDS:
@@ -2089,24 +2091,45 @@ def _check_login_rate_limit(email):
     return None
 
 
-def _record_failed_login_attempt(email):
+def _check_login_rate_limit(email):
     client_ip, normalized_email = _login_rate_limit_identity(email)
+    now = datetime.now(timezone.utc)
     db_session = get_session()
 
+    retry_after_seconds = None
+    for counter_ip in (client_ip, LOGIN_RATE_LIMIT_ANY_IP_KEY):
+        counter_retry_after = _check_login_throttle_counter(
+            db_session, client_ip=counter_ip, email=normalized_email, now=now
+        )
+        if counter_retry_after is not None:
+            retry_after_seconds = max(retry_after_seconds or 0, counter_retry_after)
+
+    if retry_after_seconds is None:
+        return None
+
+    payload, status_code = _error_response(
+        "too_many_requests",
+        "Too many failed login attempts. Please try again later.",
+        429,
+    )
+    return payload, status_code, retry_after_seconds
+
+
+def _increment_login_throttle_counter(db_session, *, client_ip, email, max_attempts):
+    """Count one failed attempt; return True when this attempt starts a block."""
     for attempt in range(2):
         now = datetime.now(timezone.utc)
-        should_persist_ip_block = False
         try:
             counter = _load_login_throttle_counter(
                 db_session,
                 client_ip=client_ip,
-                email=normalized_email,
+                email=email,
                 for_update=True,
             )
             if counter is None:
                 counter = LoginThrottleCounter(
                     client_ip=client_ip,
-                    email=normalized_email,
+                    email=email,
                     failed_count=0,
                     window_started_at=now,
                     blocked_until=None,
@@ -2121,34 +2144,57 @@ def _record_failed_login_attempt(email):
                 counter.window_started_at = now
                 counter.blocked_until = None
 
+            started_block = False
             counter.failed_count = int(counter.failed_count or 0) + 1
-            if counter.failed_count >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS:
+            if counter.failed_count >= max_attempts:
                 counter.blocked_until = now + timedelta(seconds=LOGIN_RATE_LIMIT_BLOCK_SECONDS)
                 counter.failed_count = 0
                 counter.window_started_at = now
-                should_persist_ip_block = True
+                started_block = True
 
             counter.updated_at = now
             db_session.commit()
-            if should_persist_ip_block:
-                _persist_failed_login_ip_block()
-            return
+            return started_block
         except IntegrityError:
             db_session.rollback()
             if attempt == 0:
                 continue
             raise
-        except Exception:
-            db_session.rollback()
-            current_app.logger.warning(
-                "login_rate_limit_counter_update_failed",
-                extra={
-                    "client_ip_resolved": client_ip,
-                    "email": normalized_email,
-                    "request_id": getattr(g, "request_id", None),
-                },
-            )
-            return
+    return False
+
+
+def _record_failed_login_attempt(email):
+    client_ip, normalized_email = _login_rate_limit_identity(email)
+    db_session = get_session()
+
+    try:
+        should_persist_ip_block = _increment_login_throttle_counter(
+            db_session,
+            client_ip=client_ip,
+            email=normalized_email,
+            max_attempts=LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
+        )
+        # The email-wide counter only blocks further attempts for this email; it never blocks an IP.
+        _increment_login_throttle_counter(
+            db_session,
+            client_ip=LOGIN_RATE_LIMIT_ANY_IP_KEY,
+            email=normalized_email,
+            max_attempts=LOGIN_RATE_LIMIT_EMAIL_MAX_ATTEMPTS,
+        )
+    except Exception:
+        db_session.rollback()
+        current_app.logger.warning(
+            "login_rate_limit_counter_update_failed",
+            extra={
+                "client_ip_resolved": client_ip,
+                "email": normalized_email,
+                "request_id": getattr(g, "request_id", None),
+            },
+        )
+        return
+
+    if should_persist_ip_block:
+        _persist_failed_login_ip_block()
 
 
 def _persist_failed_login_ip_block():
@@ -2188,10 +2234,21 @@ def _clear_failed_login_attempts(email):
     db_session = get_session()
     db_session.execute(
         sa_delete(LoginThrottleCounter).where(
-            LoginThrottleCounter.client_ip == client_ip,
+            LoginThrottleCounter.client_ip.in_([client_ip, LOGIN_RATE_LIMIT_ANY_IP_KEY]),
             LoginThrottleCounter.email == normalized_email,
         )
     )
+
+
+_dummy_password_hash = None
+
+
+def _consume_password_check_time(password):
+    """Run one hash check against a throwaway hash so unknown emails cost the same time."""
+    global _dummy_password_hash
+    if _dummy_password_hash is None:
+        _dummy_password_hash = generate_password_hash(token_urlsafe(16))
+    check_password_hash(_dummy_password_hash, password)
 
 
 def reset_runtime_security_state():
@@ -2492,6 +2549,44 @@ def _is_zip_upload(upload):
 def _is_allowed_image_mime_type(mime_type):
     normalized = str(mime_type or "").strip().lower()
     return normalized in ALLOWED_RASTER_IMAGE_MIME_TYPES
+
+
+PILLOW_FORMAT_MIME_TYPES = {
+    "JPEG": "image/jpeg",
+    "MPO": "image/jpeg",
+    "PNG": "image/png",
+    "WEBP": "image/webp",
+    "GIF": "image/gif",
+    "HEIF": "image/heif",
+    "HEIC": "image/heic",
+}
+
+
+def _verify_raster_image_content(image_data, declared_mime_type):
+    """Return the MIME type to store for these bytes, or None when they are not a supported image.
+
+    The declared type comes from the client (multipart header or zip entry name) and is not
+    trusted: the bytes must decode as one of the supported raster formats, and the stored type is
+    the detected one.
+    """
+    declared = str(declared_mime_type or "").strip().lower()
+    if Image is None:  # pragma: no cover - Pillow is a core dependency
+        return declared if _is_allowed_image_mime_type(declared) else None
+
+    try:
+        with Image.open(BytesIO(image_data)) as probe:
+            detected_format = str(probe.format or "").upper()
+            probe.verify()
+    except Exception:
+        return None
+
+    detected = PILLOW_FORMAT_MIME_TYPES.get(detected_format)
+    if detected is None:
+        return None
+    # pillow-heif reports HEIC files as HEIF; keep the client's more specific label.
+    if detected in {"image/heif", "image/heic"} and declared in {"image/heif", "image/heic"}:
+        return declared
+    return detected
 
 
 def _is_truthy_form_value(value):
@@ -3349,6 +3444,11 @@ def _extract_zip_image_items(upload):
                     )
                     continue
 
+                mime_type = _verify_raster_image_content(image_data, mime_type)
+                if mime_type is None:
+                    issues.append({"filename": filename, "issue": "file content is not a supported raster image"})
+                    continue
+
                 normalized_filename, error = _validate_optional_text_field(
                     filename, field_name="filename", max_length=255
                 )
@@ -3411,6 +3511,16 @@ def _extract_bulk_image_items(uploads):
             )
             continue
 
+        mime_type = _verify_raster_image_content(image_data, mime_type)
+        if mime_type is None:
+            issues.append(
+                {
+                    "filename": upload.filename or "(unnamed)",
+                    "issue": "file content is not a supported raster image",
+                }
+            )
+            continue
+
         filename, error = _validate_optional_text_field(upload.filename, field_name="filename", max_length=255)
         if error is not None:
             issues.append({"filename": upload.filename or "(unnamed)", "issue": "filename is invalid"})
@@ -3463,11 +3573,13 @@ def _encode_variant_image(image):
 
 
 def _build_image_variants(image_data, mime_type):
+    # When derivatives cannot be generated they are left empty: signed-in users then get the
+    # original bytes as a fallback, but guests never do (see get_image_content).
     fallback = {
-        "thumbnail_mime_type": mime_type,
-        "thumbnail_data": image_data,
-        "preview_mime_type": mime_type,
-        "preview_data": image_data,
+        "thumbnail_mime_type": None,
+        "thumbnail_data": None,
+        "preview_mime_type": None,
+        "preview_data": None,
     }
     if Image is None or ImageOps is None:
         return fallback
@@ -3496,6 +3608,15 @@ def _resolve_image_variant_payload(image, variant):
     if variant == IMAGE_VARIANT_PREVIEW:
         return image.preview_data or image.image_data, image.preview_mime_type or image.mime_type
     return image.image_data, image.mime_type
+
+
+def _variant_is_re_encoded(image, variant):
+    """True when a generated (re-encoded) derivative exists for this variant."""
+    if variant == IMAGE_VARIANT_THUMBNAIL:
+        return bool(image.thumbnail_data)
+    if variant == IMAGE_VARIANT_PREVIEW:
+        return bool(image.preview_data)
+    return False
 
 
 def _variant_has_derived_payload(image, variant):
@@ -4746,6 +4867,34 @@ def _overall_health_status(probe_results):
     return HEALTH_PROBE_STATUS_OK
 
 
+@api_v1_bp.get("/system/proxy-diagnostics")
+@require_role("administrator")
+def get_proxy_diagnostics():
+    """Report which forwarding headers the reverse proxy sets, from a probe sent by the admin UI."""
+    raw_probe_host = str(request.args.get("probe_host") or "").strip()
+    if len(raw_probe_host) > 255:
+        return _error_response(
+            "validation_error",
+            "Invalid request query.",
+            422,
+            [{"field": "probe_host", "issue": "must be 255 characters or fewer"}],
+        )
+    probe_host = normalize_host(raw_probe_host) or normalize_host(request.host) or ""
+
+    payload = analyse_proxy_header_probe(
+        remote_addr=request.remote_addr,
+        headers=request.headers,
+        trusted_proxy_cidrs=current_app.config.get("TRUSTED_PROXY_CIDRS", []),
+        trusted_proxy_hops=current_app.config.get("TRUSTED_PROXY_HOPS"),
+        trusted_proxy_header=current_app.config.get("TRUSTED_PROXY_HEADER"),
+        probe_host=probe_host,
+    )
+    payload["resolved_scheme"] = getattr(g, "request_scheme_resolved", request.scheme)
+    payload["resolved_host"] = getattr(g, "request_host_resolved", None)
+    response_payload, status_code = _success_response(payload)
+    return response_payload, status_code, {"Cache-Control": "no-store"}
+
+
 @api_v1_bp.post("/system/health/probe")
 @require_role("administrator")
 def run_system_health_probe():
@@ -4861,7 +5010,11 @@ def auth_login():
 
     db_session = get_session()
     user = db_session.execute(select(User).where(User.email == email)).scalar_one_or_none()
-    if user is None or not user.is_active or not user.check_password(password):
+    if user is None or not user.is_active or not user.password_hash:
+        _consume_password_check_time(password)
+        _record_failed_login_attempt(email)
+        return _error_response("authentication_failed", "Invalid credentials.", 401)
+    if not user.check_password(password):
         _record_failed_login_attempt(email)
         return _error_response("authentication_failed", "Invalid credentials.", 401)
 
@@ -6405,6 +6558,15 @@ def create_jigsaw_image(jigsaw_id):
             [{"field": "image", "issue": f"must be {JIGSAW_IMAGE_MAX_BYTES} bytes or fewer"}],
         )
 
+    mime_type = _verify_raster_image_content(image_data, mime_type)
+    if mime_type is None:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": "file content is not a supported raster image"}],
+        )
+
     filename, error = _validate_optional_text_field(
         upload.filename, field_name="filename", max_length=255
     )
@@ -7441,6 +7603,15 @@ def replace_image_library_item_content(image_id):
             [{"field": "image", "issue": f"must be {JIGSAW_IMAGE_MAX_BYTES} bytes or fewer"}],
         )
 
+    mime_type = _verify_raster_image_content(image_data, mime_type)
+    if mime_type is None:
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "image", "issue": "file content is not a supported raster image"}],
+        )
+
     filename, error = _validate_optional_text_field(upload.filename, field_name="filename", max_length=255)
     if error is not None:
         return error
@@ -7955,6 +8126,11 @@ def get_image_content(image_id):
         if "administrator" not in getattr(g, "current_user_roles", []) and jigsaw.status == JigsawStatus.RETIRED:
             return _error_response("not_found", "Jigsaw image was not found.", 404)
     elif user is None:
+        return _error_response("not_found", "Jigsaw image was not found.", 404)
+
+    if user is None and not _variant_is_re_encoded(image, variant):
+        # Guests only ever get re-encoded derivatives (no EXIF, no original bytes). A derivative
+        # that could not be generated falls back to the original upload, which stays private.
         return _error_response("not_found", "Jigsaw image was not found.", 404)
 
     return _build_image_content_response(image, variant)

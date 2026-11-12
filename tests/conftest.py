@@ -11,7 +11,7 @@ def app(tmp_path, monkeypatch):
 
     class FunctionalTestConfig:
         APP_ENV = "test"
-        SECRET_KEY = "functional-test-secret"
+        SECRET_KEY = "functional-test-secret-0123456789ab"
         TESTING = True
         DATABASE_URL = database_url
         LOG_LEVEL = "INFO"
