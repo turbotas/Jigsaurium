@@ -160,7 +160,7 @@ AUTO_APPLY=1                    # 0 for prod if you want "notify only, apply on 
   compose config is essentially identical to the repo's `docker-compose.test.yml`
   (`image: ghcr.io/turbotas/jigsaurium:test`, `env_file` at an absolute NAS path, healthcheck on
   `/api/v1/health`, port `15000`). Secrets (DB credentials, API keys) are read from
-  `/mnt/NAS1Pool1/apps/jigsaurium-config/test.env` on the NAS (root-only, outside the source
+  `/mnt/<pool>/apps/jigsaurium-config/test.env` on the NAS (root-only, outside the source
   checkout), not from GitHub.
 - Because of that, **no template rendering is needed.** The agent keeps the app's existing stored
   config and changes only the `image:` line, swapping `:test` for `@sha256:<digest>`. Everything

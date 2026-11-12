@@ -18,13 +18,13 @@ class _StubHandler:
 @pytest.mark.functional
 def test_resolve_remote_addr_for_log_prefers_forwarded_client_with_trusted_proxy_cidrs():
     handler = _StubHandler(
-        address="192.168.51.12",
+        address="192.168.100.12",
         environ={
-            "REMOTE_ADDR": "192.168.51.12",
-            "HTTP_FORWARDED": 'for="203.0.113.11";proto=https, for="192.168.51.99"',
+            "REMOTE_ADDR": "192.168.100.12",
+            "HTTP_FORWARDED": 'for="203.0.113.11";proto=https, for="192.168.100.99"',
         },
         config={
-            "TRUSTED_PROXY_CIDRS": ["192.168.51.0/24"],
+            "TRUSTED_PROXY_CIDRS": ["192.168.100.0/24"],
             "TRUSTED_PROXY_HOPS": 1,
         },
     )
@@ -38,11 +38,11 @@ def test_resolve_remote_addr_for_log_ignores_forwarded_headers_for_untrusted_rem
         address="198.51.100.20",
         environ={
             "REMOTE_ADDR": "198.51.100.20",
-            "HTTP_FORWARDED": 'for="203.0.113.11";proto=https, for="192.168.51.99"',
-            "HTTP_X_FORWARDED_FOR": "203.0.113.11, 192.168.51.99",
+            "HTTP_FORWARDED": 'for="203.0.113.11";proto=https, for="192.168.100.99"',
+            "HTTP_X_FORWARDED_FOR": "203.0.113.11, 192.168.100.99",
         },
         config={
-            "TRUSTED_PROXY_CIDRS": ["192.168.51.0/24"],
+            "TRUSTED_PROXY_CIDRS": ["192.168.100.0/24"],
             "TRUSTED_PROXY_HOPS": 1,
         },
     )

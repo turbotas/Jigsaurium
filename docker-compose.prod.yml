@@ -6,13 +6,13 @@ services:
     container_name: jigsaurium-web
     restart: unless-stopped
     env_file:
-      - path: /mnt/NAS1Pool1/apps/jigsaurium-config/prod.env
+      - path: /mnt/<pool>/apps/jigsaurium-config/prod.env
         required: true
     ports:
       - "${JIGSAURIUM_PORT:-5000}:5000"
     volumes:
       # Absolute dataset path: a relative path resolves inside /mnt/.ix-apps, which TrueNAS owns.
-      - "/mnt/NAS1Pool1/apps/jigsaurium-prod-instance:/app/instance"
+      - "/mnt/<pool>/apps/jigsaurium-prod-instance:/app/instance"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://127.0.0.1:5000/api/v1/health"]
       interval: 30s

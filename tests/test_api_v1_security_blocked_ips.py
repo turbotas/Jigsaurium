@@ -115,8 +115,8 @@ def test_borrower_cannot_manage_security_sessions(client, seeded_security_identi
 @pytest.mark.functional
 def test_auto_404_streak_ban_is_persisted_in_database(client, app):
     reset_request_security_state()
-    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.51.0/24"]
-    proxy_remote_addr = "192.168.51.12"
+    app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.100.0/24"]
+    proxy_remote_addr = "192.168.100.12"
     headers = {"X-Forwarded-For": "203.0.113.77"}
 
     for _ in range(5):
