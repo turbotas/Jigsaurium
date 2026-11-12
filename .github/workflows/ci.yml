@@ -1,11 +1,20 @@
 name: CI
 
+# PRs run once (pull_request); pushes run only on the default branch, so a PR branch is not
+# tested twice. A newer push to the same PR/branch cancels the older run.
 on:
   pull_request:
   push:
     branches:
-      - "**"
+      - master
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   api-tests:
@@ -72,3 +81,84 @@ jobs:
 
       - name: Run UI pytest suite
         run: python -m pytest -m ui
+
+  image-smoke:
+    name: Image Build, Smoke Test and Scan
+    runs-on: ubuntu-latest
+
+    # Throwaway database so the container can run its migrations and start for real.
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_DATABASE: jigsaurium
+          MARIADB_USER: jigsaurium
+          MARIADB_PASSWORD: ci-smoke-password
+          MARIADB_RANDOM_ROOT_PASSWORD: "1"
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (not pushed)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: jigsaurium:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            APP_VERSION=ci
+            APP_BUILD_SHA=${{ github.sha }}
+
+      - name: Start container
+        run: |
+          docker run -d --name jigsaurium-ci --network host \
+            -e APP_ENV=test \
+            -e SECRET_KEY="ci-$(openssl rand -hex 24)" \
+            -e DATABASE_URL=mysql+pymysql://jigsaurium:ci-smoke-password@127.0.0.1:3306/jigsaurium \
+            -e AUTO_MIGRATE=1 \
+            -e SESSION_IDLE_TIMEOUT_MINUTES=120 \
+            -e CANONICAL_HOST_ENFORCEMENT=off \
+            -e IMAGE_EMBEDDINGS_ENABLED=1 \
+            jigsaurium:ci
+
+      - name: Wait for health endpoint
+        run: |
+          for i in $(seq 60); do
+            if curl -fsS http://127.0.0.1:5000/api/v1/health; then echo; echo "Healthy after ~$((i * 5))s"; exit 0; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' jigsaurium-ci)" != "true" ]; then echo "Container exited"; break; fi
+            sleep 5
+          done
+          echo "Container did not become healthy"; docker logs jigsaurium-ci; exit 1
+
+      - name: Show container logs
+        if: always()
+        run: docker logs jigsaurium-ci 2>&1 | tail -n 100 || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f jigsaurium-ci || true
+
+      # Fail on HIGH/CRITICAL vulnerabilities that have a fix available.
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: jigsaurium:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
