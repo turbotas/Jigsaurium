@@ -1,0 +1,87 @@
+name: Dependency Refresh
+
+# Weekly: refresh the Python lock files (scripts/update_python_dependencies.py) and GOV.UK Frontend
+# (within its current major version), then open or update one PR and queue it to auto-merge once
+# the required CI checks pass. Direct requirements are capped below their next major in
+# requirements/*.txt, so this only brings in patch/minor updates of those.
+#
+# Needs repository secret DEPS_AUTOMATION_TOKEN: a fine-grained personal access token for this
+# repository with "Contents: Read and write" and "Pull requests: Read and write". A PR opened with
+# the built-in GITHUB_TOKEN would not trigger CI, and its merge would not trigger later workflows.
+on:
+  schedule:
+    - cron: "0 5 * * 1" # Mondays 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deps-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check automation token is configured
+        env:
+          TOKEN: ${{ secrets.DEPS_AUTOMATION_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Repository secret DEPS_AUTOMATION_TOKEN is not set (see the comment at the top of this workflow)."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # Each profile is resolved in its own clean virtualenv because the script writes its lock
+      # file from `pip freeze`. Tests are not run here; the PR's CI runs the full suite and the
+      # image smoke test before anything can merge.
+      - name: Refresh Python lock files
+        run: |
+          for profile in prod dev; do
+            python -m venv "$RUNNER_TEMP/venv-$profile"
+            "$RUNNER_TEMP/venv-$profile/bin/python" -m pip install --quiet --upgrade pip
+            "$RUNNER_TEMP/venv-$profile/bin/python" scripts/update_python_dependencies.py --profile "$profile" --skip-tests
+          done
+
+      - name: Refresh GOV.UK Frontend (same major version)
+        run: |
+          npm ci --no-audit --no-fund
+          major="$(node -p "require('./package.json').devDependencies['govuk-frontend'].split('.')[0]")"
+          target="$(npm view "govuk-frontend@^${major}" version --json \
+            | python -c 'import json, sys; v = json.load(sys.stdin); print(v[-1] if isinstance(v, list) else v)')"
+          echo "GOV.UK Frontend target: ${target}"
+          python scripts/vendor_govuk_assets.py --update "$target"
+
+      - name: Open or update the refresh PR
+        id: pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.DEPS_AUTOMATION_TOKEN }}
+          branch: deps/weekly-refresh
+          delete-branch: true
+          commit-message: "Weekly dependency refresh"
+          title: "Weekly dependency refresh"
+          labels: dependencies
+          body: |
+            Automated weekly refresh:
+            - Python lock files regenerated with `scripts/update_python_dependencies.py` (prod and dev).
+            - GOV.UK Frontend updated within its current major version and re-vendored.
+
+            This PR merges automatically once the required CI checks pass. If a check fails it
+            stays open for a human to look at.
+
+      - name: Queue auto-merge
+        if: steps.pr.outputs.pull-request-number != ''
+        run: gh pr merge --auto --squash "${{ steps.pr.outputs.pull-request-number }}"
+        env:
+          GH_TOKEN: ${{ secrets.DEPS_AUTOMATION_TOKEN }}

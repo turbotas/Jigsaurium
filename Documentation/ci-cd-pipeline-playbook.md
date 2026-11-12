@@ -53,8 +53,15 @@ Human PR ───────────────────────�
 
 ### 4.1 Dependency updates
 
-- **Dependabot** (`.github/dependabot.yml`) for: `github-actions`, `docker` (base image), `npm`.
-  Grouped weekly PRs; security updates immediate.
+- **Dependabot** (`.github/dependabot.yml`) for `github-actions` (grouped weekly PR). Add `docker`
+  / `npm` only where the app does not vendor or rebuild them another way. Jigsaurium: npm
+  (GOV.UK Frontend) is vendored into `app/static/vendor` by a script, so the refresh workflow
+  handles it; the base image tag is re-pulled and `apt-get upgrade`d on every build.
+- **Token gotcha:** PRs opened with the built-in `GITHUB_TOKEN` do not trigger CI, and merges it
+  performs do not trigger later workflows (e.g. the image build). The refresh workflow therefore
+  uses a fine-grained PAT secret (`DEPS_AUTOMATION_TOKEN`: Contents + Pull requests, read/write,
+  this repo only). Dependabot PRs trigger CI themselves; their auto-merge uses `GITHUB_TOKEN`,
+  which is fine because action-version bumps do not change the image.
 - **Python / lock files [per-app]:** if the app uses a custom lock flow (Jigsaurium:
   `requirements/*.txt` ranges + generated `known-good-*.txt`), a scheduled workflow
   (`deps-refresh.yml`) runs the app's own refresh command and opens a PR
@@ -62,7 +69,9 @@ Human PR ───────────────────────�
   regenerates locks and vendored assets, e.g. `scripts/refresh-deps.sh`.
 - **Auto-merge:** `gh pr merge --auto --squash` enabled by a workflow for Dependabot/refresh PRs of
   patch/minor type only. Branch protection makes the CI checks required, so a failing update
-  can never merge. Major updates wait for a human.
+  can never merge. Major updates wait for a human. Required repo settings: "Allow auto-merge" on,
+  and a ruleset on the default branch requiring the CI check names (with an admin bypass if you
+  still push directly). Without required checks, `--auto` merges immediately.
 
 ### 4.2 PR checks (`ci.yml`)
 
