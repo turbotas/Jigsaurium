@@ -26,6 +26,22 @@ Jigsaurium follows **SemVer 2.0.0** using `vMAJOR.MINOR.PATCH` tags.
 
 Version tags are immutable once published.
 
+### Automatic patch releases
+
+Every commit that reaches `master` with CI passing is built once by `build-image.yml` and gets a
+version automatically:
+
+- If the commit already carries a `vX.Y.Z` tag, that version is used.
+- Otherwise the highest `vX.Y.Z` tag gets its **patch** bumped (`v0.2.3` -> `v0.2.4`). A
+  pre-release tag is finalised instead (`v0.2.0-rc1` -> `v0.2.0`).
+- After the image is published the commit is tagged and a GitHub Release with generated notes is
+  created. The image is published as `vX.Y.Z` and `sha-<12>`; `test` is moved to it, and `prod`
+  after approval in the `prod` Environment.
+
+To start a new **minor** or **major** line, push the tag (for example `v0.3.0`) on the latest
+`master` commit; the following builds continue with `v0.3.1`, `v0.3.2`, ... Weekly dependency
+refreshes count as patch releases, consistent with the policy above.
+
 ## Tagging Model
 
 ### Immutable release tags
