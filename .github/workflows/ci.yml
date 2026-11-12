@@ -131,7 +131,8 @@ jobs:
             -e DATABASE_URL=mysql+pymysql://jigsaurium:ci-smoke-password@127.0.0.1:3306/jigsaurium \
             -e AUTO_MIGRATE=1 \
             -e SESSION_IDLE_TIMEOUT_MINUTES=120 \
-            -e CANONICAL_HOST_ENFORCEMENT=off \
+            -e CANONICAL_HOST=www.example.test \
+            -e CANONICAL_HOST_ENFORCEMENT=strict \
             -e IMAGE_EMBEDDINGS_ENABLED=1 \
             jigsaurium:ci
 

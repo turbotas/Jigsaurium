@@ -17,4 +17,4 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 600s # model warm-up and migrations can take minutes on the NAS
