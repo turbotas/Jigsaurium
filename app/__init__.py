@@ -21,6 +21,8 @@ from app.request_security import (
     upsert_blocked_ip,
 )
 
+HEALTH_CHECK_PATH = "/api/v1/health"
+
 
 def _is_missing_local_embedding_model_error(error):
     message = str(error or "")
@@ -314,7 +316,9 @@ def create_app(config_class="config.Config"):
         g.request_host_resolved = origin_context.host
 
         canonical_host_enforcement = str(app.config.get("CANONICAL_HOST_ENFORCEMENT", "strict") or "strict").strip().lower()
-        if canonical_host_enforcement == "strict":
+        # The minimal liveness endpoint is exempt: container healthchecks and the deploy agent call it
+        # on 127.0.0.1 / the published port, never via the canonical host. It only returns {"status": "ok"}.
+        if canonical_host_enforcement == "strict" and request.path != HEALTH_CHECK_PATH:
             canonical_host = normalize_host(app.config.get("CANONICAL_HOST", ""))
             request_host = normalize_host(getattr(g, "request_host_resolved", request.host))
             if canonical_host and request_host and request_host != canonical_host:

@@ -116,12 +116,24 @@ def test_canonical_host_enforcement_strict_blocks_non_canonical_api_host(client,
     app.config["CANONICAL_HOST_ENFORCEMENT"] = "strict"
     app.config["CANONICAL_HOST"] = "www.example.test"
 
-    response = client.get("/api/v1/health", base_url="http://wrong-host.test")
+    response = client.get("/api/v1/system/health", base_url="http://wrong-host.test")
 
     assert response.status_code == 421
     payload = response.get_json()
     assert payload["error"]["code"] == "misdirected_request"
     assert payload["meta"]["request_id"].startswith("req_")
+
+
+@pytest.mark.functional
+def test_canonical_host_enforcement_strict_exempts_liveness_health_endpoint(client, app):
+    # Container healthchecks and the deploy agent call the health endpoint on 127.0.0.1.
+    app.config["CANONICAL_HOST_ENFORCEMENT"] = "strict"
+    app.config["CANONICAL_HOST"] = "www.example.test"
+
+    response = client.get("/api/v1/health", base_url="http://127.0.0.1:5000")
+
+    assert response.status_code == 200
+    assert response.get_json()["data"] == {"status": "ok"}
 
 
 @pytest.mark.functional
