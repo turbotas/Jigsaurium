@@ -1,0 +1,16 @@
+# Dependabot keeps the GitHub Actions used by the workflows up to date.
+# Python packages and GOV.UK Frontend are refreshed by .github/workflows/deps-refresh.yml instead,
+# because they use this repo's own lock-file and asset-vendoring scripts.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    groups:
+      github-actions:
+        patterns: ["*"]
+    labels: [dependencies]
