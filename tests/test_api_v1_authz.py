@@ -175,6 +175,7 @@ def test_api_users_requires_authentication(client, seeded_identity_data):
         ("POST", "/api/v1/loans", {"borrower_user_id": 1, "jigsaw_id": 1}),
         ("POST", "/api/v1/security/blocked-ips", {"ip_address": "203.0.113.5", "duration_hours": 24}),
         ("POST", "/api/v1/system/database-backups", {}),
+        ("POST", "/api/v1/system/health/probe", {}),
         ("POST", "/api/v1/loans/1/return", {}),
         ("PATCH", "/api/v1/jigsaws/1", {"title": "Updated title"}),
         ("DELETE", "/api/v1/users/1", None),

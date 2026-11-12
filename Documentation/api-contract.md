@@ -29,6 +29,7 @@
 - `GET /api/v1/jigsaws`
 - `GET /api/v1/health`
 - `GET /api/v1/system/health`
+- `POST /api/v1/system/health/probe`
 - `GET /api/v1/auth/stfd/login-url`
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
@@ -97,6 +98,18 @@
   - `build_sha`: source commit SHA (`APP_BUILD_SHA`)
   - `build_time`: UTC build timestamp (`APP_BUILD_TIME`, may be blank for local builds)
   - `image_embeddings`: embedding runtime snapshot (`enabled`, model identity, local-only mode, runtime readiness/error)
+- `POST /api/v1/system/health/probe` (administrator-only, CSRF required) runs active service probes and backs the admin **Service Health** tab:
+  - Request body (optional JSON object):
+    - `force` (boolean, default `false`): bypass the result cache.
+    - `probes` (non-empty list, default all): any of `ai`, `image_embeddings`.
+  - Probe statuses: `ok`, `degraded`, `down`, `disabled`.
+  - `ai` probe: sends a minimal text-only chat-completion request to the configured AI provider (same transport as image inference) and expects `{"ok": true}` back. Each live run is recorded as an `AiUsageEvent` with `operation=health_probe`, so its cost appears in AI Spend. `down` on transport/HTTP failure or incomplete config; `degraded` on an unexpected answer or latency above `AI_HEALTH_PROBE_SLOW_MS` (default 15000). Timeout: `AI_HEALTH_PROBE_TIMEOUT_SECONDS` (default 20).
+  - `image_embeddings` probe: embeds a built-in 64x64 reference PNG with the real engine (test fallback never used). `down` if runtime dependencies are missing or inference fails; `degraded` if the vector is not unit-normalised or its dimension differs from stored embeddings for the active model key.
+  - Results are cached per probe for `HEALTH_PROBE_CACHE_SECONDS` (default 60).
+  - Response `data`:
+    - `overall_status`: `down` if any enabled probe is down, else `degraded` if any is degraded, else `ok`.
+    - `cache_seconds`
+    - `probes.<name>`: `status`, `checked_at`, `latency_ms`, `cached`, `error_code`, `error_message`, `details` (AI: `model`, `endpoint_host`, `http_status`, `total_tokens`, `cost_usd`; embeddings: `model_key`, `model_was_loaded`, `vector_dim`, `vector_norm`, `stored_vector_dims`). Secrets such as the API key are never returned.
 
 ## Filtering, Sorting, Pagination
 

@@ -85,10 +85,14 @@
       users: false,
       ai: false,
       embeddings: false,
+      health: false,
       "ip-blocks": false,
       sessions: false,
       backups: false,
     },
+    serviceHealth: null,
+    serviceHealthLoading: false,
+    serviceHealthSectionShown: false,
     workspaceSectionAccess: {
       account: false,
       collection: false,
@@ -234,6 +238,10 @@
     imageLibraryLoadSummary: document.getElementById("image-library-load-summary"),
     aiUsageSection: document.getElementById("ai-usage-section"),
     embeddingsSection: document.getElementById("embeddings-section"),
+    serviceHealthSection: document.getElementById("service-health-section"),
+    serviceHealthOverall: document.getElementById("service-health-overall"),
+    serviceHealthRerun: document.getElementById("service-health-rerun"),
+    serviceHealthStatus: document.getElementById("service-health-status"),
     loansSection: document.getElementById("loans-section"),
     auditSection: document.getElementById("audit-section"),
     ipBlocksSection: document.getElementById("ip-blocks-section"),
@@ -2681,7 +2689,7 @@
   }
 
   function getFirstVisibleAdminTab() {
-    const tabOrder = ["users", "ai", "embeddings", "ip-blocks", "sessions", "backups"];
+    const tabOrder = ["users", "ai", "embeddings", "health", "ip-blocks", "sessions", "backups"];
     return tabOrder.find((tabName) => state.adminTabVisibility[tabName]) || null;
   }
 
@@ -2815,6 +2823,10 @@
       if (elements.embeddingsSection) {
         elements.embeddingsSection.hidden = true;
       }
+      if (elements.serviceHealthSection) {
+        elements.serviceHealthSection.hidden = true;
+      }
+      state.serviceHealthSectionShown = false;
       if (elements.ipBlocksSection) {
         elements.ipBlocksSection.hidden = true;
       }
@@ -2838,6 +2850,14 @@
     if (elements.embeddingsSection) {
       elements.embeddingsSection.hidden = !(state.adminTabVisibility.embeddings && activeAdminTab === "embeddings");
     }
+    const showServiceHealth = Boolean(state.adminTabVisibility.health && activeAdminTab === "health");
+    if (elements.serviceHealthSection) {
+      elements.serviceHealthSection.hidden = !showServiceHealth;
+    }
+    if (showServiceHealth && !state.serviceHealthSectionShown) {
+      runServiceHealthProbe();
+    }
+    state.serviceHealthSectionShown = showServiceHealth;
     if (elements.ipBlocksSection) {
       elements.ipBlocksSection.hidden = !(state.adminTabVisibility["ip-blocks"] && activeAdminTab === "ip-blocks");
     }
@@ -2990,6 +3010,9 @@
       state.adminTabVisibility.users = false;
       state.adminTabVisibility.ai = false;
       state.adminTabVisibility.embeddings = false;
+      state.adminTabVisibility.health = false;
+      state.serviceHealth = null;
+      state.serviceHealthSectionShown = false;
       state.adminTabVisibility["ip-blocks"] = false;
       state.adminTabVisibility.sessions = false;
       state.adminTabVisibility.backups = false;
@@ -3057,6 +3080,7 @@
     const canAccessAdminUsers = canManageUsers;
     const canAccessAdminAi = canManageAi && aiFeatureEnabled;
     const canAccessAdminEmbeddings = isAdministrator && embeddingsFeatureEnabled;
+    const canAccessAdminHealth = canManageSecurity;
     const canAccessAdminIpBlocks = canManageSecurity;
     const canAccessAdminSessions = canManageSecurity;
     const canAccessAdminBackups = canManageSecurity;
@@ -3064,6 +3088,7 @@
       canAccessAdminUsers
       || canAccessAdminAi
       || canAccessAdminEmbeddings
+      || canAccessAdminHealth
       || canAccessAdminIpBlocks
       || canAccessAdminSessions
       || canAccessAdminBackups;
@@ -3091,6 +3116,7 @@
     state.adminTabVisibility.users = canAccessAdminUsers;
     state.adminTabVisibility.ai = canAccessAdminAi;
     state.adminTabVisibility.embeddings = canAccessAdminEmbeddings;
+    state.adminTabVisibility.health = canAccessAdminHealth;
     state.adminTabVisibility["ip-blocks"] = canAccessAdminIpBlocks;
     state.adminTabVisibility.sessions = canAccessAdminSessions;
     state.adminTabVisibility.backups = canAccessAdminBackups;
@@ -7987,6 +8013,111 @@
     }
   }
 
+  const SERVICE_HEALTH_LABELS = {
+    ok: "Healthy",
+    degraded: "Degraded",
+    down: "Down",
+    disabled: "Disabled",
+    unknown: "Not checked",
+  };
+
+  function setServiceHealthTag(tagElement, status) {
+    if (!tagElement) {
+      return;
+    }
+    const normalized = Object.prototype.hasOwnProperty.call(SERVICE_HEALTH_LABELS, status) ? status : "unknown";
+    tagElement.className = `app-ai-status-tag app-health-tag--${normalized}`;
+    tagElement.textContent = SERVICE_HEALTH_LABELS[normalized];
+  }
+
+  function formatServiceHealthTime(isoValue) {
+    if (!isoValue) {
+      return "-";
+    }
+    const parsed = new Date(isoValue);
+    return Number.isNaN(parsed.getTime()) ? String(isoValue) : parsed.toLocaleString();
+  }
+
+  function renderServiceHealth(payload) {
+    if (!elements.serviceHealthSection) {
+      return;
+    }
+    setServiceHealthTag(elements.serviceHealthOverall, payload?.overall_status || "unknown");
+    const probes = payload?.probes || {};
+    elements.serviceHealthSection.querySelectorAll("[data-health-probe]").forEach((card) => {
+      const probe = probes[card.dataset.healthProbe] || null;
+      const details = probe?.details || {};
+      const field = (name) => card.querySelector(`[data-health-field="${name}"]`);
+      const setText = (name, value) => {
+        const element = field(name);
+        if (element) {
+          element.textContent = value === null || value === undefined || value === "" ? "-" : String(value);
+        }
+      };
+      setServiceHealthTag(field("status"), probe?.status || "unknown");
+      setText("latency", Number.isFinite(probe?.latency_ms) ? `${probe.latency_ms} ms` : null);
+      setText("checked", probe ? `${formatServiceHealthTime(probe.checked_at)}${probe.cached ? " (cached)" : ""}` : null);
+      if (card.dataset.healthProbe === "ai") {
+        setText("model", details.model);
+        setText("endpoint", details.endpoint_host);
+      } else {
+        setText("model", details.model_key);
+        const vectorParts = [];
+        if (Number.isFinite(details.vector_dim)) {
+          vectorParts.push(`${details.vector_dim} dims`);
+        }
+        if (Number.isFinite(details.vector_norm)) {
+          vectorParts.push(`norm ${details.vector_norm}`);
+        }
+        if (details.model_was_loaded === false) {
+          vectorParts.push("cold load");
+        }
+        setText("vector", vectorParts.join(", "));
+      }
+      const errorElement = field("error");
+      if (errorElement) {
+        const prefix = probe?.error_code ? `[${probe.error_code}] ` : "";
+        const message = probe?.error_message ? `${prefix}${probe.error_message}` : "";
+        errorElement.textContent = message;
+        errorElement.hidden = !message;
+      }
+    });
+  }
+
+  async function runServiceHealthProbe({ force = false } = {}) {
+    if (!state.user || !state.adminTabVisibility.health || state.serviceHealthLoading) {
+      return;
+    }
+    state.serviceHealthLoading = true;
+    if (elements.serviceHealthRerun) {
+      elements.serviceHealthRerun.disabled = true;
+    }
+    if (elements.serviceHealthStatus) {
+      elements.serviceHealthStatus.textContent = "Running health checks...";
+    }
+    try {
+      const payload = await apiRequest("/api/v1/system/health/probe", {
+        method: "POST",
+        body: JSON.stringify({ force: Boolean(force) }),
+        timeoutMs: 180000,
+      });
+      state.serviceHealth = payload?.data || null;
+      renderServiceHealth(state.serviceHealth);
+      if (elements.serviceHealthStatus) {
+        elements.serviceHealthStatus.textContent = "";
+      }
+    } catch (error) {
+      if (elements.serviceHealthStatus) {
+        elements.serviceHealthStatus.textContent = `Health check request failed: ${error.message}`;
+      }
+    } finally {
+      state.serviceHealthLoading = false;
+      if (elements.serviceHealthRerun) {
+        elements.serviceHealthRerun.disabled = false;
+      }
+    }
+  }
+
   async function loadImageEmbeddingDiagnostics() {
     if (!isImageEmbeddingsFeatureEnabled()) {
       state.imageEmbeddingDiagnostics = null;
@@ -10369,6 +10500,9 @@
       elements.collectionSubtabs.addEventListener("click", handleCollectionTabClick);
     }
 
+    if (elements.serviceHealthRerun) {
+      elements.serviceHealthRerun.addEventListener("click", () => runServiceHealthProbe({ force: true }));
+    }
     if (elements.adminSubtabs) {
       elements.adminSubtabs.addEventListener("click", handleAdminTabClick);
     }
