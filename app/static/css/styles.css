@@ -1306,6 +1306,18 @@
   color: #0b0c0c;
 }
 
+.app-proxy-messages {
+  margin-bottom: 12px;
+}
+
+.app-proxy-messages li {
+  overflow-wrap: anywhere;
+}
+
+#proxy-diagnostics-summary .govuk-summary-list__value {
+  overflow-wrap: anywhere;
+}
+
 .app-health-error {
   color: #d4351c;
   overflow-wrap: anywhere;
