@@ -34,6 +34,7 @@ def test_resolve_client_request_context_uses_forwarded_chain_for_trusted_proxy()
         x_forwarded_for_header=None,
         trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=None,
+        trusted_proxy_header="forwarded",
     )
 
     assert context.remote_addr == "192.168.100.12"
@@ -62,6 +63,7 @@ def test_resolve_client_request_context_prefers_trusted_proxy_cidrs_when_both_mo
         x_forwarded_for_header=None,
         trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=1,
+        trusted_proxy_header="forwarded",
     )
 
     assert context.client_ip_resolved == "203.0.113.11"
@@ -75,6 +77,7 @@ def test_resolve_client_request_context_requires_trusted_remote_when_cidrs_confi
         x_forwarded_for_header=None,
         trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=1,
+        trusted_proxy_header="forwarded",
     )
 
     assert context.client_ip_resolved == "198.51.100.20"
@@ -88,6 +91,7 @@ def test_resolve_console_log_ip_prefers_forwarded_value_for_trusted_proxy():
         x_forwarded_for_header=None,
         trusted_proxy_cidrs=["192.168.100.0/24"],
         trusted_proxy_hops=None,
+        trusted_proxy_header="forwarded",
     )
 
     assert resolved_ip == "203.0.113.11"
@@ -104,6 +108,104 @@ def test_resolve_console_log_ip_ignores_forwarded_value_for_untrusted_proxy():
     )
 
     assert resolved_ip == "198.51.100.20"
+
+
+@pytest.mark.functional
+def test_default_mode_ignores_client_supplied_forwarded_header_from_trusted_proxy():
+    # Proxy sets only X-Forwarded-For and passes the client's own Forwarded header through.
+    context = resolve_client_request_context(
+        remote_addr="192.168.100.12",
+        forwarded_header='for="203.0.113.9"',
+        x_forwarded_for_header="198.51.100.7",
+        trusted_proxy_cidrs=["192.168.100.12/32"],
+        trusted_proxy_hops=None,
+    )
+
+    assert context.client_ip_resolved == "198.51.100.7"
+    assert context.forwarded_chain == "198.51.100.7"
+
+
+@pytest.mark.functional
+def test_default_mode_ignores_client_supplied_forwarded_host_and_proto():
+    context = resolve_request_origin_context(
+        remote_addr="192.168.100.12",
+        forwarded_header='for="203.0.113.9";host="spoofed.example.test";proto=https',
+        x_forwarded_proto_header="http",
+        x_forwarded_host_header="public.example.test",
+        trusted_proxy_cidrs=["192.168.100.12/32"],
+        trusted_proxy_hops=None,
+        current_scheme="http",
+        current_host="internal.local:5000",
+    )
+
+    assert context.scheme == "http"
+    assert context.host == "public.example.test"
+
+
+@pytest.mark.functional
+def test_forwarded_mode_ignores_x_forwarded_for():
+    context = resolve_client_request_context(
+        remote_addr="192.168.100.12",
+        forwarded_header=None,
+        x_forwarded_for_header="203.0.113.9",
+        trusted_proxy_cidrs=["192.168.100.12/32"],
+        trusted_proxy_hops=None,
+        trusted_proxy_header="forwarded",
+    )
+
+    assert context.client_ip_resolved == "192.168.100.12"
+    assert context.forwarded_chain is None
+
+
+@pytest.mark.functional
+def test_x_forwarded_host_and_proto_use_right_most_value():
+    context = resolve_request_origin_context(
+        remote_addr="192.168.100.12",
+        forwarded_header=None,
+        x_forwarded_proto_header="https, http",
+        x_forwarded_host_header="spoofed.example.test, public.example.test",
+        trusted_proxy_cidrs=["192.168.100.12/32"],
+        trusted_proxy_hops=None,
+        current_scheme="http",
+        current_host="internal.local:5000",
+    )
+
+    assert context.scheme == "http"
+    assert context.host == "public.example.test"
+
+
+@pytest.mark.functional
+def test_forwarded_mode_uses_right_most_host_and_proto():
+    context = resolve_request_origin_context(
+        remote_addr="192.168.100.12",
+        forwarded_header='for=203.0.113.9;host="spoofed.example.test";proto=http, for=198.51.100.7;host="public.example.test";proto=https',
+        x_forwarded_proto_header=None,
+        x_forwarded_host_header=None,
+        trusted_proxy_cidrs=["192.168.100.12/32"],
+        trusted_proxy_hops=None,
+        current_scheme="http",
+        current_host="internal.local:5000",
+        trusted_proxy_header="forwarded",
+    )
+
+    assert context.scheme == "https"
+    assert context.host == "public.example.test"
+
+
+@pytest.mark.functional
+def test_invalid_trusted_proxy_header_fails_startup():
+    from app import create_app
+
+    class InvalidProxyHeaderConfig:
+        TESTING = True
+        APP_ENV = "dev"
+        SECRET_KEY = "test-secret"
+        DATABASE_URL = "sqlite+pysqlite:///:memory:"
+        CANONICAL_HOST_ENFORCEMENT = "off"
+        TRUSTED_PROXY_HEADER = "x-real-ip"
+
+    with pytest.raises(RuntimeError, match="TRUSTED_PROXY_HEADER"):
+        create_app(InvalidProxyHeaderConfig)
 
 
 @pytest.mark.functional
@@ -167,6 +269,7 @@ def test_resolve_request_origin_context_uses_forwarded_scheme_host_for_trusted_p
         trusted_proxy_hops=None,
         current_scheme="http",
         current_host="internal.local:5000",
+        trusted_proxy_header="forwarded",
     )
 
     assert context.scheme == "https"
@@ -201,6 +304,7 @@ def test_resolve_request_origin_context_ignores_forwarded_scheme_host_for_untrus
         trusted_proxy_hops=None,
         current_scheme="http",
         current_host="internal.local:5000",
+        trusted_proxy_header="forwarded",
     )
 
     assert context.scheme == "http"

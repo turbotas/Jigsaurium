@@ -100,8 +100,8 @@
 ## Proxy and Forwarded Header Handling
 
 - Assume all environments run behind one or more reverse proxies.
-- Parse RFC7239 `Forwarded` header for request origin details used in logs and audit context.
-- Support `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` as compatibility fallbacks.
+- Read request origin details (client IP, scheme, host) from exactly one forwarding header family, set by `TRUSTED_PROXY_HEADER`: `X-Forwarded-For`/`-Proto`/`-Host` (default) or RFC7239 `Forwarded`. The other family is ignored, because proxies commonly pass it through from the client unchanged.
+- Take right-most values (those added by the nearest proxy), never client-controlled left-most ones.
 - Trust forwarded headers only from configured proxy hops/networks.
 - Forwarded `proto` and `host` values are ignored when request source is not a trusted proxy.
 - Persist both socket remote address and resolved client/proxy chain in request logs.

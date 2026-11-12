@@ -5,6 +5,7 @@ import pytest
 from app.db import get_session
 from app.models import AuditEvent, Jigsaw, JigsawImage, Role, User, UserRole
 from app.models.jigsaw import JigsawStatus
+from tests.image_fixtures import png_bytes
 
 
 @pytest.fixture()
@@ -376,7 +377,7 @@ def test_diary_feed_includes_orphan_completed_images(client, seeded_diary_data, 
             tag="Completed",
             filename="orphan-completed.png",
             mime_type="image/png",
-            image_data=b"\x89PNG\r\n\x1a\n" + b"o" * 24,
+            image_data=png_bytes(b"\x89PNG\r\n\x1a\n" + b"o" * 24),
             captured_at=datetime(2026, 9, 2, 10, 0, 0, tzinfo=timezone.utc),
         )
         orphan_untagged = JigsawImage(
@@ -384,7 +385,7 @@ def test_diary_feed_includes_orphan_completed_images(client, seeded_diary_data, 
             tag="untagged",
             filename="orphan-untagged.png",
             mime_type="image/png",
-            image_data=b"\x89PNG\r\n\x1a\n" + b"u" * 24,
+            image_data=png_bytes(b"\x89PNG\r\n\x1a\n" + b"u" * 24),
         )
         db_session.add_all([orphan_completed, orphan_untagged])
         db_session.commit()
@@ -411,7 +412,7 @@ def test_diary_feed_borrower_hides_retired_jigsaw_entries_but_keeps_orphans(clie
             tag="Completed",
             filename="borrower-visible-orphan.png",
             mime_type="image/png",
-            image_data=b"\x89PNG\r\n\x1a\n" + b"v" * 24,
+            image_data=png_bytes(b"\x89PNG\r\n\x1a\n" + b"v" * 24),
         )
         db_session.add(orphan_completed)
         db_session.commit()
@@ -438,7 +439,7 @@ def test_diary_feed_jigsaw_filter_excludes_orphan_rows(client, seeded_diary_data
             tag="Completed",
             filename="should-not-appear.png",
             mime_type="image/png",
-            image_data=b"\x89PNG\r\n\x1a\n" + b"w" * 24,
+            image_data=png_bytes(b"\x89PNG\r\n\x1a\n" + b"w" * 24),
         )
         db_session.add(orphan_completed)
         db_session.commit()
@@ -462,7 +463,7 @@ def test_admin_can_delete_orphan_completed_image_visible_in_diary_feed(client, s
             tag="Completed",
             filename="delete-orphan-from-diary.png",
             mime_type="image/png",
-            image_data=b"\x89PNG\r\n\x1a\n" + b"x" * 24,
+            image_data=png_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 24),
         )
         db_session.add(orphan_completed)
         db_session.commit()

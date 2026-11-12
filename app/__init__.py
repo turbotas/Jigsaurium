@@ -14,6 +14,7 @@ from app.request_security import (
     build_auto_blocked_until,
     get_request_ban_retry_after_seconds,
     normalize_host,
+    normalize_trusted_proxy_header,
     record_request_outcome,
     resolve_client_request_context,
     resolve_request_origin_context,
@@ -22,6 +23,8 @@ from app.request_security import (
 )
 
 HEALTH_CHECK_PATH = "/api/v1/health"
+# The session cookie is signed with SECRET_KEY, so it must resist offline guessing.
+MIN_SECRET_KEY_LENGTH = 32
 
 
 def _is_missing_local_embedding_model_error(error):
@@ -117,10 +120,20 @@ def _validate_runtime_config_on_startup(app):
             errors.append(
                 "SECRET_KEY uses a default/placeholder value; set a unique random value in non-dev environments."
             )
-        elif len(stripped_secret_key) < 16:
+        elif len(stripped_secret_key) < MIN_SECRET_KEY_LENGTH:
             errors.append(
-                "SECRET_KEY is too short for non-dev environments; use at least 16 characters of random entropy."
+                f"SECRET_KEY is too short for non-dev environments; use at least {MIN_SECRET_KEY_LENGTH} "
+                "random characters (for example: python -c \"import secrets; print(secrets.token_urlsafe(48))\")."
             )
+
+    trusted_proxy_header = normalize_trusted_proxy_header(app.config.get("TRUSTED_PROXY_HEADER"))
+    if trusted_proxy_header is None:
+        errors.append(
+            "TRUSTED_PROXY_HEADER must be one of: x-forwarded, forwarded "
+            f"(received {app.config.get('TRUSTED_PROXY_HEADER')!r})."
+        )
+    else:
+        app.config["TRUSTED_PROXY_HEADER"] = trusted_proxy_header
 
     canonical_host_enforcement = str(app.config.get("CANONICAL_HOST_ENFORCEMENT", "strict") or "strict").strip().lower()
     if canonical_host_enforcement not in {"strict", "off"}:
@@ -237,6 +250,7 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("CANONICAL_HOST_ENFORCEMENT", "strict")
     app.config.setdefault("TRUSTED_PROXY_CIDRS", [])
     app.config.setdefault("TRUSTED_PROXY_HOPS", None)
+    app.config.setdefault("TRUSTED_PROXY_HEADER", "x-forwarded")
     app.config.setdefault("TRUSTED_CLIENT_CIDRS", [])
     app.config.setdefault("AI_ENABLED", False)
     app.config.setdefault("AI_API_KEY", "")
@@ -314,6 +328,7 @@ def create_app(config_class="config.Config"):
             trusted_proxy_hops=app.config.get("TRUSTED_PROXY_HOPS"),
             current_scheme=request.scheme,
             current_host=request.host,
+            trusted_proxy_header=app.config.get("TRUSTED_PROXY_HEADER"),
         )
         g.request_scheme_resolved = origin_context.scheme
         g.request_host_resolved = origin_context.host
@@ -357,6 +372,7 @@ def create_app(config_class="config.Config"):
             x_forwarded_for_header=request.headers.get("X-Forwarded-For"),
             trusted_proxy_cidrs=app.config.get("TRUSTED_PROXY_CIDRS", []),
             trusted_proxy_hops=app.config.get("TRUSTED_PROXY_HOPS"),
+            trusted_proxy_header=app.config.get("TRUSTED_PROXY_HEADER"),
         )
         g.remote_addr = client_context.remote_addr
         g.client_ip_resolved = client_context.client_ip_resolved

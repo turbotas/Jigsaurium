@@ -8118,6 +8118,119 @@
     }
   }
 
+  const PROXY_VERDICTS = {
+    ok: { label: "Safe", tag: "ok" },
+    warning: { label: "Check needed", tag: "degraded" },
+    unsafe: { label: "Unsafe", tag: "down" },
+    unknown: { label: "Not checked", tag: "unknown" },
+  };
+
+  const PROXY_HEADER_FINDING_LABELS = {
+    passed_through: "Passed through from the client unchanged (not trustworthy)",
+    appended: "Proxy appended its own value (trustworthy right-most value)",
+    overwritten: "Proxy replaced the client value (trustworthy)",
+    stripped: "Removed by the proxy (not sent to the app)",
+  };
+
+  function appendProxySummaryRow(list, key, value) {
+    const row = document.createElement("div");
+    row.className = "govuk-summary-list__row";
+    const term = document.createElement("dt");
+    term.className = "govuk-summary-list__key";
+    term.textContent = key;
+    const description = document.createElement("dd");
+    description.className = "govuk-summary-list__value";
+    description.textContent = value === null || value === undefined || value === "" ? "-" : String(value);
+    row.append(term, description);
+    list.appendChild(row);
+  }
+
+  function renderProxyDiagnostics(data) {
+    const result = document.getElementById("proxy-diagnostics-result");
+    const verdictTag = document.getElementById("proxy-diagnostics-verdict");
+    const messageList = document.getElementById("proxy-diagnostics-messages");
+    const summary = document.getElementById("proxy-diagnostics-summary");
+    if (!result || !verdictTag || !messageList || !summary) {
+      return;
+    }
+
+    const verdict = PROXY_VERDICTS[data?.verdict] || PROXY_VERDICTS.unknown;
+    verdictTag.className = `app-ai-status-tag app-health-tag--${verdict.tag}`;
+    verdictTag.textContent = verdict.label;
+
+    messageList.replaceChildren();
+    const messages = Array.isArray(data?.messages) ? data.messages : [];
+    if (!messages.length && data?.verdict === "ok") {
+      messages.push("The proxy sets the client-IP header the app is configured to trust. No change needed.");
+    }
+    messages.forEach((message) => {
+      const item = document.createElement("li");
+      item.textContent = String(message);
+      messageList.appendChild(item);
+    });
+
+    summary.replaceChildren();
+    const findings = data?.findings || {};
+    const received = data?.received || {};
+    const config = data?.config || {};
+    const describeFinding = (value) => PROXY_HEADER_FINDING_LABELS[value] || value || "-";
+    appendProxySummaryRow(summary, "Recommended TRUSTED_PROXY_HEADER", data?.recommended_trusted_proxy_header || "None safe");
+    appendProxySummaryRow(summary, "Current TRUSTED_PROXY_HEADER", config.trusted_proxy_header);
+    appendProxySummaryRow(summary, "Request reached the app from", `${data?.remote_addr || "-"}${data?.remote_is_trusted_proxy ? " (trusted proxy)" : " (not a trusted proxy)"}`);
+    appendProxySummaryRow(summary, "Your IP as the app resolves it", data?.resolved_client_ip);
+    appendProxySummaryRow(summary, "Forwarded", describeFinding(findings.forwarded));
+    appendProxySummaryRow(summary, "X-Forwarded-For", describeFinding(findings.x_forwarded_for));
+    appendProxySummaryRow(summary, "X-Forwarded-Host", describeFinding(findings.x_forwarded_host));
+    appendProxySummaryRow(summary, "X-Forwarded-Proto", describeFinding(findings.x_forwarded_proto));
+    appendProxySummaryRow(summary, "Received Forwarded", received.forwarded);
+    appendProxySummaryRow(summary, "Received X-Forwarded-For", received.x_forwarded_for);
+    appendProxySummaryRow(summary, "Received X-Forwarded-Host", received.x_forwarded_host);
+    appendProxySummaryRow(summary, "Received X-Forwarded-Proto", received.x_forwarded_proto);
+    appendProxySummaryRow(summary, "Received X-Real-IP", received.x_real_ip);
+    appendProxySummaryRow(summary, "Received Host", received.host);
+    appendProxySummaryRow(summary, "TRUSTED_PROXY_CIDRS", (config.trusted_proxy_cidrs || []).join(", "));
+    result.hidden = false;
+  }
+
+  async function runProxyDiagnostics() {
+    const button = document.getElementById("proxy-diagnostics-run");
+    const status = document.getElementById("proxy-diagnostics-status");
+    if (!state.user) {
+      return;
+    }
+    if (button) {
+      button.disabled = true;
+    }
+    if (status) {
+      status.textContent = "Checking proxy headers...";
+    }
+    const probeHost = window.location.hostname;
+    try {
+      // Marker values from the 192.0.2.0/24 documentation range; the server checks whether they survive the proxy.
+      const payload = await apiRequest(`/api/v1/system/proxy-diagnostics?probe_host=${encodeURIComponent(probeHost)}`, {
+        headers: {
+          "X-Jigsaurium-Proxy-Probe": "1",
+          Forwarded: `for=192.0.2.1;proto=http;host="${probeHost}:1"`,
+          "X-Forwarded-For": "192.0.2.2",
+          "X-Forwarded-Host": `${probeHost}:1`,
+          "X-Forwarded-Proto": "http",
+        },
+      });
+      renderProxyDiagnostics(payload?.data || null);
+      if (status) {
+        status.textContent = "";
+      }
+    } catch (error) {
+      if (status) {
+        status.textContent = `Proxy header check failed: ${error.message}`;
+      }
+    } finally {
+      if (button) {
+        button.disabled = false;
+      }
+    }
+  }
+
   async function loadImageEmbeddingDiagnostics() {
     if (!isImageEmbeddingsFeatureEnabled()) {
       state.imageEmbeddingDiagnostics = null;
@@ -10502,6 +10615,10 @@
 
     if (elements.serviceHealthRerun) {
       elements.serviceHealthRerun.addEventListener("click", () => runServiceHealthProbe({ force: true }));
+    }
+    const proxyDiagnosticsButton = document.getElementById("proxy-diagnostics-run");
+    if (proxyDiagnosticsButton) {
+      proxyDiagnosticsButton.addEventListener("click", runProxyDiagnostics);
     }
     if (elements.adminSubtabs) {
       elements.adminSubtabs.addEventListener("click", handleAdminTabClick);

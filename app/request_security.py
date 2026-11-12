@@ -9,6 +9,11 @@ from sqlalchemy import select
 from app.models.blocked_ip import BlockedIp
 
 
+TRUSTED_PROXY_HEADER_X_FORWARDED = "x-forwarded"
+TRUSTED_PROXY_HEADER_FORWARDED = "forwarded"
+TRUSTED_PROXY_HEADER_CHOICES = (TRUSTED_PROXY_HEADER_X_FORWARDED, TRUSTED_PROXY_HEADER_FORWARDED)
+DEFAULT_TRUSTED_PROXY_HEADER = TRUSTED_PROXY_HEADER_X_FORWARDED
+
 REQUEST_BAN_TRIGGER_404_STREAK = 5
 REQUEST_BAN_DURATION_SECONDS = 24 * 60 * 60
 AUTO_BLOCK_SOURCE = "auto_404_streak"
@@ -39,6 +44,23 @@ class RequestOriginContext:
     host: str | None
 
 
+def normalize_trusted_proxy_header(value):
+    """Return the proxy header family to trust, or None when the value is not recognised.
+
+    Only one family is ever trusted. A proxy that sets X-Forwarded-* but passes a client's own
+    RFC 7239 `Forwarded` header through unchanged (the default for most Nginx setups) would
+    otherwise let any client choose its own IP, host and scheme.
+    """
+    normalized = str(value if value is not None else DEFAULT_TRUSTED_PROXY_HEADER).strip().lower()
+    if not normalized:
+        normalized = DEFAULT_TRUSTED_PROXY_HEADER
+    return normalized if normalized in TRUSTED_PROXY_HEADER_CHOICES else None
+
+
+def _resolve_trusted_proxy_header(value):
+    return normalize_trusted_proxy_header(value) or DEFAULT_TRUSTED_PROXY_HEADER
+
+
 def resolve_console_log_ip(
     *,
     remote_addr,
@@ -46,6 +68,7 @@ def resolve_console_log_ip(
     x_forwarded_for_header,
     trusted_proxy_cidrs,
     trusted_proxy_hops,
+    trusted_proxy_header=DEFAULT_TRUSTED_PROXY_HEADER,
 ):
     context = resolve_client_request_context(
         remote_addr=remote_addr,
@@ -53,6 +76,7 @@ def resolve_console_log_ip(
         x_forwarded_for_header=x_forwarded_for_header,
         trusted_proxy_cidrs=trusted_proxy_cidrs,
         trusted_proxy_hops=trusted_proxy_hops,
+        trusted_proxy_header=trusted_proxy_header,
     )
     return context.client_ip_resolved or context.remote_addr
 
@@ -103,11 +127,12 @@ def _is_request_from_trusted_proxy(*, remote_addr, trusted_proxy_cidrs, trusted_
 
 
 def _parse_forwarded_header_param(header_value, param_name):
+    """Return the right-most value of `param_name`: the one added by the nearest proxy."""
     if not header_value or not param_name:
         return None
 
     target_key = str(param_name).strip().lower()
-    for hop in str(header_value).split(","):
+    for hop in reversed(str(header_value).split(",")):
         for pair in hop.split(";"):
             key, separator, raw_value = pair.partition("=")
             if separator != "=" or key.strip().lower() != target_key:
@@ -125,18 +150,20 @@ def _parse_scheme_candidate(value):
     return None
 
 
+def _last_list_item(value):
+    return str(value).rsplit(",", 1)[-1]
+
+
 def _parse_x_forwarded_proto(value):
     if not value:
         return None
-    first = str(value).split(",", 1)[0]
-    return _parse_scheme_candidate(first)
+    return _parse_scheme_candidate(_last_list_item(value))
 
 
 def _parse_x_forwarded_host(value):
     if not value:
         return None
-    first = str(value).split(",", 1)[0]
-    return normalize_host(first)
+    return normalize_host(_last_list_item(value))
 
 
 def resolve_request_origin_context(
@@ -149,6 +176,7 @@ def resolve_request_origin_context(
     trusted_proxy_hops,
     current_scheme,
     current_host,
+    trusted_proxy_header=DEFAULT_TRUSTED_PROXY_HEADER,
 ):
     resolved_scheme = _parse_scheme_candidate(current_scheme) or "http"
     resolved_host = normalize_host(current_host)
@@ -160,13 +188,14 @@ def resolve_request_origin_context(
     ):
         return RequestOriginContext(scheme=resolved_scheme, host=resolved_host)
 
-    forwarded_proto = _parse_scheme_candidate(_parse_forwarded_header_param(forwarded_header, "proto"))
-    forwarded_host = normalize_host(_parse_forwarded_header_param(forwarded_header, "host"))
+    if _resolve_trusted_proxy_header(trusted_proxy_header) == TRUSTED_PROXY_HEADER_FORWARDED:
+        forwarded_proto = _parse_scheme_candidate(_parse_forwarded_header_param(forwarded_header, "proto"))
+        forwarded_host = normalize_host(_parse_forwarded_header_param(forwarded_header, "host"))
+    else:
+        forwarded_proto = _parse_x_forwarded_proto(x_forwarded_proto_header)
+        forwarded_host = _parse_x_forwarded_host(x_forwarded_host_header)
 
-    resolved_scheme = forwarded_proto or _parse_x_forwarded_proto(x_forwarded_proto_header) or resolved_scheme
-    resolved_host = forwarded_host or _parse_x_forwarded_host(x_forwarded_host_header) or resolved_host
-
-    return RequestOriginContext(scheme=resolved_scheme, host=resolved_host)
+    return RequestOriginContext(scheme=forwarded_proto or resolved_scheme, host=forwarded_host or resolved_host)
 
 
 def _parse_forwarded_header_ip_chain(header_value):
@@ -227,6 +256,7 @@ def resolve_client_request_context(
     x_forwarded_for_header,
     trusted_proxy_cidrs,
     trusted_proxy_hops,
+    trusted_proxy_header=DEFAULT_TRUSTED_PROXY_HEADER,
 ):
     remote_ip = _parse_ip_candidate(remote_addr) or "unknown"
     trusted_proxy_list = [cidr for cidr in (trusted_proxy_cidrs or []) if str(cidr).strip()]
@@ -246,8 +276,9 @@ def resolve_client_request_context(
             forwarded_chain=None,
         )
 
-    forwarded_chain_ips = _parse_forwarded_header_ip_chain(forwarded_header)
-    if not forwarded_chain_ips:
+    if _resolve_trusted_proxy_header(trusted_proxy_header) == TRUSTED_PROXY_HEADER_FORWARDED:
+        forwarded_chain_ips = _parse_forwarded_header_ip_chain(forwarded_header)
+    else:
         forwarded_chain_ips = _parse_x_forwarded_for_ip_chain(x_forwarded_for_header)
 
     if not forwarded_chain_ips:
@@ -280,6 +311,168 @@ def resolve_client_request_context(
         client_ip_resolved=resolved_ip,
         forwarded_chain=", ".join(forwarded_chain_ips),
     )
+
+
+# Proxy header probe: the admin UI sends these marker values; the analysis reports what the proxy
+# did with each header before it reached the app. 192.0.2.0/24 is a documentation-only range.
+PROXY_PROBE_REQUEST_HEADER = "X-Jigsaurium-Proxy-Probe"
+PROXY_PROBE_FORWARDED_FOR = "192.0.2.1"
+PROXY_PROBE_X_FORWARDED_FOR = "192.0.2.2"
+PROXY_PROBE_PROTO = "http"
+PROXY_PROBE_HOST_PORT_SUFFIX = ":1"
+
+PROXY_HEADER_PASSED_THROUGH = "passed_through"
+PROXY_HEADER_APPENDED = "appended"
+PROXY_HEADER_OVERWRITTEN = "overwritten"
+PROXY_HEADER_STRIPPED = "stripped"
+PROXY_HEADER_PROXY_SET_SAFE = {PROXY_HEADER_APPENDED, PROXY_HEADER_OVERWRITTEN}
+
+
+def _classify_probed_list_header(value, marker_ip, parse_chain):
+    if not value:
+        return PROXY_HEADER_STRIPPED
+    chain = parse_chain(value)
+    if marker_ip not in chain:
+        return PROXY_HEADER_OVERWRITTEN
+    if chain[-1] != marker_ip:
+        return PROXY_HEADER_APPENDED
+    return PROXY_HEADER_PASSED_THROUGH
+
+
+def _classify_probed_single_header(value, marker):
+    text = str(value or "").strip()
+    if not text:
+        return PROXY_HEADER_STRIPPED
+    items = [item.strip() for item in text.split(",")]
+    if marker not in items:
+        return PROXY_HEADER_OVERWRITTEN
+    if items[-1] != marker:
+        return PROXY_HEADER_APPENDED
+    return PROXY_HEADER_PASSED_THROUGH
+
+
+def analyse_proxy_header_probe(
+    *,
+    remote_addr,
+    headers,
+    trusted_proxy_cidrs,
+    trusted_proxy_hops,
+    trusted_proxy_header,
+    probe_host,
+):
+    """Report how the proxy treated client-supplied forwarding headers and recommend a setting.
+
+    `headers` maps header names to received values. `probe_host` is the host the browser was on;
+    the probe sends it with a `:1` port so a passed-through host value is recognisable while still
+    normalising to the canonical host.
+    """
+    trusted_proxy_header = _resolve_trusted_proxy_header(trusted_proxy_header)
+    remote_ip = _parse_ip_candidate(remote_addr) or "unknown"
+    remote_is_trusted_proxy = _is_request_from_trusted_proxy(
+        remote_addr=remote_addr,
+        trusted_proxy_cidrs=trusted_proxy_cidrs,
+        trusted_proxy_hops=trusted_proxy_hops,
+    )
+    probe_sent = str(headers.get(PROXY_PROBE_REQUEST_HEADER) or "").strip() == "1"
+    probe_host_value = f"{str(probe_host or '').strip()}{PROXY_PROBE_HOST_PORT_SUFFIX}"
+
+    findings = {}
+    if probe_sent:
+        findings = {
+            "forwarded": _classify_probed_list_header(
+                headers.get("Forwarded"), PROXY_PROBE_FORWARDED_FOR, _parse_forwarded_header_ip_chain
+            ),
+            "x_forwarded_for": _classify_probed_list_header(
+                headers.get("X-Forwarded-For"), PROXY_PROBE_X_FORWARDED_FOR, _parse_x_forwarded_for_ip_chain
+            ),
+            "x_forwarded_proto": _classify_probed_single_header(headers.get("X-Forwarded-Proto"), PROXY_PROBE_PROTO),
+            "x_forwarded_host": _classify_probed_single_header(headers.get("X-Forwarded-Host"), probe_host_value),
+        }
+
+    messages = []
+    recommended = None
+    verdict = "unknown"
+    if not remote_is_trusted_proxy:
+        verdict = "warning"
+        messages.append(
+            f"The request reached the app from {remote_ip}, which is not in TRUSTED_PROXY_CIDRS, so all "
+            "forwarding headers are ignored and every client appears as that address. If that is your proxy, "
+            "add it to TRUSTED_PROXY_CIDRS (and to TRUSTED_CLIENT_CIDRS so it can never be auto-blocked)."
+        )
+    if probe_sent:
+        xff_safe = findings["x_forwarded_for"] in PROXY_HEADER_PROXY_SET_SAFE
+        forwarded_safe = findings["forwarded"] in PROXY_HEADER_PROXY_SET_SAFE
+        if xff_safe:
+            recommended = TRUSTED_PROXY_HEADER_X_FORWARDED
+        elif forwarded_safe:
+            recommended = TRUSTED_PROXY_HEADER_FORWARDED
+
+        if recommended is None:
+            verdict = "unsafe"
+            messages.append(
+                "The proxy does not set a client-IP header the app can trust: client-supplied values arrive "
+                "unchanged or nothing arrives. Login throttling and IP blocks then key on a value the client "
+                "chooses (or on the proxy address)."
+            )
+        else:
+            if verdict == "unknown":
+                verdict = "ok"
+            if recommended != trusted_proxy_header:
+                verdict = "unsafe"
+                messages.append(
+                    f"TRUSTED_PROXY_HEADER is '{trusted_proxy_header}', but the proxy does not overwrite that "
+                    f"header family, so clients can choose their own IP. Set TRUSTED_PROXY_HEADER={recommended}."
+                )
+
+        if findings["forwarded"] == PROXY_HEADER_PASSED_THROUGH:
+            messages.append(
+                "The proxy passes the client's own Forwarded header through unchanged; it must not be trusted."
+            )
+        if trusted_proxy_header == TRUSTED_PROXY_HEADER_X_FORWARDED:
+            header_labels = {"x_forwarded_host": "X-Forwarded-Host", "x_forwarded_proto": "X-Forwarded-Proto"}
+            spoofable = [
+                label for name, label in header_labels.items() if findings[name] == PROXY_HEADER_PASSED_THROUGH
+            ]
+            if spoofable:
+                if verdict == "ok":
+                    verdict = "warning"
+                messages.append(
+                    f"{' and '.join(spoofable)} pass through from the client, so clients can choose the host and "
+                    "scheme the app sees. Impact is limited (canonical-host check and HSTS), but ask for the proxy "
+                    "to set them."
+                )
+
+    context = resolve_client_request_context(
+        remote_addr=remote_addr,
+        forwarded_header=headers.get("Forwarded"),
+        x_forwarded_for_header=headers.get("X-Forwarded-For"),
+        trusted_proxy_cidrs=trusted_proxy_cidrs,
+        trusted_proxy_hops=trusted_proxy_hops,
+        trusted_proxy_header=trusted_proxy_header,
+    )
+    return {
+        "probe_sent": probe_sent,
+        "remote_addr": remote_ip,
+        "remote_is_trusted_proxy": remote_is_trusted_proxy,
+        "config": {
+            "trusted_proxy_header": trusted_proxy_header,
+            "trusted_proxy_cidrs": list(trusted_proxy_cidrs or []),
+            "trusted_proxy_hops": trusted_proxy_hops,
+        },
+        "received": {
+            "host": headers.get("Host"),
+            "forwarded": headers.get("Forwarded"),
+            "x_forwarded_for": headers.get("X-Forwarded-For"),
+            "x_forwarded_proto": headers.get("X-Forwarded-Proto"),
+            "x_forwarded_host": headers.get("X-Forwarded-Host"),
+            "x_real_ip": headers.get("X-Real-IP"),
+        },
+        "resolved_client_ip": context.client_ip_resolved,
+        "findings": findings,
+        "recommended_trusted_proxy_header": recommended,
+        "verdict": verdict,
+        "messages": messages,
+    }
 
 
 def get_request_ban_retry_after_seconds(db_session, client_ip, exempt_cidrs=None, now=None):

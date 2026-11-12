@@ -6,6 +6,7 @@ import pytest
 
 from app.db import get_session
 from app.models import Jigsaw, JigsawImage, Role, User, UserRole
+from tests.image_fixtures import png_bytes
 
 
 @pytest.fixture()
@@ -39,7 +40,7 @@ def seeded_backup_identity_data(app):
                 tag="Completed",
                 filename="backup-image.png",
                 mime_type="image/png",
-                image_data=(b"\x89PNG\r\n\x1a\n" + (b"z" * 4096)),
+                image_data=(png_bytes(b"\x89PNG\r\n\x1a\n") + (b"z" * 4096)),
                 uploaded_by_user_id=admin_user.id,
             )
         )

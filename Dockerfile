@@ -15,10 +15,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     IMAGE_EMBEDDING_MODEL_LOCAL_PATH=/opt/models/clip-vit-base-patch32 \
     IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY=1 \
     IMAGE_EMBEDDINGS_WARM_ON_STARTUP=1 \
-    IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR=1 \
-    FLASK_APP=run:app \
-    FLASK_RUN_HOST=0.0.0.0 \
-    FLASK_RUN_PORT=5000
+    IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR=1
 
 WORKDIR /app
 
@@ -84,4 +81,5 @@ ENV APP_VERSION=${APP_VERSION} \
 EXPOSE 5000
 
 ENTRYPOINT ["./scripts/docker_entrypoint.sh"]
-CMD ["python", "-m", "flask", "run"]
+# Production WSGI server (settings in gunicorn.conf.py), not the Flask development server.
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "run:app"]
