@@ -145,6 +145,11 @@ def embedding_runtime_error():
         return None
 
 
+def is_embedding_model_loaded():
+    with _MODEL_LOCK:
+        return _MODEL_CACHE["model"] is not None and _MODEL_CACHE["processor"] is not None
+
+
 def build_model_key(model_name, model_revision):
     return f"{str(model_name or '').strip()}@{str(model_revision or '').strip()}"
 

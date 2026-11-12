@@ -1285,6 +1285,32 @@
   outline-offset: 2px;
 }
 
+.app-health-tag--ok {
+  background: #00703c;
+  color: #fff;
+}
+
+.app-health-tag--degraded {
+  background: #ffdd00;
+  color: #0b0c0c;
+}
+
+.app-health-tag--down {
+  background: #d4351c;
+  color: #fff;
+}
+
+.app-health-tag--disabled,
+.app-health-tag--unknown {
+  background: #f3f2f1;
+  color: #0b0c0c;
+}
+
+.app-health-error {
+  color: #d4351c;
+  overflow-wrap: anywhere;
+}
+
 .app-ai-status-tag--success {
   background: #00703c;
   color: #fff;

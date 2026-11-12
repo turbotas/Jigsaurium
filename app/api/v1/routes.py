@@ -44,6 +44,7 @@ from app.image_embeddings import (
     compute_image_embedding,
     cosine_similarity,
     embedding_runtime_error,
+    is_embedding_model_loaded,
 )
 from app.models import (
     AiUsageEvent,
@@ -4483,6 +4484,317 @@ def _build_health_diagnostics_payload():
 @require_role("administrator")
 def system_health_diagnostics():
     return _success_response(_build_health_diagnostics_payload())
+
+
+HEALTH_PROBE_STATUS_OK = "ok"
+HEALTH_PROBE_STATUS_DEGRADED = "degraded"
+HEALTH_PROBE_STATUS_DOWN = "down"
+HEALTH_PROBE_STATUS_DISABLED = "disabled"
+AI_HEALTH_PROBE_OPERATION = "health_probe"
+_HEALTH_PROBE_LOCK = threading.Lock()
+
+
+def _build_health_reference_png():
+    """Build a deterministic 64x64 RGB gradient PNG without needing Pillow."""
+    import struct
+    import zlib
+
+    width = height = 64
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)  # filter type: none
+        for x in range(width):
+            rows.extend((x * 4 % 256, y * 4 % 256, (x + y) * 2 % 256))
+
+    def _chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", header)
+        + _chunk(b"IDAT", zlib.compress(bytes(rows)))
+        + _chunk(b"IEND", b"")
+    )
+
+
+def _health_probe_result(status, *, latency_ms=None, error_code=None, error_message=None, details=None):
+    return {
+        "status": status,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "latency_ms": latency_ms,
+        "error_code": error_code,
+        "error_message": error_message,
+        "details": details or {},
+    }
+
+
+def _run_ai_health_probe(db_session):
+    endpoint_url = (current_app.config.get("AI_ENDPOINT_URL") or "").strip()
+    api_key = (current_app.config.get("AI_API_KEY") or "").strip()
+    model = (current_app.config.get("AI_MODEL") or "").strip()
+    timeout_seconds = int(current_app.config.get("AI_HEALTH_PROBE_TIMEOUT_SECONDS") or 20)
+    slow_threshold_ms = int(current_app.config.get("AI_HEALTH_PROBE_SLOW_MS") or 15000)
+    details = {
+        "model": model or None,
+        "endpoint_host": urllib.parse.urlsplit(endpoint_url).netloc or None,
+        "slow_threshold_ms": slow_threshold_ms,
+    }
+
+    if not current_app.config.get("AI_ENABLED", False):
+        return _health_probe_result(HEALTH_PROBE_STATUS_DISABLED, details=details)
+    if not api_key or not endpoint_url or not model:
+        return _health_probe_result(
+            HEALTH_PROBE_STATUS_DOWN,
+            error_code="not_configured",
+            error_message="AI_API_KEY, AI_ENDPOINT_URL and AI_MODEL must all be set.",
+            details=details,
+        )
+
+    request_payload = {
+        "model": model,
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "system",
+                "content": 'This is a service health check. Reply with exactly the JSON object {"ok": true}.',
+            },
+            {"role": "user", "content": "ping"},
+        ],
+    }
+
+    started = time.perf_counter()
+    status = HEALTH_PROBE_STATUS_OK
+    error_code = None
+    error_message = None
+    response_payload = None
+    try:
+        response_raw = _post_ai_chat_completion(
+            endpoint_url=endpoint_url,
+            api_key=api_key,
+            request_payload=request_payload,
+            timeout_seconds=timeout_seconds,
+        )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        try:
+            response_payload = json.loads(response_raw)
+        except json.JSONDecodeError:
+            response_payload = None
+
+        content = None
+        if isinstance(response_payload, dict):
+            choices = response_payload.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                message = choices[0].get("message")
+                content = message.get("content") if isinstance(message, dict) else None
+        parsed = _extract_json_object_from_text(_extract_ai_message_text(content)) if content is not None else None
+
+        if response_payload is None:
+            status, error_code, error_message = HEALTH_PROBE_STATUS_DEGRADED, "invalid_response", "AI provider returned invalid JSON."
+        elif not (isinstance(parsed, dict) and parsed.get("ok") is True):
+            status, error_code, error_message = (
+                HEALTH_PROBE_STATUS_DEGRADED,
+                "unexpected_response",
+                "AI provider responded but did not return the expected health-check answer.",
+            )
+        elif latency_ms > slow_threshold_ms:
+            status, error_code, error_message = (
+                HEALTH_PROBE_STATUS_DEGRADED,
+                "slow_response",
+                f"AI provider responded in {latency_ms} ms (threshold {slow_threshold_ms} ms).",
+            )
+    except AiProviderRequestError as error:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        status = HEALTH_PROBE_STATUS_DOWN
+        error_code = f"http_{error.status_code}" if error.status_code else "request_failed"
+        error_message = str(error)[:600]
+        details["http_status"] = error.status_code
+
+    cost_payload = _build_ai_usage_costs(response_payload) if isinstance(response_payload, dict) else None
+    if cost_payload is not None:
+        details["total_tokens"] = cost_payload["total_tokens"]
+        details["cost_usd"] = float(cost_payload["final_cost_usd"]) if cost_payload["final_cost_usd"] is not None else None
+
+    _record_ai_usage_event(
+        db_session=db_session,
+        operation=AI_HEALTH_PROBE_OPERATION,
+        image_id=None,
+        status=AI_USAGE_STATUS_SUCCESS if status != HEALTH_PROBE_STATUS_DOWN else AI_USAGE_STATUS_ERROR,
+        model=model,
+        endpoint_url=endpoint_url,
+        prompt_tokens=cost_payload["prompt_tokens"] if cost_payload else None,
+        completion_tokens=cost_payload["completion_tokens"] if cost_payload else None,
+        total_tokens=cost_payload["total_tokens"] if cost_payload else None,
+        provider_cost_usd=cost_payload["provider_cost_usd"] if cost_payload else None,
+        computed_cost_usd=cost_payload["computed_cost_usd"] if cost_payload else None,
+        final_cost_usd=cost_payload["final_cost_usd"] if cost_payload else None,
+        error_code=error_code,
+        error_message=error_message,
+        payload={"health_status": status, "latency_ms": latency_ms},
+    )
+    db_session.commit()
+
+    return _health_probe_result(
+        status,
+        latency_ms=latency_ms,
+        error_code=error_code,
+        error_message=error_message,
+        details=details,
+    )
+
+
+def _run_image_embedding_health_probe(db_session):
+    if not bool(current_app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
+        return _health_probe_result(HEALTH_PROBE_STATUS_DISABLED)
+
+    model_name, model_revision, model_key, model_local_path, local_files_only = _get_embedding_model_config()
+    details = {
+        "model_key": model_key,
+        "local_model_path": model_local_path or None,
+        "local_files_only": local_files_only,
+    }
+
+    runtime_error = embedding_runtime_error()
+    if runtime_error is not None:
+        return _health_probe_result(
+            HEALTH_PROBE_STATUS_DOWN,
+            error_code="runtime_unavailable",
+            error_message=f"Image embedding dependencies are unavailable: {runtime_error}",
+            details=details,
+        )
+
+    details["model_was_loaded"] = bool(is_embedding_model_loaded())
+    started = time.perf_counter()
+    try:
+        vector = compute_image_embedding(
+            _build_health_reference_png(),
+            model_name=model_name,
+            model_revision=model_revision,
+            model_local_path=model_local_path or None,
+            local_files_only=local_files_only,
+            allow_test_fallback=False,
+        )
+    except Exception as error:  # noqa: BLE001 - any failure means the engine is unhealthy
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        cause = error.__cause__
+        message = str(error) + (f" ({cause})" if cause else "")
+        return _health_probe_result(
+            HEALTH_PROBE_STATUS_DOWN,
+            latency_ms=latency_ms,
+            error_code="inference_failed",
+            error_message=message[:600],
+            details=details,
+        )
+    latency_ms = int((time.perf_counter() - started) * 1000)
+
+    vector = list(vector or [])
+    vector_dim = len(vector)
+    is_finite = all(math.isfinite(float(value)) for value in vector)
+    norm = math.sqrt(sum(float(value) * float(value) for value in vector)) if is_finite else None
+    stored_dims = sorted(
+        {
+            int(dim)
+            for (dim,) in db_session.execute(
+                select(ImageEmbedding.vector_dim).where(ImageEmbedding.model_key == model_key).distinct()
+            ).all()
+        }
+    )
+    details.update(
+        {
+            "vector_dim": vector_dim,
+            "vector_norm": round(norm, 6) if norm is not None else None,
+            "stored_vector_dims": stored_dims,
+        }
+    )
+
+    status = HEALTH_PROBE_STATUS_OK
+    error_code = None
+    error_message = None
+    if vector_dim == 0 or not is_finite:
+        status, error_code, error_message = HEALTH_PROBE_STATUS_DOWN, "invalid_vector", "Embedding vector was empty or not finite."
+    elif abs(norm - 1.0) > 1e-3:
+        status, error_code, error_message = HEALTH_PROBE_STATUS_DEGRADED, "not_normalized", "Embedding vector is not unit-normalised."
+    elif stored_dims and stored_dims != [vector_dim]:
+        status, error_code, error_message = (
+            HEALTH_PROBE_STATUS_DEGRADED,
+            "dimension_mismatch",
+            f"Probe vector has {vector_dim} dimensions but stored embeddings for {model_key} have {stored_dims}.",
+        )
+
+    return _health_probe_result(
+        status,
+        latency_ms=latency_ms,
+        error_code=error_code,
+        error_message=error_message,
+        details=details,
+    )
+
+
+_HEALTH_PROBE_RUNNERS = {
+    "ai": _run_ai_health_probe,
+    "image_embeddings": _run_image_embedding_health_probe,
+}
+
+
+def _overall_health_status(probe_results):
+    statuses = [result["status"] for result in probe_results.values() if result["status"] != HEALTH_PROBE_STATUS_DISABLED]
+    if HEALTH_PROBE_STATUS_DOWN in statuses:
+        return HEALTH_PROBE_STATUS_DOWN
+    if HEALTH_PROBE_STATUS_DEGRADED in statuses:
+        return HEALTH_PROBE_STATUS_DEGRADED
+    return HEALTH_PROBE_STATUS_OK
+
+
+@api_v1_bp.post("/system/health/probe")
+@require_role("administrator")
+def run_system_health_probe():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return _error_response("validation_error", "Invalid request payload.", 422, [{"field": "body", "issue": "must be a JSON object"}])
+
+    force = payload.get("force", False)
+    if not isinstance(force, bool):
+        return _error_response("validation_error", "Invalid request payload.", 422, [{"field": "force", "issue": "must be a boolean"}])
+
+    requested = payload.get("probes", list(_HEALTH_PROBE_RUNNERS))
+    if (
+        not isinstance(requested, list)
+        or not requested
+        or any(not isinstance(name, str) or name not in _HEALTH_PROBE_RUNNERS for name in requested)
+    ):
+        return _error_response(
+            "validation_error",
+            "Invalid request payload.",
+            422,
+            [{"field": "probes", "issue": f"must be a non-empty list drawn from {sorted(_HEALTH_PROBE_RUNNERS)}"}],
+        )
+
+    cache_seconds = max(0, int(current_app.config.get("HEALTH_PROBE_CACHE_SECONDS", 60) or 0))
+    cache = current_app.extensions.setdefault("health_probe_cache", {})
+    db_session = get_session()
+    now = time.monotonic()
+    results = {}
+    for name in dict.fromkeys(requested):
+        with _HEALTH_PROBE_LOCK:
+            cached = cache.get(name)
+            if not force and cached is not None and now - cached[0] < cache_seconds:
+                results[name] = {**cached[1], "cached": True}
+                continue
+        result = _HEALTH_PROBE_RUNNERS[name](db_session)
+        with _HEALTH_PROBE_LOCK:
+            cache[name] = (time.monotonic(), result)
+        results[name] = {**result, "cached": False}
+
+    return _success_response(
+        {
+            "overall_status": _overall_health_status(results),
+            "cache_seconds": cache_seconds,
+            "probes": results,
+        }
+    )
 
 
 @api_v1_bp.get("/auth/stfd/login-url")

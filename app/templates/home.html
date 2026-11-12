@@ -130,6 +130,9 @@
         <button id="admin-tab-embeddings" class="app-section-tab" type="button" role="tab" aria-selected="false" aria-controls="embeddings-section" tabindex="-1" data-admin-tab="embeddings">Embeddings</button>
       </li>
       <li class="app-section-tabs__item" role="presentation">
+        <button id="admin-tab-health" class="app-section-tab" type="button" role="tab" aria-selected="false" aria-controls="service-health-section" tabindex="-1" data-admin-tab="health">Service Health</button>
+      </li>
+      <li class="app-section-tabs__item" role="presentation">
         <button id="admin-tab-ip-blocks" class="app-section-tab" type="button" role="tab" aria-selected="false" aria-controls="ip-blocks-section" tabindex="-1" data-admin-tab="ip-blocks">IP Blocks</button>
       </li>
       <li class="app-section-tabs__item" role="presentation">
@@ -1094,6 +1097,34 @@
     <h3 class="govuk-heading-m">Missing embeddings preview</h3>
     <p class="govuk-hint">Shows images currently missing embeddings for the active model key.</p>
     <div id="embeddings-missing-grid" class="app-thumbnail-grid"></div>
+  </section>
+
+  <section id="service-health-section" class="govuk-!-margin-top-8" aria-labelledby="service-health-heading" hidden>
+    <h2 id="service-health-heading" class="govuk-heading-l">Service health</h2>
+    <p class="govuk-body">Live checks run when you open this tab: a minimal request to the external AI service, and an embedding of a built-in reference image by the image fingerprinting engine. Results are cached briefly; use Re-run checks to force a fresh probe. Each AI check is a real (very small) billed call and appears in AI Spend as <code>health_probe</code>.</p>
+    <p class="govuk-body">Overall: <span id="service-health-overall" class="app-ai-status-tag app-health-tag--unknown">Not checked</span></p>
+    <button id="service-health-rerun" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Re-run checks</button>
+    <div id="service-health-status" class="govuk-hint govuk-!-margin-bottom-4" aria-live="polite"></div>
+    <div class="app-ai-usage-cards govuk-!-margin-bottom-5">
+      <div class="app-ai-usage-card" data-health-probe="ai">
+        <h3 class="govuk-heading-s">External AI service</h3>
+        <p class="govuk-body"><span class="app-ai-status-tag app-health-tag--unknown" data-health-field="status">Not checked</span></p>
+        <p class="govuk-body">Response time: <strong data-health-field="latency">-</strong></p>
+        <p class="govuk-body">Model: <strong data-health-field="model">-</strong></p>
+        <p class="govuk-body">Endpoint: <strong data-health-field="endpoint">-</strong></p>
+        <p class="govuk-body">Checked: <strong data-health-field="checked">-</strong></p>
+        <p class="govuk-body govuk-!-margin-bottom-0 app-health-error" data-health-field="error" hidden></p>
+      </div>
+      <div class="app-ai-usage-card" data-health-probe="image_embeddings">
+        <h3 class="govuk-heading-s">Image fingerprinting engine</h3>
+        <p class="govuk-body"><span class="app-ai-status-tag app-health-tag--unknown" data-health-field="status">Not checked</span></p>
+        <p class="govuk-body">Response time: <strong data-health-field="latency">-</strong></p>
+        <p class="govuk-body">Model: <strong data-health-field="model">-</strong></p>
+        <p class="govuk-body">Vector: <strong data-health-field="vector">-</strong></p>
+        <p class="govuk-body">Checked: <strong data-health-field="checked">-</strong></p>
+        <p class="govuk-body govuk-!-margin-bottom-0 app-health-error" data-health-field="error" hidden></p>
+      </div>
+    </div>
   </section>
 
   <section id="ip-blocks-section" class="govuk-!-margin-top-8" aria-labelledby="ip-blocks-heading">

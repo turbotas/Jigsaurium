@@ -176,6 +176,14 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         assert ip_blocks_index >= 0
         assert sessions_index == ip_blocks_index + 1
         assert backups_index == sessions_index + 1
+        assert "health" in admin_tab_order
+
+        page.click("#admin-tab-health")
+        page.wait_for_selector("#service-health-section:not([hidden])")
+        # AI and embeddings are disabled in the test config, so both probes report "Disabled" and overall is healthy.
+        page.wait_for_selector("#service-health-overall.app-health-tag--ok")
+        assert page.locator("[data-health-probe='ai'] [data-health-field='status']").text_content() == "Disabled"
+        assert page.locator("[data-health-probe='image_embeddings'] [data-health-field='status']").text_content() == "Disabled"
 
         page.click("#admin-tab-sessions")
         page.wait_for_selector("#sessions-section:not([hidden])")
