@@ -617,6 +617,12 @@ def test_admin_can_view_ai_usage_diagnostics(client, seeded_image_library_data, 
         db_session.flush()
 
         now = datetime.now(timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        def recent(minutes_ago):
+            # Keep "today" events inside the UTC day even when the suite runs just after midnight.
+            return max(now - timedelta(minutes=minutes_ago), day_start + (now - day_start) * (1 - minutes_ago / 60))
+
         events = [
             AiUsageEvent(
                 actor_user_id=seeded_image_library_data["admin_user_id"],
@@ -630,7 +636,7 @@ def test_admin_can_view_ai_usage_diagnostics(client, seeded_image_library_data, 
                 total_tokens=120,
                 final_cost_usd=Decimal("0.120000"),
                 request_id="req_success",
-                created_at=now - timedelta(minutes=30),
+                created_at=recent(30),
             ),
             AiUsageEvent(
                 actor_user_id=seeded_image_library_data["admin_user_id"],
@@ -646,7 +652,7 @@ def test_admin_can_view_ai_usage_diagnostics(client, seeded_image_library_data, 
                 error_code="provider_error",
                 error_message="AI provider returned HTTP 413",
                 request_id="req_error",
-                created_at=now - timedelta(minutes=20),
+                created_at=recent(20),
             ),
             AiUsageEvent(
                 actor_user_id=seeded_image_library_data["admin_user_id"],
@@ -659,7 +665,7 @@ def test_admin_can_view_ai_usage_diagnostics(client, seeded_image_library_data, 
                 final_cost_usd=Decimal("0"),
                 error_code="daily_budget_exceeded",
                 request_id="req_blocked",
-                created_at=now - timedelta(minutes=10),
+                created_at=recent(10),
             ),
             AiUsageEvent(
                 actor_user_id=seeded_image_library_data["admin_user_id"],

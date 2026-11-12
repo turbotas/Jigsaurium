@@ -26,7 +26,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Upgrade base-image OS packages so published security fixes are included even when the
+# python:3.12-slim tag has not been rebuilt yet.
 RUN apt-get update \
+    && apt-get upgrade --yes \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
         curl \

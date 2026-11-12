@@ -153,12 +153,27 @@ jobs:
         if: always()
         run: docker rm -f jigsaurium-ci || true
 
-      # Fail on HIGH/CRITICAL vulnerabilities that have a fix available.
+      # Scan for HIGH/CRITICAL vulnerabilities that have a fix available. The JSON report is turned
+      # into a short list that includes where each package sits in the image, then the job fails.
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: jigsaurium:ci
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: "1"
-          format: table
+          exit-code: "0"
+          format: json
+          output: trivy.json
+
+      - name: Report Trivy findings
+        run: |
+          jq -r '.Results[]? | .Target as $t | .Vulnerabilities[]?
+            | "\(.Severity)\t\(.VulnerabilityID)\t\(.PkgName) \(.InstalledVersion) -> \(.FixedVersion)\t\(.PkgPath // $t)"' \
+            trivy.json | sort -u > findings.tsv
+          if [ -s findings.tsv ]; then
+            { echo "### Trivy: fixable HIGH/CRITICAL findings"; echo '```'; cat findings.tsv; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            echo "Fixable HIGH/CRITICAL vulnerabilities (severity, id, package, location):"
+            column -t -s "$(printf '\t')" findings.tsv
+            exit 1
+          fi
+          echo "No fixable HIGH/CRITICAL vulnerabilities."
