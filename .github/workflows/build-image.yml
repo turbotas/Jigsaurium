@@ -129,11 +129,15 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           SHA: ${{ github.event.workflow_run.head_sha }}
+          IMAGE_NAME: ${{ steps.meta.outputs.image_name }}
+          DIGEST: ${{ steps.push.outputs.digest }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git tag "$VERSION" "$SHA"
           git push origin "refs/tags/${VERSION}"
-          gh release create "$VERSION" --verify-tag --generate-notes --title "$VERSION"
+          # --notes goes above the generated PR list.
+          notes="$(printf '**Image:** `%s@%s`\n(also tagged `%s:%s`)' "$IMAGE_NAME" "$DIGEST" "$IMAGE_NAME" "$VERSION")"
+          gh release create "$VERSION" --verify-tag --generate-notes --notes "$notes" --title "$VERSION"
 
   promote-test:
     name: Promote to test
