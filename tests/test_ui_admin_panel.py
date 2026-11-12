@@ -444,6 +444,9 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
 
         page.click("#collection-tab-diary")
         page.wait_for_selector("#collection-diary-panel:not([hidden])")
+        # The entry form stays hidden until the composer is opened.
+        page.click("#diary-entry-open")
+        page.wait_for_selector("#diary-entry-form:not([hidden])")
         page.select_option("#diary-jigsaw-id", jigsaw_option_value)
         calendar_completion_value = page.evaluate(
             """() => {
