@@ -14,4 +14,4 @@ STATE_DIR=/mnt/NAS1Pool1/apps/deploy-agent/state
 #   DOCKER_CONFIG=$STATE_DIR/docker docker login ghcr.io -u <user>
 DOCKER_CONFIG_DIR=/mnt/NAS1Pool1/apps/deploy-agent/state/docker
 # Optional pre-deploy backup (deploy aborts if it fails). Generic DB dump from the app's own env file:
-BACKUP_CMD='/mnt/NAS1Pool1/apps/deploy-agent/backup-db.sh /mnt/NAS1Pool1/documents/Projects/GitProjects/Jigsaurium/environments/test.env.local /mnt/NAS1Pool1/backups/deploy-agent/jigsaurium-test 14'
+BACKUP_CMD='/mnt/NAS1Pool1/apps/deploy-agent/backup-db.sh /mnt/NAS1Pool1/apps/jigsaurium-config/test.env /mnt/NAS1Pool1/backups/deploy-agent/jigsaurium-test 14'

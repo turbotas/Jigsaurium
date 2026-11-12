@@ -40,7 +40,8 @@ Already done for **test**. Use the same steps for **prod**, replacing `test` wit
 
 ### 1. Runtime env file
 
-`environments/<env>.env.local` on the NAS (never in Git), copied from `environments/<env>.env.example`.
+`/mnt/NAS1Pool1/apps/jigsaurium-config/<env>.env` on the NAS: outside the source checkout and the
+SMB share, folder `chmod 700`, file `chmod 600`, never in Git. Start from `environments/<env>.env.example`.
 At minimum: `APP_ENV`, `AUTO_MIGRATE=1`, `DATABASE_URL`, `SECRET_KEY` (16+ random characters),
 `CANONICAL_HOST`, and the `AI_*` / `IMAGE_EMBEDDING*` values you use. Leave `APP_VERSION`,
 `APP_BUILD_SHA` and `APP_BUILD_TIME` unset; the image provides them.
@@ -65,7 +66,7 @@ Apps -> Discover Apps -> three-dot menu -> **Install via YAML**, name it `jigsau
 paste `docker-compose.prod.yml`. Check before saving:
 
 - `image: ghcr.io/turbotas/jigsaurium:prod` (the agent pins it to a digest on its first run)
-- `env_file` is the absolute path to `prod.env.local`
+- `env_file` is `/mnt/NAS1Pool1/apps/jigsaurium-config/prod.env`
 - the volume is the absolute instance folder from step 3
 - healthcheck `start_period: 600s` (model warm-up and migrations take minutes)
 - the host port (`5000` for prod, `15000` for test) is free
@@ -79,7 +80,7 @@ The agent is already installed for all apps at `/mnt/NAS1Pool1/apps/deploy-agent
 5-minute cron job. Add a config for the new app by copying the test one:
 
 ```bash
-cd /mnt/NAS1Pool1/apps/deploy-agent/conf && sed -e 's/jigsaurium-test/jigsaurium-prod/g' -e 's/^WATCH_TAG=test/WATCH_TAG=prod/' -e 's#127.0.0.1:15000#127.0.0.1:5000#' -e 's#test.env.local#prod.env.local#' jigsaurium-test.conf > jigsaurium-prod.conf && chmod 600 jigsaurium-prod.conf
+cd /mnt/NAS1Pool1/apps/deploy-agent/conf && sed -e 's/jigsaurium-test/jigsaurium-prod/g' -e 's/^WATCH_TAG=test/WATCH_TAG=prod/' -e 's#127.0.0.1:15000#127.0.0.1:5000#' -e 's#/test.env #/prod.env #' jigsaurium-test.conf > jigsaurium-prod.conf && chmod 600 jigsaurium-prod.conf
 ```
 
 Then prove it without changing anything, and run it once for real:
