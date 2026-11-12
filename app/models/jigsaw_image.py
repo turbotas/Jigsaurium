@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, LargeBinary, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects import mysql
 
@@ -36,6 +36,8 @@ class JigsawImage(Base):
     user_comment: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     is_cropped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_suggested_tag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ai_suggested_rotation_degrees: Mapped[int | None] = mapped_column(nullable=True)
+    ai_suggested_rotation_degrees_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_suggested_corners_json: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     ai_suggestions_pending_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_suggested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

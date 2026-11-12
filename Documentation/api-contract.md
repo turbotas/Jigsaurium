@@ -342,6 +342,8 @@
   - Image payloads include AI review/cropping fields:
     - `is_cropped` (boolean)
     - `ai_suggested_tag` (nullable string)
+    - `ai_suggested_rotation_degrees` (nullable integer, currently snapped to nearest `0/90/180/270` for editor compatibility)
+    - `ai_suggested_rotation_degrees_raw` (nullable number, original AI-provided clockwise rotation for box/image edge alignment)
     - `ai_suggested_corners` (nullable array of 4 normalized `{x,y}` points)
     - `ai_suggestions_pending_review` (boolean)
     - `ai_suggested_at` (nullable UTC ISO 8601)
@@ -385,7 +387,7 @@
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` is admin-only and creates a new jigsaw from AI-extracted image metadata.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` only works for unassigned images; assigned images return `409`.
   - `POST /api/v1/image-library/images/{image_id}/create-jigsaw` returns `409` when AI is disabled (`AI_ENABLED=0`) or when AI provider configuration is incomplete.
-  - Successful create-from-image stores AI image suggestions (tag and optional 4-corner crop) for UI review.
+  - Successful create-from-image stores AI image suggestions (tag, optional rotation, and optional 4-corner crop) for UI review.
   - Create-from-image applies AI-suggested tag when valid; fallback remains `Box`.
   - AI corner suggestions are requested for all images unless `is_cropped=true`; normalized and pixel suggestions are accepted and persisted in normalized coordinates.
   - `POST /api/v1/image-library/bulk-create-jigsaws` is admin-only and queues (or runs inline in test mode) one create-from-image action per provided image id.

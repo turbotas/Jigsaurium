@@ -886,6 +886,7 @@
 
       const uploadQueue = [...entries];
       const hasCompleted = Boolean(completedEntry);
+      let uploadedBoxImageCount = 0;
 
       const duplicateWarnings = [];
       for (let index = 0; index < uploadQueue.length; index += 1) {
@@ -900,9 +901,12 @@
           continue;
         }
         await ensureExpectedImageTag(image, tag, jigsawId);
+        if (boxSlotKeys.includes(entry.slotKey)) {
+          uploadedBoxImageCount += 1;
+        }
       }
 
-      const shouldRunEnrich = hasCapability("jigsaw.enrich") && selectedBoxEntries.length > 0;
+      const shouldRunEnrich = hasCapability("jigsaw.enrich") && uploadedBoxImageCount > 0;
       if (shouldRunEnrich) {
         setStatus("Running AI enrich from uploaded box images...");
         await apiRequest(`/api/v1/jigsaws/${Number(jigsawId)}/enrich-from-images`, {
@@ -915,8 +919,14 @@
         duplicateWarnings.length > 0
           ? ` Duplicate image bytes were detected for ${duplicateWarnings.join(", ")}, so those images may already belong to another jigsaw.`
           : "";
+      const enrichSkippedSuffix =
+        !shouldRunEnrich && selectedBoxEntries.length > 0 && hasCapability("jigsaw.enrich")
+          ? duplicateWarnings.length > 0
+            ? " Enrichment was skipped because the selected box images were deduplicated by content hash and not attached to this new jigsaw."
+            : " Enrichment was skipped because no uploaded box images were attached to this new jigsaw."
+          : "";
       const enrichSuffix = shouldRunEnrich ? " and started enrichment" : "";
-      setStatus(`Mobile capture complete. Created jigsaw #${jigsawId}${enrichSuffix}.${warningSuffix}`);
+      setStatus(`Mobile capture complete. Created jigsaw #${jigsawId}${enrichSuffix}.${warningSuffix}${enrichSkippedSuffix}`);
       clearForm();
     } catch (error) {
       setStatus(error.message || "Mobile capture workflow failed.", true);

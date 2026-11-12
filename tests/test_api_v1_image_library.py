@@ -1156,6 +1156,8 @@ def test_image_library_list_includes_ai_suggestion_and_cropped_fields(client, se
         assert image is not None
         image.is_cropped = True
         image.ai_suggested_tag = "Reference"
+        image.ai_suggested_rotation_degrees = 90
+        image.ai_suggested_rotation_degrees_raw = 91.25
         image.ai_suggested_corners_json = json.dumps(
             [
                 {"x": 0.1, "y": 0.1},
@@ -1175,6 +1177,8 @@ def test_image_library_list_includes_ai_suggestion_and_cropped_fields(client, se
 
     assert row["is_cropped"] is True
     assert row["ai_suggested_tag"] == "Reference"
+    assert row["ai_suggested_rotation_degrees"] == 90
+    assert row["ai_suggested_rotation_degrees_raw"] == 91.25
     assert row["ai_suggestions_pending_review"] is True
     assert isinstance(row["ai_suggested_corners"], list)
     assert len(row["ai_suggested_corners"]) == 4
@@ -1784,6 +1788,7 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
                 "description": "Inferred from box image",
                 "image_suggestion": {
                     "tag": "Box side",
+                    "rotation_degrees": 180,
                     "coordinate_space": "normalized",
                     "corners": [
                         {"x": 0.08, "y": 0.09},
@@ -1830,6 +1835,8 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
     assert payload["image"]["jigsaw_id"] == payload["jigsaw"]["id"]
     assert payload["image"]["tag"] == "Box side"
     assert payload["image"]["ai_suggested_tag"] == "Box side"
+    assert payload["image"]["ai_suggested_rotation_degrees"] == 180
+    assert payload["image"]["ai_suggested_rotation_degrees_raw"] == 180.0
     assert payload["image"]["ai_suggestions_pending_review"] is True
     assert isinstance(payload["image"]["ai_suggested_corners"], list)
     assert len(payload["image"]["ai_suggested_corners"]) == 4
@@ -1843,6 +1850,8 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
         assert isinstance(payload.get("provider_response"), dict)
         assert "provider_response_text" in payload
         assert payload["image_suggestions"]["suggested_tag"] == "Box side"
+        assert payload["image_suggestions"]["suggested_rotation_degrees"] == 180
+        assert payload["image_suggestions"]["suggested_rotation_degrees_raw"] == 180.0
         assert len(payload["image_suggestions"]["suggested_corners"]) == 4
         assert isinstance(payload.get("ai_prompt"), dict)
         assert payload["ai_prompt"]["include_image_suggestion"] is True
@@ -1879,6 +1888,7 @@ def test_create_jigsaw_from_image_ignores_invalid_corner_coordinate_space(client
                 "piece_count": 500,
                 "image_suggestion": {
                     "tag": "Reference",
+                    "rotation_degrees": 45,
                     "coordinate_space": "galactic",
                     "corners": [
                         {"x": 2, "y": 2},
@@ -1910,6 +1920,8 @@ def test_create_jigsaw_from_image_ignores_invalid_corner_coordinate_space(client
     payload = create_response.get_json()["data"]
     assert payload["image"]["tag"] == "Reference"
     assert payload["image"]["ai_suggested_tag"] == "Reference"
+    assert payload["image"]["ai_suggested_rotation_degrees"] == 90
+    assert payload["image"]["ai_suggested_rotation_degrees_raw"] == 45.0
     assert payload["image"]["ai_suggested_corners"] is None
 
 
@@ -2221,9 +2233,10 @@ def test_admin_can_enrich_jigsaw_from_assigned_images_non_destructive(client, se
 
     observed = {"count": 0, "tags": []}
 
-    def fake_inference(_images, _instruction_text):
+    def fake_inference(_images, _instruction_text, *, include_image_suggestion=None):
         observed["count"] = len(_images)
         observed["tags"] = [image.tag for image in _images]
+        assert include_image_suggestion is True
         return {
             "metadata": {
                 "title": "Should Not Replace Existing Title",
@@ -2235,6 +2248,20 @@ def test_admin_can_enrich_jigsaw_from_assigned_images_non_destructive(client, se
                 "tags": ["cozy", "kitchen"],
                 "dimensions_cm": "70 x 50 cm",
                 "description": "Details collected across front and back images",
+                "image_suggestions": [
+                    {
+                        "image_id": int(_images[0].id),
+                        "tag": "Box front",
+                        "rotation_degrees": 270,
+                        "coordinate_space": "normalized",
+                        "corners": [
+                            {"x": 0.04, "y": 0.06},
+                            {"x": 0.95, "y": 0.06},
+                            {"x": 0.95, "y": 0.92},
+                            {"x": 0.04, "y": 0.92},
+                        ],
+                    }
+                ],
             },
             "prompt_tokens": 610,
             "completion_tokens": 130,
@@ -2274,10 +2301,117 @@ def test_admin_can_enrich_jigsaw_from_assigned_images_non_destructive(client, se
         assert len(usage_rows) == 1
         usage_payload = json.loads(usage_rows[0].payload_json)
         assert isinstance(usage_payload.get("ai_prompt"), dict)
-        assert usage_payload["ai_prompt"]["include_image_suggestion"] is False
+        assert usage_payload["ai_prompt"]["include_image_suggestion"] is True
         assert usage_payload["ai_prompt"]["image_count"] == 1
         assert "Use all provided box photos" in usage_payload["ai_prompt"]["user_instruction"]
+        assert "image_suggestion" in usage_payload["ai_prompt"]["system_prompt"]
         assert "image_url" not in json.dumps(usage_payload["ai_prompt"])
+
+
+@pytest.mark.functional
+def test_enrich_jigsaw_from_images_persists_ai_suggestions_per_image(client, seeded_image_library_data, app, monkeypatch):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
+            "tag": "Box",
+            "files": [
+                (BytesIO(_make_png_bytes(size=(80, 60))), "enrich-suggest-front.png", "image/png"),
+                (BytesIO(_make_png_bytes(color=(10, 80, 40), size=(80, 60))), "enrich-suggest-side.png", "image/png"),
+            ],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+    created = upload_response.get_json()["data"]["created"]
+    first_id = int(created[0]["id"])
+    second_id = int(created[1]["id"])
+
+    app.config["AI_ENABLED"] = True
+    app.config["AI_API_KEY"] = "test-key"
+    app.config["AI_MODEL"] = "mock-vision"
+    app.config["AI_ENDPOINT_URL"] = "https://example.invalid/v1/chat/completions"
+    app.config["AI_DAILY_BUDGET_USD"] = 10.0
+
+    def fake_inference(_images, _instruction_text, *, include_image_suggestion=None):
+        assert include_image_suggestion is True
+        return {
+            "metadata": {
+                "title": "Enrich Suggestions",
+                "manufacturer": "Corner Piece",
+                "piece_count": 1000,
+                "image_suggestions": [
+                    {
+                        "image_id": first_id,
+                        "tag": "Box front",
+                        "rotation_degrees": 90,
+                        "coordinate_space": "normalized",
+                        "corners": [
+                            {"x": 0.05, "y": 0.08},
+                            {"x": 0.95, "y": 0.08},
+                            {"x": 0.95, "y": 0.93},
+                            {"x": 0.05, "y": 0.93},
+                        ],
+                    },
+                    {
+                        "image_id": second_id,
+                        "tag": "Box side",
+                        "rotation_degrees": 180,
+                        "coordinate_space": "pixel",
+                        "corners": [
+                            {"x": 0, "y": 0},
+                            {"x": 1365, "y": 0},
+                            {"x": 1365, "y": 768},
+                            {"x": 0, "y": 768},
+                        ],
+                    },
+                ],
+            },
+            "prompt_tokens": 220,
+            "completion_tokens": 80,
+            "total_tokens": 300,
+            "provider_cost_usd": None,
+            "computed_cost_usd": None,
+            "final_cost_usd": 0.04,
+            "model": "mock-vision",
+            "endpoint_url": "https://example.invalid/v1/chat/completions",
+            "prompt_audit": {
+                "include_image_suggestion": True,
+                "image_count": 2,
+            },
+        }
+
+    monkeypatch.setattr("app.api.v1.routes._infer_jigsaw_metadata_from_images", fake_inference)
+
+    response = client.post(
+        f"/api/v1/jigsaws/{seeded_image_library_data['jigsaw_id']}/enrich-from-images",
+        headers=_csrf_headers(),
+        json={},
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        db_session = get_session()
+        first = db_session.get(JigsawImage, first_id)
+        second = db_session.get(JigsawImage, second_id)
+        assert first is not None and second is not None
+        assert first.ai_suggestions_pending_review is True
+        assert first.ai_suggested_tag == "Box front"
+        assert first.ai_suggested_rotation_degrees == 90
+        assert first.ai_suggested_rotation_degrees_raw == 90.0
+        assert isinstance(json.loads(first.ai_suggested_corners_json), list)
+        assert second.ai_suggestions_pending_review is True
+        assert second.ai_suggested_tag == "Box side"
+        assert second.ai_suggested_rotation_degrees == 180
+        assert second.ai_suggested_rotation_degrees_raw == 180.0
+        second_corners = json.loads(second.ai_suggested_corners_json)
+        assert isinstance(second_corners, list)
+        assert len(second_corners) == 4
+        assert second_corners[0] == {"x": 0.0, "y": 0.0}
+        assert second_corners[2] == {"x": 1.0, "y": 1.0}
 
 
 @pytest.mark.functional

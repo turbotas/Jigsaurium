@@ -435,6 +435,7 @@
     aiUsageRecentPagination: document.getElementById("ai-usage-recent-pagination"),
     aiUsageDetailModal: document.getElementById("ai-usage-detail-modal"),
     aiUsageDetailSummary: document.getElementById("ai-usage-detail-summary"),
+    aiUsageDetailCopyButton: document.getElementById("ai-usage-detail-copy"),
     aiUsageDetailPayload: document.getElementById("ai-usage-detail-payload"),
     aiUsageDetailCloseButton: document.getElementById("ai-usage-detail-close"),
     auditPaginationTop: document.getElementById("audit-pagination-top"),
@@ -1466,6 +1467,40 @@
     const payloadText = JSON.stringify(entry.payload ?? null, null, 2);
     elements.aiUsageDetailPayload.textContent = payloadText;
     elements.aiUsageDetailModal.hidden = false;
+  }
+
+  async function copyAiUsageDetailPayloadToClipboard() {
+    if (!elements.aiUsageDetailPayload) {
+      return;
+    }
+    const payloadText = String(elements.aiUsageDetailPayload.textContent || "").trim();
+    if (!payloadText) {
+      showFeedback("No AI call details available to copy.", true);
+      return;
+    }
+
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(payloadText);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = payloadText;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const copied = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        if (!copied) {
+          throw new Error("copy_failed");
+        }
+      }
+      showFeedback("AI call details copied to clipboard.");
+    } catch (_error) {
+      showFeedback("Could not copy AI call details to clipboard.", true);
+    }
   }
 
   function clearJigsawDetailModalContent() {
@@ -4521,15 +4556,57 @@
     return parsed;
   }
 
+  function parseAiSuggestedRotationDegrees(item) {
+    if (!item) {
+      return null;
+    }
+    let raw = Number(item.ai_suggested_rotation_degrees);
+    if (!Number.isFinite(raw)) {
+      raw = Number(item.ai_suggested_rotation_degrees_raw);
+      if (!Number.isFinite(raw)) {
+        return null;
+      }
+      const normalizedRaw = ((raw % 360) + 360) % 360;
+      return normalizeRotationDegrees(Math.round(normalizedRaw / 90) * 90);
+    }
+    const normalized = ((Math.round(raw) % 360) + 360) % 360;
+    if (normalized === 0 || normalized === 90 || normalized === 180 || normalized === 270) {
+      return normalized;
+    }
+    return null;
+  }
+
   function imageHasPendingAiSuggestion(item) {
     if (!item || !item.ai_suggestions_pending_review) {
       return false;
     }
-    return Boolean(item.ai_suggested_tag) || Boolean(parseAiSuggestedCorners(item));
+    return Boolean(item.ai_suggested_tag)
+      || Boolean(parseAiSuggestedCorners(item))
+      || parseAiSuggestedRotationDegrees(item) !== null;
   }
 
   function shouldOfferAiCornerSuggestion(item) {
     return Boolean(item && !item.is_cropped && parseAiSuggestedCorners(item));
+  }
+
+  function isAiCornerSuggestionFullFrame(corners) {
+    if (!Array.isArray(corners) || corners.length !== 4) {
+      return false;
+    }
+    const epsilon = 0.02;
+    const expected = [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 1, y: 1 },
+      { x: 0, y: 1 },
+    ];
+    return corners.every((point, index) => {
+      if (!point || typeof point !== "object") {
+        return false;
+      }
+      return Math.abs(Number(point.x) - expected[index].x) <= epsilon
+        && Math.abs(Number(point.y) - expected[index].y) <= epsilon;
+    });
   }
 
   function setImageBrowserIndexByImageId(imageId) {
@@ -5375,6 +5452,28 @@
     elements.imageBrowserStatus.appendChild(primaryLine);
     elements.imageBrowserStatus.appendChild(secondaryLine);
     elements.imageBrowserStatus.appendChild(tertiaryLine);
+
+    if (imageHasPendingAiSuggestion(item)) {
+      const aiLine = document.createElement("p");
+      aiLine.className = "app-image-browser__status-line";
+      const rotation = parseAiSuggestedRotationDegrees(item);
+      const rawRotation = Number(item.ai_suggested_rotation_degrees_raw);
+      const corners = parseAiSuggestedCorners(item);
+      const cornerLabel = corners
+        ? (isAiCornerSuggestionFullFrame(corners) ? "corners: full image" : "corners: provided")
+        : "corners: none";
+      const rotationLabel = Number.isFinite(rawRotation)
+        ? `rotation: ${rotation === null ? "none" : `${rotation}°`} (raw ${rawRotation}°)`
+        : (rotation === null ? "rotation: none" : `rotation: ${rotation}°`);
+      const tagLabel = item.ai_suggested_tag ? `tag: ${item.ai_suggested_tag}` : "tag: none";
+      if (currentUserHasCapability("image.tag")) {
+        aiLine.textContent = `AI suggestion pending review · ${tagLabel} · ${rotationLabel} · ${cornerLabel}. Use 'Use AI suggestion' to accept or 'Reject AI suggestion' to clear.`;
+      } else {
+        aiLine.textContent = `AI suggestion available · ${tagLabel} · ${rotationLabel} · ${cornerLabel}.`;
+      }
+      elements.imageBrowserStatus.appendChild(aiLine);
+    }
+
     syncImageBrowserActionButtons();
     syncImageBrowserSaveButton();
   }
@@ -5487,11 +5586,6 @@
         mimeType: state.imageBrowser.mimeType,
         filename: state.imageBrowser.filename,
       });
-    }
-
-    if (shouldOfferAiCornerSuggestion(item)) {
-      await applyAiSuggestedCornersToCropSelection(item);
-      showFeedback("AI corner suggestion loaded. Adjust if needed, then apply crop and save overwrite.");
     }
 
     await redrawImageBrowserCanvas();
@@ -6187,6 +6281,17 @@
     return true;
   }
 
+  async function applyAiSuggestedRotation(item) {
+    const rotation = parseAiSuggestedRotationDegrees(item);
+    if (rotation === null) {
+      return false;
+    }
+    state.imageBrowser.rotationDegrees = normalizeRotationDegrees(rotation);
+    state.imageBrowser.aiSuggestionUsedForCurrentImage = true;
+    await redrawImageBrowserCanvas();
+    return true;
+  }
+
   async function reviewImageBrowserAiSuggestions(action, options = {}) {
     const item = getCurrentImageBrowserItem();
     if (!item || !item.id) {
@@ -6223,14 +6328,26 @@
     try {
       const updated = await reviewImageBrowserAiSuggestions("accept", { applyTag: true });
       const activeItem = updated || getCurrentImageBrowserItem();
+      let didApplyRotation = false;
+      if (activeItem || item) {
+        didApplyRotation = await applyAiSuggestedRotation(activeItem || item);
+      }
       if (shouldOfferAiCornerSuggestion(activeItem || item)) {
         const didLoad = await applyAiSuggestedCornersToCropSelection(activeItem || item);
         if (didLoad) {
-          showFeedback("AI suggestion accepted. Corner guide loaded; apply crop and save overwrite to persist.");
+          showFeedback(
+            didApplyRotation
+              ? "AI suggestion accepted. Rotation and corner guide loaded; apply crop and save overwrite to persist."
+              : "AI suggestion accepted. Corner guide loaded; apply crop and save overwrite to persist."
+          );
           return;
         }
       }
-      showFeedback("AI suggestion accepted.");
+      if (didApplyRotation) {
+        showFeedback("AI suggestion accepted. Rotation loaded; save overwrite to persist.");
+      } else {
+        showFeedback("AI suggestion accepted.");
+      }
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -10784,6 +10901,12 @@
 
     if (elements.aiUsageDetailCloseButton) {
       elements.aiUsageDetailCloseButton.addEventListener("click", closeAiUsageDetailModal);
+    }
+
+    if (elements.aiUsageDetailCopyButton) {
+      elements.aiUsageDetailCopyButton.addEventListener("click", () => {
+        copyAiUsageDetailPayloadToClipboard();
+      });
     }
 
     if (elements.aiUsageDetailModal) {
