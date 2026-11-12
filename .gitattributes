@@ -2,3 +2,6 @@
 
 *.sh text eol=lf
 *.bat text eol=crlf
+
+# Deploy agent runs on Linux (TrueNAS); keep Unix line endings.
+deploy/** text eol=lf

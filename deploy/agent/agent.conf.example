@@ -1,0 +1,17 @@
+# One file per app + environment. Copy to /mnt/<pool>/apps/deploy-agent/conf/<app>.conf
+APP_NAME=jigsaurium-test                    # exact TrueNAS Custom App name
+IMAGE=ghcr.io/turbotas/jigsaurium
+WATCH_TAG=test                              # pointer tag to follow (test | prod)
+SERVICE=web                                 # compose service whose image is pinned
+HEALTH_URL=http://127.0.0.1:15000/api/v1/health
+HEALTH_SHA_FIELD=                           # optional: health JSON field compared with the image's revision
+                                            # label. Empty = rely on container image ID + Docker healthcheck.
+#COMPOSE_PROJECT=ix-jigsaurium-test         # compose project of the app's containers (default ix-<APP_NAME>)
+HEALTH_TIMEOUT=180
+AUTO_APPLY=1                                # 0 = only log that an update is available
+STATE_DIR=/mnt/NAS1Pool1/apps/deploy-agent/state
+# docker login ghcr.io credentials live here (read:packages PAT); created once with:
+#   DOCKER_CONFIG=$STATE_DIR/docker docker login ghcr.io -u <user>
+DOCKER_CONFIG_DIR=/mnt/NAS1Pool1/apps/deploy-agent/state/docker
+# Optional pre-deploy backup (deploy aborts if it fails). Generic DB dump from the app's own env file:
+BACKUP_CMD='/mnt/NAS1Pool1/apps/deploy-agent/backup-db.sh /mnt/NAS1Pool1/documents/Projects/GitProjects/Jigsaurium/environments/test.env.local /mnt/NAS1Pool1/backups/deploy-agent/jigsaurium-test 14'
