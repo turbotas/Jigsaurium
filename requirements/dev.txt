@@ -1,4 +1,4 @@
 -r prod.txt
 pytest>=9.2.0,<10.0
 python-dotenv>=1.2.4,<2.0
-playwright>=1.64.1,<2.0
+playwright>=1.65.1,<2.0
