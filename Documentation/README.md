@@ -21,7 +21,7 @@ Community/governance files at repository root:
 - `public-release-readiness-audit.md`: Step 4.3 go/no-go audit record before repo visibility change.
 - `../CHANGELOG.md`: Keep-a-Changelog style release notes and unreleased changes.
 - `truenas-compose-import.md`: production compose baseline and TrueNAS YAML import notes.
-- `truenas-first-test-and-prod-deploy.md`: single-path runbook to release via GitHub Actions and deploy first test/prod app versions in TrueNAS.
+- `truenas-first-test-and-prod-deploy.md`: how merges reach the TrueNAS test/prod apps (pipeline + deploy agent), day-to-day tasks, one-time setup per environment, and troubleshooting.
 
 ## Working Agreement
 
