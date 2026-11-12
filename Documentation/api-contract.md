@@ -10,6 +10,7 @@
 ## Auth and Authorization
 
 - API access requires authenticated user context except for explicitly public endpoints.
+- Proxy-only access (`REQUIRE_TRUSTED_PROXY=1`, the default): requests whose socket peer is not a configured trusted proxy (or loopback) receive `403` with error code `forbidden`, before authentication. Pages get a plain-text `403`. `GET /api/v1/health` is exempt.
 - Session authentication endpoints:
   - `GET /api/v1/auth/stfd/login-url` (public, returns STFD sign-in URL when STFD mode is enabled)
   - `POST /api/v1/auth/login` (public, expects `token` when STFD mode is enabled; otherwise expects `email` + `password`)

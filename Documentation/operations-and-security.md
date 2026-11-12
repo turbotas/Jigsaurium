@@ -54,6 +54,7 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `TRUSTED_PROXY_HEADER`: which forwarding header family the proxy sets or overwrites: `x-forwarded` (default; `X-Forwarded-For`/`-Proto`/`-Host`) or `forwarded` (RFC7239 `Forwarded`). Only that family is read; the other is ignored.
 - `GUNICORN_THREADS`, `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT`, `GUNICORN_KEEPALIVE`, `GUNICORN_MAX_REQUESTS`, `GUNICORN_MAX_REQUESTS_JITTER`, `GUNICORN_BIND`, `GUNICORN_LOG_LEVEL`: optional overrides for the container's WSGI server (defaults in `gunicorn.conf.py`).
 - `TRUSTED_CLIENT_CIDRS`: comma-separated client CIDRs exempt from automatic 404-streak IP blocking.
+- `REQUIRE_TRUSTED_PROXY`: proxy-only access (default `1`). Requests whose socket peer is not in `TRUSTED_PROXY_CIDRS` get `403`, so connections that bypass the reverse proxy are refused. Loopback peers and the liveness endpoint `GET /api/v1/health` are always allowed. Has no effect while `TRUSTED_PROXY_CIDRS` is empty (a startup warning is logged). Set `0` only if direct access is deliberately needed.
 - `STFD_ENABLED`: enable/disable STFD-backed authentication mode.
 - `STFD_ALLOW_LOCAL_LOGIN`: optional breakglass/fallback toggle; when `1`, local email/password login remains available while STFD is enabled.
 - `STFD_APP_UNI`: STFD application UNI for this environment.
@@ -138,7 +139,8 @@ Host enforcement policy:
 - Ensure proxy overwrites inbound forwarding headers (do not pass client-supplied values through unchanged).
 - Set `TRUSTED_PROXY_HEADER` to the header family the proxy actually overwrites. With only `$proxy_add_x_forwarded_for` (the common default, including Nginx Proxy Manager), keep `x-forwarded`.
 - Also clear the header family you are not using, so it never reaches the app: for example `proxy_set_header Forwarded "";` when using `x-forwarded`.
-- Bind the published container port to the address the proxy uses (for example `"192.168.1.10:5000:5000"`), not all interfaces, and keep `TRUSTED_PROXY_CIDRS` to the proxy's own address(es) rather than whole LAN or Docker ranges.
+- Keep `TRUSTED_PROXY_CIDRS` to the address range the proxy's connections actually arrive from. When the proxy is another container on the same host, that is a Docker network range (for example `172.16.0.0/12`), never the LAN range.
+- Leave `REQUIRE_TRUSTED_PROXY=1` so direct connections to the published port are refused. To confirm it on a deployment, request any page other than `/api/v1/health` directly from another LAN machine (`curl http://<host>:<published-port>/`) and expect `403`. A `200` means Docker is rewriting the client's source address into the trusted range. In that case, restrict the published port on the host instead (firewall rule, or a shared Docker network with no published port).
 - Set `TRUSTED_PROXY_CIDRS` to exact proxy CIDR(s) used by this environment.
 - Keep `CANONICAL_HOST` and `CANONICAL_HOST_ENFORCEMENT` aligned with deployed hostname policy.
 - Keep Flask app behind the proxy boundary; do not publish Flask listener directly to the internet.

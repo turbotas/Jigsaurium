@@ -335,3 +335,5 @@
 - Fix: import `DecompressionBombError` from `PIL.Image`. Under Pillow 13 the old `from PIL import DecompressionBombError` failed, which silently disabled Pillow in the API routes, so derivatives were never generated and guests were served original uploads (including EXIF location data). A regression test now asserts Pillow is loaded and guest previews carry no GPS EXIF.
 - Decision: require `SECRET_KEY` of at least 32 characters outside dev.
 - Why: the signed session cookie must resist offline guessing; 16 characters was too low a floor.
+- Decision: refuse requests whose socket peer is not in `TRUSTED_PROXY_CIDRS` (`REQUIRE_TRUSTED_PROXY`, on by default; loopback and `GET /api/v1/health` exempt; inactive while no proxy CIDRs are set).
+- Why: the published container port is reachable from the LAN, bypassing the reverse proxy. Binding the port to one address does not limit who can connect, and the deployments do not control a host firewall. All environments, including dev, run behind the proxy.
