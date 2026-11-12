@@ -8153,31 +8153,47 @@
     if (!result || !verdictTag || !messageList || !summary) {
       return;
     }
+    const setCardText = (id, value) => {
+      const element = document.getElementById(id);
+      if (element) {
+        element.textContent = value === null || value === undefined || value === "" ? "-" : String(value);
+      }
+    };
 
     const verdict = PROXY_VERDICTS[data?.verdict] || PROXY_VERDICTS.unknown;
     verdictTag.className = `app-ai-status-tag app-health-tag--${verdict.tag}`;
     verdictTag.textContent = verdict.label;
 
+    const findings = data?.findings || {};
+    const received = data?.received || {};
+    const config = data?.config || {};
+    const current = config.trusted_proxy_header || "-";
+    const recommended = data?.recommended_trusted_proxy_header;
+    let settingText = current;
+    if (!recommended) {
+      settingText = `${current} (no safe setting)`;
+    } else if (recommended !== current) {
+      settingText = `${current} (change to ${recommended})`;
+    }
+    setCardText("proxy-diagnostics-setting", settingText);
+    setCardText(
+      "proxy-diagnostics-source",
+      data?.remote_addr ? `${data.remote_addr}${data.remote_is_trusted_proxy ? " (trusted)" : " (not trusted)"}` : null,
+    );
+    setCardText("proxy-diagnostics-client-ip", data?.resolved_client_ip);
+    setCardText("proxy-diagnostics-checked", new Date().toLocaleString());
+
     messageList.replaceChildren();
     const messages = Array.isArray(data?.messages) ? data.messages : [];
-    if (!messages.length && data?.verdict === "ok") {
-      messages.push("The proxy sets the client-IP header the app is configured to trust. No change needed.");
-    }
     messages.forEach((message) => {
       const item = document.createElement("li");
       item.textContent = String(message);
       messageList.appendChild(item);
     });
+    messageList.hidden = messages.length === 0;
 
     summary.replaceChildren();
-    const findings = data?.findings || {};
-    const received = data?.received || {};
-    const config = data?.config || {};
     const describeFinding = (value) => PROXY_HEADER_FINDING_LABELS[value] || value || "-";
-    appendProxySummaryRow(summary, "Recommended TRUSTED_PROXY_HEADER", data?.recommended_trusted_proxy_header || "None safe");
-    appendProxySummaryRow(summary, "Current TRUSTED_PROXY_HEADER", config.trusted_proxy_header);
-    appendProxySummaryRow(summary, "Request reached the app from", `${data?.remote_addr || "-"}${data?.remote_is_trusted_proxy ? " (trusted proxy)" : " (not a trusted proxy)"}`);
-    appendProxySummaryRow(summary, "Your IP as the app resolves it", data?.resolved_client_ip);
     appendProxySummaryRow(summary, "Forwarded", describeFinding(findings.forwarded));
     appendProxySummaryRow(summary, "X-Forwarded-For", describeFinding(findings.x_forwarded_for));
     appendProxySummaryRow(summary, "X-Forwarded-Host", describeFinding(findings.x_forwarded_host));
