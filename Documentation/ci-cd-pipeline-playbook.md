@@ -89,8 +89,8 @@ Human PR ───────────────────────�
 - Tags `sha-<12>`; outputs the digest; writes it to the job summary.
 - Automatically calls the promote workflow for `test`, then for `prod` (waits for approval).
 - Jigsaurium: implemented as `build-image.yml` (`workflow_run` on CI success for pushes to
-  `master`) calling `promote-pointer-tag.yml`. The image's version string is
-  `git describe --tags --always` at build time. A merge made with the built-in `GITHUB_TOKEN`
+  `master`) calling `promote-pointer-tag.yml`. Each build is an automatic patch release
+  (`vX.Y.Z` tag + GitHub Release); see `release-and-versioning.md`. A merge made with the built-in `GITHUB_TOKEN`
   does not trigger CI on `master`, so it is not built (by design only Dependabot action bumps do that).
 
 ### 4.4 Release and prod (`release.yml`, `promote.yml`)
