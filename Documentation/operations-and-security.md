@@ -38,7 +38,7 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `AUTO_MIGRATE`: when `1`, container entrypoint runs `alembic upgrade head` on startup before launching the app process.
 - `SECRET_KEY`: Flask secret key.
 - `APP_ENV`: one of `dev`, `test`, `prod`.
-- `APP_VERSION`: deployed application version (SemVer or release tag such as `v1.2.3`).
+- `APP_VERSION`: deployed application version (SemVer or release tag such as `v1.2.3`). Container images set it at build time. When it is not set (a run from a git checkout with `run.bat` / `run.sh`), the app reads it from `git describe --tags`: the release tag when the checkout is on one (`v0.2.14`), otherwise how far ahead it is (`v0.2.14-3-gabc1234`), with `-dirty` for uncommitted changes. `APP_BUILD_SHA` likewise falls back to the checkout's commit.
 - `APP_BUILD_SHA`: source commit SHA for the deployed build.
 - `APP_BUILD_TIME`: UTC build timestamp for the deployed build.
 - `LOG_LEVEL`: application logging level.

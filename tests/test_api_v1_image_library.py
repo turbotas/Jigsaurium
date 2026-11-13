@@ -908,6 +908,55 @@ def test_admin_can_fetch_jigsaw_thumbnail_images(client, seeded_image_library_da
 
 
 @pytest.mark.functional
+def test_guest_thumbnail_list_hides_uploader_filename_and_comment(app, client, seeded_image_library_data):
+    _set_user_session(client, seeded_image_library_data["admin_user_id"])
+    upload_response = client.post(
+        "/api/v1/image-library/uploads",
+        headers=_csrf_headers(),
+        data={
+            "jigsaw_id": str(seeded_image_library_data["jigsaw_id"]),
+            "tag": "Box",
+            "comment": "Taken in my kitchen",
+            "files": [(BytesIO(png_bytes(b"guest-privacy")), "IMG_home_address.png", "image/png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 201
+
+    def entry_for_jigsaw(response):
+        assert response.status_code == 200
+        return next(
+            item for item in response.get_json()["data"] if item["jigsaw_id"] == seeded_image_library_data["jigsaw_id"]
+        )
+
+    signed_in_entry = entry_for_jigsaw(client.get("/api/v1/jigsaws/thumbnail-images"))
+    assert signed_in_entry["filename"] == "IMG_home_address.png"
+    assert signed_in_entry["user_comment"] == "Taken in my kitchen"
+
+    guest_entry = entry_for_jigsaw(app.test_client().get("/api/v1/jigsaws/thumbnail-images"))
+    for hidden_field in ("uploaded_by_user_id", "filename", "user_comment", "captured_at", "captured_at_source"):
+        assert hidden_field not in guest_entry
+    assert guest_entry["thumbnail_url"] == signed_in_entry["thumbnail_url"]
+    assert guest_entry["preview_url"] == signed_in_entry["preview_url"]
+    assert guest_entry["tag"] == signed_in_entry["tag"]
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    "filename, expected",
+    [
+        ("photo.png", "inline; filename=\"photo.png\"; filename*=UTF-8''photo.png"),
+        ("a\"b\r\nX-Evil: 1.png", "inline; filename=\"abX-Evil: 1.png\"; filename*=UTF-8''abX-Evil%3A%201.png"),
+        ("caf\u00e9.png", "inline; filename=\"caf_.png\"; filename*=UTF-8''caf%C3%A9.png"),
+        ("..\\../x.png", "inline; filename=\"....x.png\"; filename*=UTF-8''....x.png"),
+        ("", "inline; filename=\"image\"; filename*=UTF-8''image"),
+    ],
+)
+def test_content_disposition_cannot_be_broken_by_stored_filename(filename, expected):
+    assert routes._content_disposition("inline", filename, fallback="image") == expected
+
+
+@pytest.mark.functional
 def test_ai_usage_diagnostics_supports_page_and_page_size(app, client, seeded_image_library_data):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 

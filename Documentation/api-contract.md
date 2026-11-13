@@ -243,7 +243,7 @@
 - Auth payload user objects include a derived `capabilities` array to support SPA feature-gating without hardcoding role names.
 - Current role capability defaults are documented in `Documentation/domain-rules.md` under "Role Capability Catalogue (Current Default Mapping)".
 - v1 does not yet provide runtime role-capability management endpoints; mapping changes currently require code + deploy.
-- `PATCH /api/v1/auth/me` allows users to update their own `display_name` (username) and change password with `current_password` + `new_password`.
+- `PATCH /api/v1/auth/me` allows users to update their own `display_name` (username) and change password with `current_password` + `new_password`. A password change terminates the user's other active sessions (reason `password_changed`); the session making the change stays signed in.
 - `PATCH /api/v1/auth/me` rejects email changes.
 - Repeated failed login attempts for the same client/IP + email are rate-limited; blocked attempts return `429` and include `Retry-After`.
 - Login throttle counters are persisted in shared database state so rate limits remain consistent across multi-worker/multi-instance app deployments.
@@ -256,7 +256,7 @@
   - `email` must be valid format and `<= 255` chars.
   - `display_name` must be `<= 255` chars and must not contain control chars or angle brackets.
   - `POST /api/v1/users` requires `password` (12-256 chars, no control chars).
-  - `PATCH /api/v1/users/{id}` can reset a user's password via optional `password` field (same constraints).
+  - `PATCH /api/v1/users/{id}` can reset a user's password via optional `password` field (same constraints). A reset terminates all of that user's active sessions (except the administrator's own, when resetting their own password).
   - Login `password` must be non-empty, `<= 256` chars, and must not contain control chars.
   - Administrators cannot deactivate their own account (`PATCH /api/v1/users/{id}` returns `409` for self-deactivation).
   - `DELETE /api/v1/users/{id}` is administrator-only and permanently deletes one inactive user.
@@ -344,7 +344,8 @@
   - `GET /api/v1/jigsaws` is public for browse use; unauthenticated and non-admin callers exclude `retired` records.
   - When pagination params are provided, response includes standard list `meta` fields (`page`, `page_size`, `total_items`, `total_pages`).
   - `GET /api/v1/jigsaws/thumbnail-images` returns one preferred image per jigsaw for fast stock-list thumbnail rendering.
-  - `GET /api/v1/jigsaws/thumbnail-images` is public for browse use; unauthenticated and non-admin callers exclude thumbnails linked to retired jigsaws.
+  - `GET /api/v1/jigsaws/thumbnail-images` is public for browse use; unauthenticated and non-admin callers exclude thumbnails linked to retired jigsaws. For unauthenticated callers each entry omits `uploaded_by_user_id`, `filename`, `user_comment`, `captured_at` and `captured_at_source`.
+  - Image and backup downloads send `Content-Disposition` with a sanitised quoted `filename` (no quotes, backslashes, slashes or control characters; non-ASCII as `_`) plus the full name as RFC 5987 `filename*`.
   - `GET /api/v1/images/{image_id}/content?variant=thumbnail|preview` is available to unauthenticated callers only for non-retired jigsaw-linked images. Guests receive only generated (re-encoded) derivatives; if a derivative could not be generated they get `404`, never the original bytes.
   - `GET /api/v1/images/{image_id}/content` (`variant=original`) remains authenticated-only.
   - `POST /api/v1/jigsaws` requires `jigsaw.create` capability and allows empty values for all jigsaw fields; omitted/blank `status` defaults to `available`.

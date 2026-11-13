@@ -352,3 +352,15 @@
 - Why: interpolating `${{ inputs.* }}` straight into a `run:` script lets a crafted value run shell commands in the job.
 - Decision: `.dockerignore` is an allowlist (app code, migrations, requirements, runtime config files, the entrypoint and Python maintenance scripts, licences, and the optional local model cache). CI fails if the image holds excluded files or cannot serve the home page.
 - Why: `COPY . .` otherwise shipped docs, tests, local agent/session state (`ijfw/`) and any untracked files into images built from a working copy.
+
+## 2026-11-13 - Low-Severity App Fixes From the Security Review
+
+- Decision: the public thumbnail list omits uploader ID, filename, comment and capture time for callers who are not signed in.
+- Why: guests only need image links to draw thumbnails; filenames and comments can carry personal details.
+- Decision: a password change (own or administrator reset) terminates the user's other active sessions.
+- Why: changing a password is how a user locks out someone who has their old one.
+- Decision: build `Content-Disposition` with a sanitised ASCII `filename` plus RFC 5987 `filename*`.
+- Why: a stored filename containing quotes or line breaks could otherwise alter the response header.
+- Decision: when `APP_VERSION` / `APP_BUILD_SHA` are not supplied, read them from git (`git describe --tags --match "v*" --dirty`, `git rev-parse HEAD`).
+- Why: dev runs from a checkout with `run.bat` and showed the placeholder `0.0.0-dev`. Container images still get both as build arguments and have no `.git`, so they are unaffected.
+- STFD token replay, lifetime and login CSRF are tracked separately in GitHub issue #72, because the fixes need changes in STFD too.

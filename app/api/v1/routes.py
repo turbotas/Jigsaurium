@@ -168,10 +168,15 @@ IP_BLOCK_REASON_MAX_LENGTH = 255
 IP_BLOCK_NOTES_MAX_LENGTH = 4000
 IP_BLOCK_MAX_DURATION_HOURS = 24 * 30
 STFD_JWT_ALGORITHM = "HS256"
+# Image metadata left out of the public thumbnail list for callers who are not signed in.
+GUEST_HIDDEN_IMAGE_FIELDS = frozenset(
+    {"uploaded_by_user_id", "filename", "user_comment", "captured_at", "captured_at_source"}
+)
 SESSION_IDENTIFIER_KEY = "session_identifier"
 SESSION_TERMINATION_REASON_LOGOUT = "logout"
 SESSION_TERMINATION_REASON_EXPIRED = "expired"
 SESSION_TERMINATION_REASON_ADMIN_TERMINATED = "admin_terminated"
+SESSION_TERMINATION_REASON_PASSWORD_CHANGED = "password_changed"
 SESSION_ACTIVITY_TOUCH_INTERVAL_SECONDS = 30
 DATABASE_BACKUP_STATUS_QUEUED = "queued"
 DATABASE_BACKUP_STATUS_RUNNING = "running"
@@ -1040,6 +1045,19 @@ def _normalize_image_content_version(value):
     except (TypeError, ValueError):
         return 1
     return normalized if normalized > 0 else 1
+
+
+def _content_disposition(disposition, filename, *, fallback="download"):
+    """Build a Content-Disposition value that a stored filename cannot break out of.
+
+    The quoted ASCII form drops quotes, backslashes, slashes and control characters and replaces
+    non-ASCII with "_"; the RFC 5987 ``filename*`` form carries the full UTF-8 name percent-encoded.
+    """
+    name = "".join(ch for ch in str(filename or "") if ch.isprintable() and ch not in '"\\/')
+    name = name.strip() or fallback
+    ascii_name = "".join(ch if 32 <= ord(ch) < 127 else "_" for ch in name)
+    encoded_name = urllib.parse.quote(name, safe="")
+    return f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
 
 
 def _build_image_urls(image_id, content_version):
@@ -3268,6 +3286,24 @@ def _terminate_user_session_record(db_session, user_session, *, reason, terminat
     return True
 
 
+def _terminate_other_user_sessions(db_session, user_id, *, keep_session_identifier=None, terminated_by_user_id=None):
+    """End a user's active sessions after a password change, except the one making the change."""
+    stmt = select(UserSession).where(UserSession.user_id == user_id, UserSession.terminated_at.is_(None))
+    keep = str(keep_session_identifier or "").strip()
+    if keep:
+        stmt = stmt.where(UserSession.session_identifier != keep)
+    terminated = 0
+    for user_session in db_session.execute(stmt).scalars().all():
+        if _terminate_user_session_record(
+            db_session,
+            user_session,
+            reason=SESSION_TERMINATION_REASON_PASSWORD_CHANGED,
+            terminated_by_user_id=terminated_by_user_id,
+        ):
+            terminated += 1
+    return terminated
+
+
 def _maybe_create_diary_entry_from_image(*, db_session, jigsaw, image, trigger, created_by_user_id):
     if jigsaw is None or image is None:
         return None
@@ -3651,7 +3687,7 @@ def _build_image_content_response(image, variant):
     response.set_etag(f'img-{int(image.id)}-{variant}-v{_normalize_image_content_version(getattr(image, "content_version", 1))}')
     response.make_conditional(request)
     if image.filename and variant == IMAGE_VARIANT_ORIGINAL:
-        response.headers["Content-Disposition"] = f'inline; filename="{image.filename}"'
+        response.headers["Content-Disposition"] = _content_disposition("inline", image.filename, fallback="image")
     return response
 
 
@@ -5137,11 +5173,20 @@ def update_auth_me():
         updated_fields.append("password")
 
     db_session = get_session()
+    audit_payload = {"updated_fields": sorted(updated_fields)}
+    if "password" in updated_fields:
+        # A changed password must lock out anyone else signed in as this user.
+        audit_payload["other_sessions_terminated"] = _terminate_other_user_sessions(
+            db_session,
+            g.current_user.id,
+            keep_session_identifier=session.get(SESSION_IDENTIFIER_KEY),
+            terminated_by_user_id=g.current_user.id,
+        )
     _record_audit_event(
         action="auth.profile_updated",
         entity_type="user",
         entity_id=g.current_user.id,
-        payload={"updated_fields": sorted(updated_fields)},
+        payload=audit_payload,
     )
     db_session.commit()
 
@@ -5497,7 +5542,7 @@ def download_database_backup(backup_id):
     db_session.commit()
 
     response = current_app.response_class(backup_content, mimetype=_resolve_database_backup_mime_type(backup_record.filename))
-    response.headers["Content-Disposition"] = f'attachment; filename="{backup_record.filename}"'
+    response.headers["Content-Disposition"] = _content_disposition("attachment", backup_record.filename, fallback="backup.sql")
     response.headers["Content-Length"] = str(len(backup_content))
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -5765,6 +5810,17 @@ def update_user(user_id):
             return error
         user.set_password(password)
 
+    sessions_terminated = None
+    if "password" in payload:
+        # An administrator password reset signs the user out everywhere (except the
+        # administrator's own session, if they reset their own password).
+        sessions_terminated = _terminate_other_user_sessions(
+            db_session,
+            user.id,
+            keep_session_identifier=session.get(SESSION_IDENTIFIER_KEY) if user.id == g.current_user.id else None,
+            terminated_by_user_id=g.current_user.id,
+        )
+
     if updated_roles is None:
         updated_roles = db_session.execute(
             select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)
@@ -5774,7 +5830,10 @@ def update_user(user_id):
         action="user.updated",
         entity_type="user",
         entity_id=user.id,
-        payload={"updated_fields": sorted(field for field in payload if field in updatable_fields)},
+        payload={
+            "updated_fields": sorted(field for field in payload if field in updatable_fields),
+            **({"sessions_terminated": sessions_terminated} if sessions_terminated is not None else {}),
+        },
     )
     db_session.commit()
 
@@ -6020,6 +6079,12 @@ def list_jigsaw_thumbnail_images():
             preferred_by_jigsaw_id[jigsaw_id] = image
 
     payload = list(preferred_by_jigsaw_id.values())
+    if getattr(g, "current_user", None) is None:
+        # Guests only need the image links; uploader, filename, comment and capture time stay private.
+        payload = [
+            {key: value for key, value in image.items() if key not in GUEST_HIDDEN_IMAGE_FIELDS}
+            for image in payload
+        ]
     return _success_response(payload)
 
 
