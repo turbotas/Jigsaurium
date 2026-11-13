@@ -33,26 +33,26 @@ Before making changes, read:
 - Enforce role checks in backend APIs, not only in the UI.
 - Add migrations for every schema change, including downgrade paths.
 - Preserve audit logging for administrative data mutations.
-- Respect proxy/header policy (RFC7239 `Forwarded` + trusted fallback headers).
+- Respect the proxy/header policy in `Documentation/operations-and-security.md`: trust exactly one forwarding header family, chosen by `TRUSTED_PROXY_HEADER` (`X-Forwarded-*` by default, RFC7239 `Forwarded` opt-in), and only from `TRUSTED_PROXY_CIDRS`. Never read both families or prefer whichever is present.
 
 ## API and Domain Guardrails
 
 - Use versioned endpoints under `/api/v1`.
 - Keep response/error payloads aligned with `Documentation/api-contract.md`.
 - Keep jigsaw and loan state transitions aligned with `Documentation/domain-rules.md`.
-- Do not broaden permissions for `borrower` without updating specs.
+- Do not broaden permissions for `member` (or the legacy `borrower` role, which has the same capabilities) without updating specs.
 
 ## Security and Ops Guardrails
 
 - Do not hardcode secrets.
-- Use environment variables for runtime configuration.
+- Use environment variables for runtime configuration, and add every new setting to the templates in `environments/` (`dev.env.example`, `test.env.example`, `prod.env.example`) and to `Documentation/operations-and-security.md`.
 - Keep structured logging fields consistent with `Documentation/operations-and-security.md`.
-- Assume reverse-proxy deployment in all environments.
+- Assume reverse-proxy deployment in all environments, dev included: by default (`REQUIRE_TRUSTED_PROXY=1`) the app refuses connections that do not come from a trusted proxy, and it serves secure cookies and HSTS unless `ALLOW_INSECURE_HTTP=1` (refused in test and prod).
 
 ## Workflow Expectations
 
 - Make small, reviewable changes.
-- Before claiming missing dependencies, verify interpreter path and prefer explicit virtualenv commands for tests (`.venv\\Scripts\\python.exe -m pytest` on Windows, `.venv/bin/python -m pytest` on Linux/macOS).
+- Before claiming missing dependencies, verify interpreter path and prefer explicit virtualenv commands for tests (`.venv\Scripts\python.exe -m pytest` on Windows, `.venv/bin/python -m pytest` on Linux/macOS).
 - Add or update tests for behavior changes.
 - Keep naming clear and consistent with existing code.
 - Record major architectural changes in `Documentation/decisions.md`.
