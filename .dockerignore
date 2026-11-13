@@ -1,22 +1,29 @@
-.git
-.github
-.venv
-.ijfw
-.wayland
-.wayland-core
-__pycache__
+# Allowlist: the image gets only what the app needs to run. Everything else (docs, tests, git
+# history, local settings such as .env, virtualenvs, editor/agent state such as ijfw/ and .ijfw/,
+# deploy tooling, build scripts) stays out, including on local builds from a working copy.
+*
+
+!app/
+!migrations/
+!requirements/
+!alembic.ini
+!config.py
+!gunicorn.conf.py
+!run.py
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+
+# Container entrypoint and the Python maintenance scripts run with `docker exec`.
+!scripts/docker_entrypoint.sh
+!scripts/*.py
+
+# Optional local copy of the embedding model (the build downloads it when absent).
+!.hf-models/
+
+# Never ship caches or local state, even inside the allowed folders.
 **/__pycache__
-*.pyc
-*.pyo
-*.pyd
-.pytest_cache
-.mypy_cache
-.coverage
-htmlcov
-node_modules
-instance
-environments/*.local
-.env
-tests
-Documentation
-*.log
+**/*.py[cod]
+**/.pytest_cache
+**/*.log
+**/*.local
+**/.env
