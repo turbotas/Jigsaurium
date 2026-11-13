@@ -1673,6 +1673,60 @@ def test_auth_login_rate_limits_email_across_many_client_ips(app, client, seeded
 
 
 @pytest.mark.functional
+def test_auth_login_block_behind_proxy_lands_on_client_not_proxy(app, client, seeded_identity_data):
+    # Deployed shape: every request arrives from the reverse proxy, which names the real client.
+    # If the block were keyed on the proxy address, one attacker would lock out every visitor.
+    proxy_ip = "192.168.100.12"
+    app.config["TRUSTED_PROXY_CIDRS"] = [f"{proxy_ip}/32"]
+
+    def via_proxy(client_ip, method="post", path="/api/v1/auth/login"):
+        kwargs = {"headers": {"X-Forwarded-For": client_ip}, "environ_overrides": {"REMOTE_ADDR": proxy_ip}}
+        if method == "post":
+            kwargs["json"] = {"email": "admin@example.com", "password": "WrongPassword999!"}
+        return getattr(client, method)(path, **kwargs)
+
+    attacker_ip = "203.0.113.7"
+    bystander_ip = "198.51.100.9"
+    for _ in range(10):
+        assert via_proxy(attacker_ip).status_code == 401
+    assert via_proxy(attacker_ip).status_code == 429
+    assert via_proxy(attacker_ip, method="get", path="/").status_code == 429
+
+    with app.app_context():
+        blocked = {row.ip_address for row in get_session().query(BlockedIp).all()}
+    assert blocked == {attacker_ip}
+
+    # Another visitor coming through the same proxy is unaffected.
+    assert via_proxy(bystander_ip, method="get", path="/").status_code == 200
+    assert via_proxy(bystander_ip).status_code == 401
+
+
+@pytest.mark.functional
+def test_auth_login_block_cannot_be_dodged_with_spoofed_forwarded_entries(app, client, seeded_identity_data):
+    # The proxy appends the address it really saw to whatever X-Forwarded-For the client sent.
+    # A client inventing a new leading entry on every attempt must still be blocked by its real one.
+    proxy_ip = "192.168.100.12"
+    app.config["TRUSTED_PROXY_CIDRS"] = [f"{proxy_ip}/32"]
+    real_ip = "198.51.100.50"
+
+    def attempt(index):
+        return client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@example.com", "password": "WrongPassword999!"},
+            headers={"X-Forwarded-For": f"203.0.113.{index + 1}, {real_ip}"},
+            environ_overrides={"REMOTE_ADDR": proxy_ip},
+        )
+
+    for index in range(10):
+        assert attempt(index).status_code == 401
+    assert attempt(10).status_code == 429
+
+    with app.app_context():
+        blocked = {row.ip_address for row in get_session().query(BlockedIp).all()}
+    assert blocked == {real_ip}
+
+
+@pytest.mark.functional
 def test_auth_login_successful_login_clears_email_wide_counter(app, client, seeded_identity_data):
     for _ in range(3):
         response = client.post(
