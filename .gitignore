@@ -62,9 +62,5 @@ Thumbs.db
 # Frontend dependencies
 node_modules/
 
-# Wayland coding-agent local state
-.wayland/
-.wayland-core/
-
 # Local model cache artifacts
 .hf-models/
