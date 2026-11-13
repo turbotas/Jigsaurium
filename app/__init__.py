@@ -6,6 +6,7 @@ import urllib.parse
 from flask import Flask, g, request
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from app.build_info import apply_git_build_info
 from app.db import get_session, init_db
 from app.dev_server import install_forwarded_aware_werkzeug_logging
 from app.image_embeddings import warm_embedding_runtime
@@ -248,6 +249,13 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("APP_VERSION", "0.0.0-dev")
     app.config.setdefault("APP_BUILD_SHA", "local")
     app.config.setdefault("APP_BUILD_TIME", "")
+    # A run from a git checkout (run.bat / run.sh) has no build arguments, so read the version
+    # from git. Off by default under TESTING to keep test start-up fast.
+    version_from_git = app.config.get("APP_VERSION_FROM_GIT")
+    if version_from_git is None:
+        version_from_git = not bool(app.config.get("TESTING", False))
+    if version_from_git:
+        apply_git_build_info(app)
     app.config.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     app.config.setdefault("LOG_LEVEL", "INFO")
     app.config.setdefault("CANONICAL_HOST", "localhost")

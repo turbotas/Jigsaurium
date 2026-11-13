@@ -343,3 +343,15 @@
 - Why: the Service Health tab is read by service managers; the technical detail is for whoever they pass it to. A faked host or scheme only changes the sender's own response.
 - Decision: secure cookies and HSTS are on in every environment, dev included, instead of depending on `APP_ENV`. `ALLOW_INSECURE_HTTP=1` turns both off for running the code locally on plain `http://`; startup refuses it in test/prod.
 - Why: dev is reached through the public proxy over HTTPS like test and prod, so leaving its cookies insecure had no benefit. Switching dev to `APP_ENV=test` would also have changed its banner, backup labels, reloader and caching.
+
+## 2026-11-13 - Low-Severity App Fixes From the Security Review
+
+- Decision: the public thumbnail list omits uploader ID, filename, comment and capture time for callers who are not signed in.
+- Why: guests only need image links to draw thumbnails; filenames and comments can carry personal details.
+- Decision: a password change (own or administrator reset) terminates the user's other active sessions.
+- Why: changing a password is how a user locks out someone who has their old one.
+- Decision: build `Content-Disposition` with a sanitised ASCII `filename` plus RFC 5987 `filename*`.
+- Why: a stored filename containing quotes or line breaks could otherwise alter the response header.
+- Decision: when `APP_VERSION` / `APP_BUILD_SHA` are not supplied, read them from git (`git describe --tags --match "v*" --dirty`, `git rev-parse HEAD`).
+- Why: dev runs from a checkout with `run.bat` and showed the placeholder `0.0.0-dev`. Container images still get both as build arguments and have no `.git`, so they are unaffected.
+- STFD token replay, lifetime and login CSRF are tracked separately in GitHub issue #72, because the fixes need changes in STFD too.

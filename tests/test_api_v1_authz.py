@@ -2208,6 +2208,59 @@ def test_auth_me_patch_updates_password(client, seeded_identity_data):
     assert new_login_response.status_code == 200
 
 
+def _login_borrower(client, password="BorrowerPassword123!"):
+    response = client.post("/api/v1/auth/login", json={"email": "borrower@example.com", "password": password})
+    assert response.status_code == 200
+    return response.get_json()["data"]["csrf_token"]
+
+
+@pytest.mark.functional
+def test_password_change_signs_out_other_sessions_but_keeps_current(app, client, seeded_identity_data):
+    other_device = app.test_client()
+    _login_borrower(other_device)
+    csrf_token = _login_borrower(client)
+
+    update_response = client.patch(
+        "/api/v1/auth/me",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"current_password": "BorrowerPassword123!", "new_password": "BorrowerPassword456!"},
+    )
+    assert update_response.status_code == 200
+
+    assert client.get("/api/v1/auth/me").status_code == 200
+    assert other_device.get("/api/v1/auth/me").status_code == 401
+
+
+@pytest.mark.functional
+def test_display_name_change_keeps_other_sessions(app, client, seeded_identity_data):
+    other_device = app.test_client()
+    _login_borrower(other_device)
+    csrf_token = _login_borrower(client)
+
+    update_response = client.patch(
+        "/api/v1/auth/me", headers={"X-CSRF-Token": csrf_token}, json={"display_name": "Renamed"}
+    )
+    assert update_response.status_code == 200
+
+    assert other_device.get("/api/v1/auth/me").status_code == 200
+
+
+@pytest.mark.functional
+def test_admin_password_reset_signs_user_out_everywhere(app, client, seeded_identity_data):
+    borrower_device = app.test_client()
+    _login_borrower(borrower_device)
+    with app.app_context():
+        borrower_user_id = get_session().query(User).filter_by(email="borrower@example.com").one().id
+
+    _set_user_session(client, seeded_identity_data["admin_user_id"])
+    response = client.patch(
+        f"/api/v1/users/{borrower_user_id}", headers=_csrf_headers(), json={"password": "BorrowerPassword789!"}
+    )
+    assert response.status_code == 200
+
+    assert borrower_device.get("/api/v1/auth/me").status_code == 401
+
+
 @pytest.mark.functional
 def test_auth_me_patch_rejects_email_change(client, seeded_identity_data):
     login_response = client.post(
