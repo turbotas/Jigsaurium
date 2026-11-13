@@ -4888,6 +4888,10 @@ def get_proxy_diagnostics():
         trusted_proxy_hops=current_app.config.get("TRUSTED_PROXY_HOPS"),
         trusted_proxy_header=current_app.config.get("TRUSTED_PROXY_HEADER"),
         probe_host=probe_host,
+        require_trusted_proxy=bool(current_app.config.get("REQUIRE_TRUSTED_PROXY", True)),
+        app_env=current_app.config.get("APP_ENV"),
+        session_cookie_secure=bool(current_app.config.get("SESSION_COOKIE_SECURE", False)),
+        hsts_max_age_seconds=current_app.config.get("HSTS_MAX_AGE_SECONDS", 0),
     )
     payload["resolved_scheme"] = getattr(g, "request_scheme_resolved", request.scheme)
     payload["resolved_host"] = getattr(g, "request_host_resolved", None)

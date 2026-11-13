@@ -181,10 +181,15 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
 
         page.click("#admin-tab-health")
         page.wait_for_selector("#service-health-section:not([hidden])")
-        # AI and embeddings are disabled in the test config, so both probes report "Disabled" and overall is healthy.
-        page.wait_for_selector("#service-health-overall.app-health-tag--ok")
-        assert page.locator("[data-health-probe='ai'] [data-health-field='status']").text_content() == "Disabled"
+        # AI and embeddings are disabled in the test config, so both probes report "Disabled".
+        page.wait_for_selector("[data-health-probe='ai'] [data-health-field='status']:has-text('Disabled')")
         assert page.locator("[data-health-probe='image_embeddings'] [data-health-field='status']").text_content() == "Disabled"
+        # This test server has no trusted proxy configured, so the visitor address check reports a
+        # problem and the overall status follows it.
+        page.wait_for_selector("#proxy-diagnostics-verdict:has-text('Problem')")
+        assert page.locator("#service-health-overall").text_content() == "Problem"
+        assert "Direct connections to the app are allowed" in page.locator("#proxy-diagnostics-problems").text_content()
+        assert page.locator("#proxy-diagnostics-report").text_content().startswith("Jigsaurium reverse proxy check")
 
         page.click("#admin-tab-sessions")
         page.wait_for_selector("#sessions-section:not([hidden])")

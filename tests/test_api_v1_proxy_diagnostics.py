@@ -18,7 +18,15 @@ HOST = "www.example.test"
 PROBE_FORWARDED = f'for=192.0.2.1;proto=http;host="{HOST}:1"'
 
 
-def _analyse(headers, *, header_mode="x-forwarded", cidrs=(f"{PROXY_IP}/32",), remote=PROXY_IP):
+TYPICAL_PROXY_HEADERS = {
+    "Forwarded": PROBE_FORWARDED,
+    "X-Forwarded-For": f"192.0.2.2, {CLIENT_IP}",
+    "X-Forwarded-Proto": "http",
+    "X-Forwarded-Host": f"{HOST}:1",
+}
+
+
+def _analyse(headers, *, header_mode="x-forwarded", cidrs=(f"{PROXY_IP}/32",), remote=PROXY_IP, **settings):
     return analyse_proxy_header_probe(
         remote_addr=remote,
         headers={"X-Jigsaurium-Proxy-Probe": "1", **headers},
@@ -26,7 +34,12 @@ def _analyse(headers, *, header_mode="x-forwarded", cidrs=(f"{PROXY_IP}/32",), r
         trusted_proxy_hops=None,
         trusted_proxy_header=header_mode,
         probe_host=HOST,
+        **settings,
     )
+
+
+def _check(result, check_id):
+    return next(check for check in result["checks"] if check["id"] == check_id)
 
 
 @pytest.mark.functional
@@ -63,7 +76,10 @@ def test_forwarded_mode_is_unsafe_when_proxy_passes_forwarded_through():
     assert result["verdict"] == "unsafe"
     assert result["recommended_trusted_proxy_header"] == "x-forwarded"
     assert result["resolved_client_ip"] == "192.0.2.1"
-    assert any("set TRUSTED_PROXY_HEADER=x-forwarded" in message for message in result["messages"])
+    check = _check(result, "visitor_address_trusted")
+    assert check["passed"] is False
+    assert "Set TRUSTED_PROXY_HEADER=x-forwarded" in check["detail"]
+    assert result["messages"] == ["Visitors could fake their address."]
 
 
 @pytest.mark.functional
@@ -88,7 +104,7 @@ def test_no_trustworthy_client_ip_header_is_unsafe():
 
 
 @pytest.mark.functional
-def test_passed_through_host_and_proto_are_a_warning_in_x_forwarded_mode():
+def test_passed_through_host_and_proto_do_not_affect_the_verdict():
     result = _analyse(
         {
             "X-Forwarded-For": CLIENT_IP,
@@ -99,8 +115,10 @@ def test_passed_through_host_and_proto_are_a_warning_in_x_forwarded_mode():
 
     assert result["findings"]["x_forwarded_for"] == "overwritten"
     assert result["findings"]["forwarded"] == "stripped"
-    assert result["verdict"] == "warning"
-    assert any("X-Forwarded-Host or X-Forwarded-Proto" in message for message in result["messages"])
+    assert result["findings"]["x_forwarded_proto"] == "passed_through"
+    assert result["findings"]["x_forwarded_host"] == "passed_through"
+    assert result["verdict"] == "ok"
+    assert result["messages"] == []
 
 
 @pytest.mark.functional
@@ -109,7 +127,80 @@ def test_untrusted_remote_address_is_reported():
 
     assert result["remote_is_trusted_proxy"] is False
     assert result["resolved_client_ip"] == "172.18.0.1"
-    assert any("not in TRUSTED_PROXY_CIDRS" in message for message in result["messages"])
+    assert result["verdict"] == "unsafe"
+    check = _check(result, "arrived_via_proxy")
+    assert check["passed"] is False
+    assert "not in TRUSTED_PROXY_CIDRS" in check["detail"]
+
+
+@pytest.mark.functional
+def test_current_test_environment_shape_is_healthy():
+    # Nginx Proxy Manager: appends X-Forwarded-For, passes Forwarded/Host/Proto through.
+    result = _analyse(TYPICAL_PROXY_HEADERS, cidrs=("192.168.51.12/32", "172.16.0.0/12"), remote="172.16.4.1")
+
+    assert result["verdict"] == "ok"
+    assert all(check["passed"] is True for check in result["checks"])
+    assert [check["id"] for check in result["checks"]] == [
+        "proxy_only_access",
+        "arrived_via_proxy",
+        "visitor_address_trusted",
+        "proxy_range_excludes_visitors",
+        "secure_cookies",
+        "hsts",
+    ]
+
+
+@pytest.mark.functional
+def test_proxy_only_access_switched_off_is_a_problem():
+    result = _analyse(TYPICAL_PROXY_HEADERS, require_trusted_proxy=False)
+
+    assert result["verdict"] == "unsafe"
+    assert _check(result, "proxy_only_access")["passed"] is False
+
+
+@pytest.mark.functional
+def test_empty_trusted_proxy_range_is_a_problem():
+    result = _analyse(TYPICAL_PROXY_HEADERS, cidrs=())
+
+    assert result["verdict"] == "unsafe"
+    assert _check(result, "proxy_only_access")["passed"] is False
+    assert _check(result, "arrived_via_proxy")["passed"] is False
+
+
+@pytest.mark.functional
+def test_trusted_range_covering_visitors_is_a_problem():
+    result = _analyse(TYPICAL_PROXY_HEADERS, cidrs=(f"{PROXY_IP}/32", "203.0.113.0/24"))
+
+    assert result["verdict"] == "unsafe"
+    # The real visitor address is skipped as a "proxy", so the fake probe value wins.
+    assert result["resolved_client_ip"] == "192.0.2.2"
+    check = _check(result, "proxy_range_excludes_visitors")
+    assert check["passed"] is False
+    assert "fake value" in check["detail"]
+
+
+@pytest.mark.functional
+def test_range_check_is_skipped_when_visitor_address_cannot_be_trusted():
+    result = _analyse({"X-Forwarded-For": "192.0.2.2"})
+
+    assert _check(result, "proxy_range_excludes_visitors")["passed"] is None
+    assert result["verdict"] == "unsafe"
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    "settings, failing",
+    [
+        ({"app_env": "dev"}, {"secure_cookies", "hsts"}),
+        ({"session_cookie_secure": False}, {"secure_cookies"}),
+        ({"hsts_max_age_seconds": 0}, {"hsts"}),
+    ],
+)
+def test_insecure_app_settings_are_a_problem(settings, failing):
+    result = _analyse(TYPICAL_PROXY_HEADERS, **settings)
+
+    assert result["verdict"] == "unsafe"
+    assert {check["id"] for check in result["checks"] if check["passed"] is False} == failing
 
 
 @pytest.mark.functional
@@ -165,6 +256,7 @@ def test_proxy_diagnostics_requires_administrator(client, users):
 @pytest.mark.functional
 def test_proxy_diagnostics_endpoint_reports_probe_findings(app, client, users):
     app.config["TRUSTED_PROXY_CIDRS"] = [f"{PROXY_IP}/32"]
+    app.config["SESSION_COOKIE_SECURE"] = True
     _login(client, users["admin"])
 
     response = client.get(
