@@ -376,7 +376,7 @@ def analyse_proxy_header_probe(
     trusted_proxy_header,
     probe_host,
     require_trusted_proxy=True,
-    app_env="prod",
+    allow_insecure_http=False,
     session_cookie_secure=True,
     hsts_max_age_seconds=31536000,
 ):
@@ -433,9 +433,8 @@ def analyse_proxy_header_probe(
     )
 
     trusted_proxy_list = [cidr for cidr in (trusted_proxy_cidrs or []) if str(cidr).strip()]
-    environment = str(app_env or "").strip().lower()
     hsts_seconds = int(hsts_max_age_seconds or 0)
-    deployed = environment in {"test", "prod"}
+    insecure_http = bool(allow_insecure_http)
     checks = []
 
     def add_check(check_id, passed, problem, detail):
@@ -509,19 +508,19 @@ def analyse_proxy_header_probe(
         )
     add_check(
         "secure_cookies",
-        deployed and bool(session_cookie_secure),
+        bool(session_cookie_secure),
         "Sign-in cookies could be sent over an unencrypted connection.",
-        "APP_ENV={}, secure session cookies {}. Deployed environments need APP_ENV=test or prod.".format(
-            environment or "(unset)", "on" if session_cookie_secure else "off"
+        "Secure session cookies {} (ALLOW_INSECURE_HTTP={}). Remove ALLOW_INSECURE_HTTP from the "
+        "environment's settings: it is only for running the code locally on plain http://.".format(
+            "on" if session_cookie_secure else "off", 1 if insecure_http else 0
         ),
     )
     add_check(
         "hsts",
-        deployed and hsts_seconds > 0,
+        not insecure_http and hsts_seconds > 0,
         "Browsers are not told to always use an encrypted connection (HSTS is off).",
-        "APP_ENV={}, HSTS_MAX_AGE_SECONDS={}. HSTS is only sent in test/prod with a positive max-age.".format(
-            environment or "(unset)", hsts_seconds
-        ),
+        "ALLOW_INSECURE_HTTP={}, HSTS_MAX_AGE_SECONDS={}. HSTS is sent on HTTPS responses unless "
+        "ALLOW_INSECURE_HTTP is set; it needs a positive max-age.".format(1 if insecure_http else 0, hsts_seconds),
     )
 
     if not probe_sent:

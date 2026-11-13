@@ -93,11 +93,15 @@ class Config:
     ) or 120
     PERMANENT_SESSION_LIFETIME = timedelta(minutes=SESSION_IDLE_TIMEOUT_MINUTES)
     SESSION_REFRESH_EACH_REQUEST = True
-    SESSION_COOKIE_SECURE = APP_ENV != "dev"
-    REMEMBER_COOKIE_SECURE = APP_ENV != "dev"
+    # Every environment, dev included, is served over HTTPS through the proxy, so cookies are
+    # secure and HSTS is sent everywhere. ALLOW_INSECURE_HTTP=1 is only for running the code
+    # locally on plain http:// (it is refused in test/prod).
+    ALLOW_INSECURE_HTTP = _parse_bool(os.getenv("ALLOW_INSECURE_HTTP"), default=False)
+    SESSION_COOKIE_SECURE = not ALLOW_INSECURE_HTTP
+    REMEMBER_COOKIE_SECURE = not ALLOW_INSECURE_HTTP
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
-    PREFERRED_URL_SCHEME = "https" if APP_ENV != "dev" else "http"
+    PREFERRED_URL_SCHEME = "http" if ALLOW_INSECURE_HTTP else "https"
     HSTS_MAX_AGE_SECONDS = _parse_optional_int(
         os.getenv("HSTS_MAX_AGE_SECONDS"),
         env_name="HSTS_MAX_AGE_SECONDS",

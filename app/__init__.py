@@ -154,6 +154,9 @@ def _validate_runtime_config_on_startup(app):
     if hsts_max_age_seconds < 0:
         errors.append("HSTS_MAX_AGE_SECONDS must be >= 0.")
 
+    if app_env in {"test", "prod"} and bool(app.config.get("ALLOW_INSECURE_HTTP", False)):
+        errors.append("ALLOW_INSECURE_HTTP must not be set in test/prod.")
+
     if errors:
         detail = "\n - ".join(["Configuration validation failed:", *errors])
         raise RuntimeError(detail)
@@ -470,9 +473,8 @@ def create_app(config_class="config.Config"):
             f"default-src 'self'; {csp_script_src}; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
         )
 
-        app_env = str(app.config.get("APP_ENV", "dev") or "dev").strip().lower()
         request_scheme_resolved = str(getattr(g, "request_scheme_resolved", request.scheme) or request.scheme).strip().lower()
-        if app_env in {"test", "prod"} and request_scheme_resolved == "https":
+        if not bool(app.config.get("ALLOW_INSECURE_HTTP", False)) and request_scheme_resolved == "https":
             hsts_parts = [f"max-age={int(app.config.get('HSTS_MAX_AGE_SECONDS', 31536000) or 0)}"]
             if bool(app.config.get("HSTS_INCLUDE_SUBDOMAINS", True)):
                 hsts_parts.append("includeSubDomains")

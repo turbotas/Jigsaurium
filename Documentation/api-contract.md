@@ -126,8 +126,8 @@
       - `arrived_via_proxy`: the probe's socket peer is in `TRUSTED_PROXY_CIDRS`.
       - `visitor_address_trusted`: the proxy sets the client-IP header family that `TRUSTED_PROXY_HEADER` uses.
       - `proxy_range_excludes_visitors`: the resolved visitor address is neither inside `TRUSTED_PROXY_CIDRS` nor one of the probe's fake values (a visitor inside the range is skipped as a proxy, so the fake value wins). `null` unless the two checks above pass.
-      - `secure_cookies`: `APP_ENV` is `test` or `prod` and `SESSION_COOKIE_SECURE` is on.
-      - `hsts`: `APP_ENV` is `test` or `prod` and `HSTS_MAX_AGE_SECONDS` is positive.
+      - `secure_cookies`: `SESSION_COOKIE_SECURE` is on (it is, unless `ALLOW_INSECURE_HTTP=1`).
+      - `hsts`: `ALLOW_INSECURE_HTTP` is off and `HSTS_MAX_AGE_SECONDS` is positive.
     - `verdict`: `ok` (every check passed), `unsafe` (any check failed), or `unknown` (no probe sent)
     - `messages`: the `problem` text of each failed check
     - `X-Forwarded-Host`/`X-Forwarded-Proto` that pass through from the client are reported in `findings` only and do not change the verdict: a faked value only changes that client's own response (canonical-host check, whether HSTS is added).
