@@ -44,7 +44,8 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `LOG_LEVEL`: application logging level.
 - `CANONICAL_HOST`: expected public host per environment.
 - `CANONICAL_HOST_ENFORCEMENT`: host-policy mode (`strict` to reject non-canonical hosts with HTTP 421, `off` to disable app-layer host checks).
-- `HSTS_MAX_AGE_SECONDS`: HSTS `max-age` value for HTTPS responses in test/prod (default `31536000`).
+- `ALLOW_INSECURE_HTTP`: default `0`. Secure cookies and HSTS are on in every environment, dev included, because every environment is served over HTTPS through the proxy. Set `1` only to run the code locally on plain `http://` with no proxy: cookies lose the `Secure` flag and HSTS is not sent. Startup refuses `1` in test/prod, and the Service Health card shows Problem while it is set.
+- `HSTS_MAX_AGE_SECONDS`: HSTS `max-age` value for HTTPS responses (default `31536000`).
 - `HSTS_INCLUDE_SUBDOMAINS`: include `includeSubDomains` in HSTS header when truthy (default `1`).
 - `HSTS_PRELOAD`: include `preload` token in HSTS header when truthy (default `0`).
 - `MAX_CONTENT_LENGTH_BYTES`: optional hard cap for inbound request payload size (defaults to `33554432` / 32 MiB).
@@ -116,7 +117,7 @@ Host enforcement policy:
   - `forwarded`: read RFC7239 `Forwarded` (`for`, `proto`, `host`); ignore `X-Forwarded-*`.
 - Why one family only: most proxies set one family and pass the other through from the client unchanged. Reading both (or preferring `Forwarded` when present) lets any client choose its own IP, host and scheme, which defeats login throttling and IP bans and lets a client get someone else's IP banned.
 - Use `forwarded` only when the proxy overwrites `Forwarded` on every request (see the Nginx example below).
-- To find out what the proxy does without access to its config, sign in as an administrator through the public URL and open **Service Health**. The **Visitor address handling** card runs automatically (and again on **Re-run checks**): it sends fake forwarding headers and shows a plain-language status, with a copyable technical report listing which headers the proxy passed through, appended to, overwrote or removed, plus the safe `TRUSTED_PROXY_HEADER` value. It shows **Problem** if any edge security check fails: proxy-only access off or no trusted proxy range, the check not arriving through the proxy, a visitor address that can be faked, a trusted range that covers visitors, insecure cookies (not `test`/`prod`), or HSTS off. Re-run it after any proxy or settings change.
+- To find out what the proxy does without access to its config, sign in as an administrator through the public URL and open **Service Health**. The **Visitor address handling** card runs automatically (and again on **Re-run checks**): it sends fake forwarding headers and shows a plain-language status, with a copyable technical report listing which headers the proxy passed through, appended to, overwrote or removed, plus the safe `TRUSTED_PROXY_HEADER` value. It shows **Problem** if any edge security check fails: proxy-only access off or no trusted proxy range, the check not arriving through the proxy, a visitor address that can be faked, a trusted range that covers visitors, insecure cookies or HSTS off (`ALLOW_INSECURE_HTTP=1` or `HSTS_MAX_AGE_SECONDS=0`). Re-run it after any proxy or settings change.
 - Client IP: the right-most address in the chain that is not a trusted proxy (CIDR mode), or the `TRUSTED_PROXY_HOPS`-th address from the right (hops mode).
 - `proto`/`host`: the right-most value, which is the one the nearest proxy added.
 - Ignore forwarded headers from untrusted sources.
@@ -126,7 +127,7 @@ Host enforcement policy:
 ## Security Header Policy
 
 - CSP uses nonce-based inline script allowlisting (`script-src 'self' 'nonce-...'`) and does not permit `unsafe-inline` scripts.
-- HSTS is applied on HTTPS responses in test/prod with default policy:
+- HSTS is applied on HTTPS responses in every environment (unless `ALLOW_INSECURE_HTTP=1`) with default policy:
   - `max-age=31536000`
   - `includeSubDomains`
   - `preload` disabled by default (enable via `HSTS_PRELOAD=1` only after preload-readiness review).
@@ -196,14 +197,14 @@ location / {
 ## Security Baseline
 
 - HTTPS-only in test and production.
-- Secure cookie attributes enabled in non-dev environments.
+- Secure cookie attributes enabled in every environment (unless `ALLOW_INSECURE_HTTP=1`).
 - CSRF protection required for cookie-based auth flows.
 - Login returns a session CSRF token; clients must send it in `X-CSRF-Token` for authenticated mutating API calls.
 - Bootstrap initial admin credentials via `scripts/bootstrap_admin.py`; do not hardcode credentials in source or env templates.
 - Input validation at API boundary and domain service layers.
 - Least-privilege role enforcement at API/service layer.
 - Security response headers are applied to all responses (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and `Cross-Origin-Resource-Policy`).
-- Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` outside dev.
+- Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` (unless `ALLOW_INSECURE_HTTP=1`).
 - In non-dev environments (`APP_ENV=test|prod`), startup fails when `SECRET_KEY` is missing, default/placeholder, or shorter than 32 characters. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Changing it signs everyone out.
 - The container runs gunicorn (`gunicorn.conf.py`: one process, threaded, request timeouts and header limits), never the Flask/Werkzeug development server.
 - Never run with Flask debug mode, including dev: every environment is reachable through the public proxy, and debug mode exposes tracebacks and the Werkzeug debugger. `run.bat`, `run.sh` and the Simple Mode scripts use auto-reload without the debugger (`--reload --no-debugger`); dev keeps template auto-reload.

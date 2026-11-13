@@ -103,6 +103,64 @@ def test_create_app_allows_default_secret_key_in_dev_environment():
 
 
 @pytest.mark.functional
+@pytest.mark.parametrize("app_env", ["test", "prod"])
+def test_create_app_refuses_allow_insecure_http_in_deployed_environments(app_env):
+    class InsecureConfig:
+        APP_ENV = app_env
+        SECRET_KEY = "k" * 32
+        TESTING = True
+        DATABASE_URL = "sqlite+pysqlite:///:memory:"
+        CANONICAL_HOST = "localhost"
+        ALLOW_INSECURE_HTTP = True
+
+    with pytest.raises(RuntimeError, match="ALLOW_INSECURE_HTTP"):
+        create_app(InsecureConfig)
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    "env_value, cookies_secure, url_scheme",
+    [(None, True, "https"), ("0", True, "https"), ("1", False, "http")],
+)
+def test_config_cookies_are_secure_unless_insecure_http_allowed(monkeypatch, env_value, cookies_secure, url_scheme):
+    import importlib
+
+    import config as config_module
+
+    monkeypatch.setenv("APP_ENV", "dev")
+    if env_value is None:
+        monkeypatch.delenv("ALLOW_INSECURE_HTTP", raising=False)
+    else:
+        monkeypatch.setenv("ALLOW_INSECURE_HTTP", env_value)
+    try:
+        reloaded = importlib.reload(config_module).Config
+        assert reloaded.SESSION_COOKIE_SECURE is cookies_secure
+        assert reloaded.REMEMBER_COOKIE_SECURE is cookies_secure
+        assert reloaded.PREFERRED_URL_SCHEME == url_scheme
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config_module)
+
+
+@pytest.mark.functional
+def test_hsts_header_present_for_https_in_dev(app, client):
+    app.config["APP_ENV"] = "dev"
+
+    response = client.get("/", base_url="https://localhost")
+
+    assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+
+
+@pytest.mark.functional
+def test_hsts_header_absent_when_insecure_http_allowed(app, client):
+    app.config["ALLOW_INSECURE_HTTP"] = True
+
+    response = client.get("/", base_url="https://localhost")
+
+    assert "Strict-Transport-Security" not in response.headers
+
+
+@pytest.mark.functional
 def test_dev_reloads_templates_without_debug_mode():
     class DevConfig:
         APP_ENV = "dev"

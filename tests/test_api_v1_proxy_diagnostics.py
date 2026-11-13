@@ -191,7 +191,7 @@ def test_range_check_is_skipped_when_visitor_address_cannot_be_trusted():
 @pytest.mark.parametrize(
     "settings, failing",
     [
-        ({"app_env": "dev"}, {"secure_cookies", "hsts"}),
+        ({"allow_insecure_http": True, "session_cookie_secure": False}, {"secure_cookies", "hsts"}),
         ({"session_cookie_secure": False}, {"secure_cookies"}),
         ({"hsts_max_age_seconds": 0}, {"hsts"}),
     ],
@@ -201,6 +201,14 @@ def test_insecure_app_settings_are_a_problem(settings, failing):
 
     assert result["verdict"] == "unsafe"
     assert {check["id"] for check in result["checks"] if check["passed"] is False} == failing
+
+
+@pytest.mark.functional
+def test_dev_settings_without_insecure_http_are_healthy():
+    # The checks follow the real cookie/HSTS settings, not APP_ENV: a proxied dev is healthy.
+    result = _analyse(TYPICAL_PROXY_HEADERS, allow_insecure_http=False, session_cookie_secure=True)
+
+    assert result["verdict"] == "ok"
 
 
 @pytest.mark.functional
