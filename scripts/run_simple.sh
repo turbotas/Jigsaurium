@@ -35,7 +35,7 @@ if [ "$APP_ENV" = "dev" ] && [ "${STARTUP_UPDATE_CHECK:-0}" = "1" ]; then
 fi
 
 if [ "$APP_ENV" = "dev" ]; then
-  APP_ENV="$APP_ENV" "$VENV_PYTHON" -m flask --app run:app run --host 0.0.0.0 --debug
+  APP_ENV="$APP_ENV" "$VENV_PYTHON" -m flask --app run:app run --host 0.0.0.0 --reload --no-debugger
 else
   APP_ENV="$APP_ENV" "$VENV_PYTHON" -m flask --app run:app run --host 0.0.0.0
 fi

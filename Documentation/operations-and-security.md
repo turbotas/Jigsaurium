@@ -206,6 +206,7 @@ location / {
 - Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` outside dev.
 - In non-dev environments (`APP_ENV=test|prod`), startup fails when `SECRET_KEY` is missing, default/placeholder, or shorter than 32 characters. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Changing it signs everyone out.
 - The container runs gunicorn (`gunicorn.conf.py`: one process, threaded, request timeouts and header limits), never the Flask/Werkzeug development server.
+- Never run with Flask debug mode, including dev: every environment is reachable through the public proxy, and debug mode exposes tracebacks and the Werkzeug debugger. `run.bat`, `run.sh` and the Simple Mode scripts use auto-reload without the debugger (`--reload --no-debugger`); dev keeps template auto-reload.
 - Server-side app sessions expire after the configured inactivity window (`SESSION_IDLE_TIMEOUT_MINUTES`, default 120 minutes).
 - Login endpoint enforces anti-brute-force throttling per client IP and email (15-minute block after 10 failures in a 15-minute window).
 - Login endpoint also limits each email across all client IPs: 30 failures in a 15-minute window block further attempts for that email for 15 minutes (IP addresses are not blocked by this limit). A successful login clears both counters for that email.
@@ -216,7 +217,7 @@ location / {
 - Image upload endpoints accept raster image MIME types only (`image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`); SVG and other active/image-document formats are rejected.
 - The declared type is not trusted: uploaded bytes (including zip entries) must decode as one of those formats, and the stored MIME type is the detected one.
 - Unauthenticated callers only receive re-encoded thumbnail/preview derivatives. When a derivative could not be generated, guests get `404` rather than the original upload bytes.
-- One-off after upgrading from a version before v0.2.11: images uploaded while Pillow was unavailable (Pillow 13 import bug) stored the original bytes as their thumbnail/preview, so guests received original photos including EXIF data. Run `scripts/regenerate_image_derivatives.py` inside the app container (`--dry-run` first to see the count). It re-encodes those derivatives, bumps `content_version` so cached copies are not reused, records one `system.image_derivatives_regenerated` audit event, and is safe to re-run.
+- One-off after upgrading from a version before v0.2.11: images uploaded while Pillow was unavailable (Pillow 13 import bug) stored the original bytes as their thumbnail/preview, so guests received original photos including EXIF data. Run `scripts/regenerate_image_derivatives.py` inside the app container, or from the repo with the venv Python for an environment started with `run.bat`/`run.sh` (it reads the repo's `.env`). Use `--dry-run` first to see the count. It re-encodes those derivatives, bumps `content_version` so cached copies are not reused, records one `system.image_derivatives_regenerated` audit event, and is safe to re-run.
 
 ## Release Checks (manual now, automated later)
 

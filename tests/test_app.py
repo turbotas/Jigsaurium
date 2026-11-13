@@ -103,6 +103,33 @@ def test_create_app_allows_default_secret_key_in_dev_environment():
 
 
 @pytest.mark.functional
+def test_dev_reloads_templates_without_debug_mode():
+    class DevConfig:
+        APP_ENV = "dev"
+        SECRET_KEY = "dev-secret-key"
+        TESTING = True
+
+    app = create_app(DevConfig)
+    assert app.debug is False
+    assert app.config["TEMPLATES_AUTO_RELOAD"] is True
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    "start_file",
+    ["run.bat", "run.sh", "run.py", "scripts/run_simple.bat", "scripts/run_simple.sh"],
+)
+def test_start_scripts_never_enable_debug_mode(start_file):
+    # Every environment, dev included, is reachable through the public proxy.
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / start_file).read_text(encoding="utf-8")
+    assert "--debug" not in text
+    assert "debug=True" not in text
+    assert 'debug=app.config["APP_ENV"]' not in text
+
+
+@pytest.mark.functional
 def test_create_app_skips_missing_local_embedding_model_on_dev_startup(monkeypatch):
     def _raise_missing_model(*_args, **_kwargs):
         raise RuntimeError("Configured embedding model path does not exist: .hf-models/clip-vit-base-patch32")

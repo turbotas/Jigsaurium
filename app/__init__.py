@@ -315,6 +315,10 @@ def create_app(config_class="config.Config"):
 
     if app.config.get("APP_ENV") == "dev" or bool(app.config.get("TESTING", False)):
         app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+    if app.config.get("APP_ENV") == "dev":
+        # Dev runs without debug mode (it is publicly reachable), so keep template reloading explicitly.
+        if app.config.get("TEMPLATES_AUTO_RELOAD") is None:
+            app.config["TEMPLATES_AUTO_RELOAD"] = True
 
     @app.before_request
     def set_request_id():
