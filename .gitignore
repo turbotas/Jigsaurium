@@ -62,13 +62,9 @@ Thumbs.db
 # Frontend dependencies
 node_modules/
 
-# Playwright/Wayland runtime artifacts
+# Wayland coding-agent local state
 .wayland/
 .wayland-core/
-
-# IJFW local tooling artifacts
-.ijfw/
-ijfw/
 
 # Local model cache artifacts
 .hf-models/
