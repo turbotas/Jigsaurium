@@ -14,6 +14,7 @@ from app.request_security import (
     build_auto_blocked_until,
     get_request_ban_retry_after_seconds,
     normalize_host,
+    is_direct_connection_allowed,
     normalize_trusted_proxy_header,
     record_request_outcome,
     resolve_client_request_context,
@@ -251,6 +252,7 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("TRUSTED_PROXY_CIDRS", [])
     app.config.setdefault("TRUSTED_PROXY_HOPS", None)
     app.config.setdefault("TRUSTED_PROXY_HEADER", "x-forwarded")
+    app.config.setdefault("REQUIRE_TRUSTED_PROXY", True)
     app.config.setdefault("TRUSTED_CLIENT_CIDRS", [])
     app.config.setdefault("AI_ENABLED", False)
     app.config.setdefault("AI_API_KEY", "")
@@ -318,6 +320,22 @@ def create_app(config_class="config.Config"):
     def set_request_id():
         g.request_id = f"req_{uuid4().hex[:12]}"
         g.csp_script_nonce = secrets.token_urlsafe(16)
+
+        # Proxy-only policy: refuse connections that bypass the reverse proxy. The liveness endpoint
+        # stays reachable for container healthchecks and the deploy agent (it returns only status).
+        if (
+            bool(app.config.get("REQUIRE_TRUSTED_PROXY", True))
+            and request.path != HEALTH_CHECK_PATH
+            and not is_direct_connection_allowed(request.remote_addr, app.config.get("TRUSTED_PROXY_CIDRS", []))
+        ):
+            message = "Direct connections are not allowed; use the public address."
+            if request.path.startswith("/api/v1"):
+                payload = {
+                    "error": {"code": "forbidden", "message": message, "details": []},
+                    "meta": {"request_id": g.request_id},
+                }
+                return app.response_class(response=app.json.dumps(payload), status=403, mimetype="application/json")
+            return app.response_class(response=message, status=403, mimetype="text/plain")
 
         origin_context = resolve_request_origin_context(
             remote_addr=request.remote_addr,
@@ -506,5 +524,10 @@ def create_app(config_class="config.Config"):
     reset_request_security_state()
     start_bulk_ai_create_worker(app)
     _validate_stfd_config_on_startup(app)
+    if bool(app.config.get("REQUIRE_TRUSTED_PROXY", True)) and not app.config.get("TRUSTED_PROXY_CIDRS"):
+        app.logger.warning(
+            "REQUIRE_TRUSTED_PROXY is on but TRUSTED_PROXY_CIDRS is empty, so direct connections are not "
+            "rejected. Set TRUSTED_PROXY_CIDRS to the reverse proxy address(es) to enforce proxy-only access."
+        )
     _warm_embeddings_on_startup(app)
     return app

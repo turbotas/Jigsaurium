@@ -59,6 +59,8 @@ class Config:
     # Which forwarding header family the proxy is known to set (or overwrite): x-forwarded | forwarded.
     TRUSTED_PROXY_HEADER = os.getenv("TRUSTED_PROXY_HEADER", "x-forwarded")
     TRUSTED_CLIENT_CIDRS = _parse_csv(os.getenv("TRUSTED_CLIENT_CIDRS", ""))
+    # Reject requests that do not arrive from a TRUSTED_PROXY_CIDRS address (loopback always allowed).
+    REQUIRE_TRUSTED_PROXY = _parse_bool(os.getenv("REQUIRE_TRUSTED_PROXY"), default=True)
     AI_ENABLED = _parse_bool(os.getenv("AI_ENABLED"), default=False)
     AI_API_KEY = os.getenv("AI_API_KEY", "")
     AI_ENDPOINT_URL = os.getenv("AI_ENDPOINT_URL", "")

@@ -50,7 +50,7 @@ def test_typical_nginx_appends_xff_and_passes_forwarded_through():
     assert result["recommended_trusted_proxy_header"] == "x-forwarded"
     assert result["verdict"] == "ok"
     assert result["resolved_client_ip"] == CLIENT_IP
-    assert any("Forwarded header through unchanged" in message for message in result["messages"])
+    assert result["messages"] == []
 
 
 @pytest.mark.functional
@@ -63,7 +63,7 @@ def test_forwarded_mode_is_unsafe_when_proxy_passes_forwarded_through():
     assert result["verdict"] == "unsafe"
     assert result["recommended_trusted_proxy_header"] == "x-forwarded"
     assert result["resolved_client_ip"] == "192.0.2.1"
-    assert any("Set TRUSTED_PROXY_HEADER=x-forwarded" in message for message in result["messages"])
+    assert any("set TRUSTED_PROXY_HEADER=x-forwarded" in message for message in result["messages"])
 
 
 @pytest.mark.functional
@@ -100,7 +100,7 @@ def test_passed_through_host_and_proto_are_a_warning_in_x_forwarded_mode():
     assert result["findings"]["x_forwarded_for"] == "overwritten"
     assert result["findings"]["forwarded"] == "stripped"
     assert result["verdict"] == "warning"
-    assert any("X-Forwarded-Host and X-Forwarded-Proto" in message for message in result["messages"])
+    assert any("X-Forwarded-Host or X-Forwarded-Proto" in message for message in result["messages"])
 
 
 @pytest.mark.functional

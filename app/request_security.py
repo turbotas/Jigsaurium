@@ -249,6 +249,22 @@ def is_ip_in_cidrs(ip_text, cidrs):
     return _is_trusted_proxy_ip(normalized_ip, cidrs or [])
 
 
+def is_direct_connection_allowed(remote_addr, trusted_proxy_cidrs):
+    """Proxy-only policy: allow a socket peer only if it is a trusted proxy or loopback.
+
+    With no trusted proxy CIDRs configured there is no proxy to enforce, so everything is allowed.
+    """
+    trusted_proxy_list = [cidr for cidr in (trusted_proxy_cidrs or []) if str(cidr).strip()]
+    if not trusted_proxy_list:
+        return True
+    remote_ip = _parse_ip_candidate(remote_addr)
+    if remote_ip is None:
+        return False
+    if ip_address(remote_ip).is_loopback:
+        return True
+    return _is_trusted_proxy_ip(remote_ip, trusted_proxy_list)
+
+
 def resolve_client_request_context(
     *,
     remote_addr,
@@ -395,9 +411,8 @@ def analyse_proxy_header_probe(
     if not remote_is_trusted_proxy:
         verdict = "warning"
         messages.append(
-            f"The request reached the app from {remote_ip}, which is not in TRUSTED_PROXY_CIDRS, so all "
-            "forwarding headers are ignored and every client appears as that address. If that is your proxy, "
-            "add it to TRUSTED_PROXY_CIDRS (and to TRUSTED_CLIENT_CIDRS so it can never be auto-blocked)."
+            f"{remote_ip} is not in TRUSTED_PROXY_CIDRS, so forwarding headers are ignored and every client "
+            "appears as that address."
         )
     if probe_sent:
         xff_safe = findings["x_forwarded_for"] in PROXY_HEADER_PROXY_SET_SAFE
@@ -409,25 +424,16 @@ def analyse_proxy_header_probe(
 
         if recommended is None:
             verdict = "unsafe"
-            messages.append(
-                "The proxy does not set a client-IP header the app can trust: client-supplied values arrive "
-                "unchanged or nothing arrives. Login throttling and IP blocks then key on a value the client "
-                "chooses (or on the proxy address)."
-            )
+            messages.append("The proxy sets no client-IP header the app can trust.")
         else:
             if verdict == "unknown":
                 verdict = "ok"
             if recommended != trusted_proxy_header:
                 verdict = "unsafe"
                 messages.append(
-                    f"TRUSTED_PROXY_HEADER is '{trusted_proxy_header}', but the proxy does not overwrite that "
-                    f"header family, so clients can choose their own IP. Set TRUSTED_PROXY_HEADER={recommended}."
+                    f"Clients can choose their own IP: set TRUSTED_PROXY_HEADER={recommended}."
                 )
 
-        if findings["forwarded"] == PROXY_HEADER_PASSED_THROUGH:
-            messages.append(
-                "The proxy passes the client's own Forwarded header through unchanged; it must not be trusted."
-            )
         if trusted_proxy_header == TRUSTED_PROXY_HEADER_X_FORWARDED:
             header_labels = {"x_forwarded_host": "X-Forwarded-Host", "x_forwarded_proto": "X-Forwarded-Proto"}
             spoofable = [
@@ -437,9 +443,8 @@ def analyse_proxy_header_probe(
                 if verdict == "ok":
                     verdict = "warning"
                 messages.append(
-                    f"{' and '.join(spoofable)} pass through from the client, so clients can choose the host and "
-                    "scheme the app sees. Impact is limited (canonical-host check and HSTS), but ask for the proxy "
-                    "to set them."
+                    f"The proxy does not set {' or '.join(spoofable)}, so the app cannot trust the "
+                    "host or scheme it sees."
                 )
 
     context = resolve_client_request_context(

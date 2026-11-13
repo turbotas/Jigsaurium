@@ -294,6 +294,8 @@ def test_hsts_header_uses_trusted_forwarded_proto(client, app):
 @pytest.mark.functional
 def test_hsts_header_ignores_untrusted_forwarded_proto(client, app):
     app.config["TRUSTED_PROXY_CIDRS"] = ["192.168.100.0/24"]
+    # Exercises header trust for an untrusted peer, so allow the direct connection.
+    app.config["REQUIRE_TRUSTED_PROXY"] = False
     headers = {"X-Forwarded-Proto": "https"}
 
     response = client.get(
