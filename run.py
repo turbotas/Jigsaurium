@@ -17,7 +17,10 @@ check_govuk_version_freshness(app)
 
 
 if __name__ == "__main__":
+    # Never debug mode: every environment, dev included, is reachable through the public proxy, and
+    # debug mode would expose tracebacks and the Werkzeug debugger. Dev keeps auto-reload.
     app.run(
-        debug=app.config["APP_ENV"] == "dev",
+        debug=False,
+        use_reloader=app.config["APP_ENV"] == "dev",
         request_handler=ForwardedAwareWSGIRequestHandler,
     )

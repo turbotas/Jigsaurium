@@ -11,6 +11,9 @@ cached copies. It is safe to re-run; images that already have real derivatives a
 Run inside the app container (uses the container's DATABASE_URL):
     docker exec <container> python scripts/regenerate_image_derivatives.py --dry-run
     docker exec <container> python scripts/regenerate_image_derivatives.py
+
+Or, for an environment run from the repo with run.bat / run.sh (reads the repo's .env):
+    .venv\\Scripts\\python.exe scripts\\regenerate_image_derivatives.py --dry-run
 """
 
 import argparse
@@ -23,8 +26,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - containers pass settings as real env vars
+    load_dotenv = None
+
+# Read the repo's .env like run.py does, so a local run (run.bat) finds the same database.
+# Real environment variables (the container's) take precedence.
+if load_dotenv is not None:
+    load_dotenv(REPO_ROOT / ".env")
+
 # The embedding model is not needed here; skip the slow warm-load during app creation.
-os.environ.setdefault("IMAGE_EMBEDDINGS_WARM_ON_STARTUP", "0")
+# Overrides any env setting (the image sets it to 1) so the script starts quickly.
+os.environ["IMAGE_EMBEDDINGS_WARM_ON_STARTUP"] = "0"
 
 from sqlalchemy import or_, select  # noqa: E402
 

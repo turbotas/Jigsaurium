@@ -25,7 +25,7 @@ if /I "%APP_ENV%"=="dev" if not "%STARTUP_UPDATE_CHECK%"=="0" (
 )
 
 if /I "%APP_ENV%"=="dev" (
-  .venv\Scripts\python.exe -m flask --app run:app run --host 0.0.0.0 --debug
+  .venv\Scripts\python.exe -m flask --app run:app run --host 0.0.0.0 --reload --no-debugger
 ) else (
   .venv\Scripts\python.exe -m flask --app run:app run --host 0.0.0.0
 )
