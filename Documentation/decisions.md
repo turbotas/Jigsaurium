@@ -343,3 +343,12 @@
 - Why: the Service Health tab is read by service managers; the technical detail is for whoever they pass it to. A faked host or scheme only changes the sender's own response.
 - Decision: secure cookies and HSTS are on in every environment, dev included, instead of depending on `APP_ENV`. `ALLOW_INSECURE_HTTP=1` turns both off for running the code locally on plain `http://`; startup refuses it in test/prod.
 - Why: dev is reached through the public proxy over HTTPS like test and prod, so leaving its cookies insecure had no benefit. Switching dev to `APP_ENV=test` would also have changed its banner, backup labels, reloader and caching.
+
+## 2026-11-13 - Supply-Chain Hardening of Builds
+
+- Decision: pin every third-party GitHub Action to a full commit SHA, with the release in a trailing comment; Dependabot's weekly `github-actions` PR keeps the pins current.
+- Why: a tag such as `@v7` can be moved by whoever controls the action's repository, and the build jobs hold the repository token and can publish container images. Dependency updates still auto-merge and deploy to test by design; prod promotion stays a manual cross-check.
+- Decision: `container-release.yml` reads the manual `release_version` input through an environment variable and refuses anything that is not `vX.Y.Z` (optional `-suffix`).
+- Why: interpolating `${{ inputs.* }}` straight into a `run:` script lets a crafted value run shell commands in the job.
+- Decision: `.dockerignore` is an allowlist (app code, migrations, requirements, runtime config files, the entrypoint and Python maintenance scripts, licences, and the optional local model cache). CI fails if the image holds excluded files or cannot serve the home page.
+- Why: `COPY . .` otherwise shipped docs, tests, local agent/session state (`ijfw/`) and any untracked files into images built from a working copy.
