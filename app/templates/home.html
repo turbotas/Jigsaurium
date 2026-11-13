@@ -1101,7 +1101,7 @@
 
   <section id="service-health-section" class="govuk-!-margin-top-8" aria-labelledby="service-health-heading" hidden>
     <h2 id="service-health-heading" class="govuk-heading-l">Service health</h2>
-    <p class="govuk-body">Live checks run when you open this tab: a minimal request to the external AI service, and an embedding of a built-in reference image by the image fingerprinting engine. Results are cached briefly; use Re-run checks to force a fresh probe. Each AI check is a real (very small) billed call and appears in AI Spend as <code>health_probe</code>.</p>
+    <p class="govuk-body">Live checks run when you open this tab: a minimal request to the external AI service, an embedding of a built-in reference image by the image fingerprinting engine, and a check that the app sees visitors' real addresses. Results are cached briefly; use Re-run checks to force a fresh probe. Each AI check is a real (very small) billed call and appears in AI Spend as <code>health_probe</code>.</p>
     <p class="govuk-body">Overall: <span id="service-health-overall" class="app-ai-status-tag app-health-tag--unknown">Not checked</span></p>
     <button id="service-health-rerun" type="button" class="govuk-button govuk-button--secondary" data-module="govuk-button">Re-run checks</button>
     <div id="service-health-status" class="govuk-hint govuk-!-margin-bottom-4" aria-live="polite"></div>
@@ -1125,27 +1125,26 @@
         <p class="govuk-body govuk-!-margin-bottom-0 app-health-error" data-health-field="error" hidden></p>
       </div>
       <div class="app-ai-usage-card" aria-labelledby="proxy-diagnostics-heading">
-        <h3 id="proxy-diagnostics-heading" class="govuk-heading-s">Reverse proxy</h3>
+        <h3 id="proxy-diagnostics-heading" class="govuk-heading-s">Visitor address handling</h3>
         <p class="govuk-body"><span id="proxy-diagnostics-verdict" class="app-ai-status-tag app-health-tag--unknown">Not checked</span></p>
-        <p class="govuk-body">Header setting: <strong id="proxy-diagnostics-setting">-</strong></p>
-        <p class="govuk-body">Arrives from: <strong id="proxy-diagnostics-source">-</strong></p>
-        <p class="govuk-body">Your IP: <strong id="proxy-diagnostics-client-ip">-</strong></p>
+        <p id="proxy-diagnostics-meaning" class="govuk-body">Checks that visitors can only reach the app through the proxy, that the app sees their real address, and that connections stay encrypted.</p>
+        <ul id="proxy-diagnostics-problems" class="govuk-list govuk-list--bullet govuk-body-s" hidden></ul>
+        <p class="govuk-body">Your address as the app sees it: <strong id="proxy-diagnostics-client-ip">-</strong></p>
         <p class="govuk-body">Checked: <strong id="proxy-diagnostics-checked">-</strong></p>
-        <ul id="proxy-diagnostics-messages" class="govuk-list govuk-list--bullet govuk-body-s app-proxy-messages" hidden></ul>
-        <button id="proxy-diagnostics-run" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Check proxy headers</button>
-        <p id="proxy-diagnostics-status" class="govuk-hint govuk-!-margin-top-2 govuk-!-margin-bottom-0" aria-live="polite"></p>
+        <p id="proxy-diagnostics-status" class="govuk-hint govuk-!-margin-bottom-0" aria-live="polite"></p>
+        <details id="proxy-diagnostics-result" class="govuk-details govuk-!-margin-top-4 govuk-!-margin-bottom-0" hidden>
+          <summary class="govuk-details__summary">
+            <span class="govuk-details__summary-text">Technical details for your technician</span>
+          </summary>
+          <div class="govuk-details__text">
+            <p class="govuk-body-s">Copy this and send it to whoever looks after the server or reverse proxy.</p>
+            <button id="proxy-diagnostics-copy" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-2" data-module="govuk-button">Copy details</button>
+            <span id="proxy-diagnostics-copy-status" class="govuk-body-s" aria-live="polite"></span>
+            <pre id="proxy-diagnostics-report" class="app-proxy-report" tabindex="0"></pre>
+          </div>
+        </details>
       </div>
     </div>
-
-    <details id="proxy-diagnostics-result" class="govuk-details" hidden>
-      <summary class="govuk-details__summary">
-        <span class="govuk-details__summary-text">Reverse proxy header details</span>
-      </summary>
-      <div class="govuk-details__text">
-        <p class="govuk-body-s">The check sends deliberately fake values in <code>Forwarded</code>, <code>X-Forwarded-For</code>, <code>X-Forwarded-Host</code> and <code>X-Forwarded-Proto</code>, then reports what the proxy did with each one.</p>
-        <dl id="proxy-diagnostics-summary" class="govuk-summary-list govuk-summary-list--no-border govuk-!-margin-bottom-0"></dl>
-      </div>
-    </details>
   </section>
 
   <section id="ip-blocks-section" class="govuk-!-margin-top-8" aria-labelledby="ip-blocks-heading">

@@ -1306,15 +1306,16 @@
   color: #0b0c0c;
 }
 
-.app-proxy-messages {
-  margin-bottom: 12px;
-}
-
-.app-proxy-messages li {
-  overflow-wrap: anywhere;
-}
-
-#proxy-diagnostics-summary .govuk-summary-list__value {
+.app-proxy-report {
+  margin: 0;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  background: #f3f2f1;
+  border: 1px solid #b1b4b6;
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

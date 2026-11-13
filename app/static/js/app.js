@@ -93,6 +93,7 @@
     serviceHealth: null,
     serviceHealthLoading: false,
     serviceHealthSectionShown: false,
+    proxyDiagnosticsVerdict: null,
     workspaceSectionAccess: {
       account: false,
       collection: false,
@@ -3012,6 +3013,7 @@
       state.adminTabVisibility.embeddings = false;
       state.adminTabVisibility.health = false;
       state.serviceHealth = null;
+      state.proxyDiagnosticsVerdict = null;
       state.serviceHealthSectionShown = false;
       state.adminTabVisibility["ip-blocks"] = false;
       state.adminTabVisibility.sessions = false;
@@ -8038,11 +8040,22 @@
     return Number.isNaN(parsed.getTime()) ? String(isoValue) : parsed.toLocaleString();
   }
 
+  // Overall is the worst of the server-side probes and the visitor address check.
+  function updateServiceHealthOverall() {
+    const serverOverall = state.serviceHealth?.overall_status || "unknown";
+    setServiceHealthTag(elements.serviceHealthOverall, serverOverall);
+    // A security problem is not an outage: say "Problem" unless a service check is actually down.
+    if (state.proxyDiagnosticsVerdict === "unsafe" && serverOverall !== "down" && elements.serviceHealthOverall) {
+      elements.serviceHealthOverall.className = "app-ai-status-tag app-health-tag--down";
+      elements.serviceHealthOverall.textContent = "Problem";
+    }
+  }
+
   function renderServiceHealth(payload) {
     if (!elements.serviceHealthSection) {
       return;
     }
-    setServiceHealthTag(elements.serviceHealthOverall, payload?.overall_status || "unknown");
+    updateServiceHealthOverall();
     const probes = payload?.probes || {};
     elements.serviceHealthSection.querySelectorAll("[data-health-probe]").forEach((card) => {
       const probe = probes[card.dataset.healthProbe] || null;
@@ -8089,6 +8102,8 @@
       return;
     }
     state.serviceHealthLoading = true;
+    // The visitor address check is free and quick, so it runs alongside the other health checks.
+    runProxyDiagnostics();
     if (elements.serviceHealthRerun) {
       elements.serviceHealthRerun.disabled = true;
     }
@@ -8118,39 +8133,103 @@
     }
   }
 
+  // Card face is written for a service manager; the technical report is for a technician.
   const PROXY_VERDICTS = {
-    ok: { label: "Safe", tag: "ok" },
-    warning: { label: "Check needed", tag: "degraded" },
-    unsafe: { label: "Unsafe", tag: "down" },
-    unknown: { label: "Not checked", tag: "unknown" },
+    ok: {
+      label: "Healthy",
+      tag: "ok",
+      meaning:
+        "Visitors can only reach the app through the proxy, the app sees their real address, and connections stay encrypted.",
+    },
+    unsafe: {
+      label: "Problem",
+      tag: "down",
+      meaning: "A security setting needs fixing. Send the technical details below to your technician.",
+    },
+    unknown: {
+      label: "Not checked",
+      tag: "unknown",
+      meaning:
+        "Checks that visitors can only reach the app through the proxy, that the app sees their real address, and that connections stay encrypted.",
+    },
+  };
+
+  const PROXY_CHECK_TITLES = {
+    proxy_only_access: "Only the proxy can reach the app",
+    arrived_via_proxy: "This check came through the proxy",
+    visitor_address_trusted: "Visitor addresses cannot be faked",
+    proxy_range_excludes_visitors: "Trusted proxy range excludes visitors",
+    secure_cookies: "Sign-in cookies are secure",
+    hsts: "HSTS is on",
   };
 
   const PROXY_HEADER_FINDING_LABELS = {
-    passed_through: "Passed through from the client unchanged (not trustworthy)",
-    appended: "Proxy appended its own value (trustworthy right-most value)",
-    overwritten: "Proxy replaced the client value (trustworthy)",
-    stripped: "Removed by the proxy (not sent to the app)",
+    passed_through: "passed through unchanged from the client (client-controlled)",
+    appended: "proxy appended its own value (trusted: right-most value)",
+    overwritten: "proxy replaced the client value (trusted)",
+    stripped: "removed by the proxy",
   };
 
-  function appendProxySummaryRow(list, key, value) {
-    const row = document.createElement("div");
-    row.className = "govuk-summary-list__row";
-    const term = document.createElement("dt");
-    term.className = "govuk-summary-list__key";
-    term.textContent = key;
-    const description = document.createElement("dd");
-    description.className = "govuk-summary-list__value";
-    description.textContent = value === null || value === undefined || value === "" ? "-" : String(value);
-    row.append(term, description);
-    list.appendChild(row);
+  function buildProxyDiagnosticsReport(data, checkedAt) {
+    const findings = data?.findings || {};
+    const received = data?.received || {};
+    const config = data?.config || {};
+    const verdict = PROXY_VERDICTS[data?.verdict] || PROXY_VERDICTS.unknown;
+    const show = (value) => (value === null || value === undefined || value === "" ? "(none)" : String(value));
+    const finding = (value) => PROXY_HEADER_FINDING_LABELS[value] || show(value);
+    const lines = [
+      "Jigsaurium reverse proxy check",
+      `Site: ${window.location.host}`,
+      `Checked: ${checkedAt.toISOString()}`,
+      `Result: ${verdict.label} (${show(data?.verdict)})`,
+    ];
+    const checks = Array.isArray(data?.checks) ? data.checks : [];
+    if (checks.length) {
+      lines.push("", "Security checks:");
+      checks.forEach((check) => {
+        const outcome = check.passed === true ? "PASS" : check.passed === false ? "FAIL" : "NOT CHECKED";
+        lines.push(`  [${outcome}] ${PROXY_CHECK_TITLES[check.id] || check.id}`);
+        lines.push(`         ${show(check.detail)}`);
+      });
+    }
+    const usesForwarded = config.trusted_proxy_header === "forwarded";
+    const recommendedText = data?.recommended_trusted_proxy_header || "no safe setting";
+    const usedNote = "  <- used for the visitor address";
+    const ignoredNote = "  (ignored by the app)";
+    lines.push(
+      "",
+      "App settings:",
+      `  TRUSTED_PROXY_HEADER = ${show(config.trusted_proxy_header)} (recommended: ${recommendedText})`,
+      `  TRUSTED_PROXY_CIDRS = ${show((config.trusted_proxy_cidrs || []).join(", "))}`,
+      "",
+      "Connection:",
+      `  Request reached the app from ${show(data?.remote_addr)} (${data?.remote_is_trusted_proxy ? "a trusted proxy" : "NOT a trusted proxy"})`,
+      `  Visitor address resolved by the app: ${show(data?.resolved_client_ip)}`,
+      "",
+      "What the proxy did with fake values sent by the browser:",
+      `  X-Forwarded-For: ${finding(findings.x_forwarded_for)}${usesForwarded ? ignoredNote : usedNote}`,
+      `  Forwarded (RFC 7239, a different header): ${finding(findings.forwarded)}${usesForwarded ? usedNote : ignoredNote}`,
+      `  X-Forwarded-Host: ${finding(findings.x_forwarded_host)}  (informational: only affects the sender's own response)`,
+      `  X-Forwarded-Proto: ${finding(findings.x_forwarded_proto)}  (informational: only affects the sender's own response)`,
+      "",
+      "Headers received by the app:",
+      `  Host: ${show(received.host)}`,
+      `  X-Forwarded-For: ${show(received.x_forwarded_for)}`,
+      `  X-Real-IP: ${show(received.x_real_ip)}`,
+      `  X-Forwarded-Host: ${show(received.x_forwarded_host)}`,
+      `  X-Forwarded-Proto: ${show(received.x_forwarded_proto)}`,
+      `  Forwarded: ${show(received.forwarded)}`,
+      "",
+      "Fake values sent: X-Forwarded-For 192.0.2.2, Forwarded for=192.0.2.1 (192.0.2.0/24 is a documentation-only range).",
+    );
+    return lines.join("\n");
   }
 
   function renderProxyDiagnostics(data) {
     const result = document.getElementById("proxy-diagnostics-result");
     const verdictTag = document.getElementById("proxy-diagnostics-verdict");
-    const messageList = document.getElementById("proxy-diagnostics-messages");
-    const summary = document.getElementById("proxy-diagnostics-summary");
-    if (!result || !verdictTag || !messageList || !summary) {
+    const report = document.getElementById("proxy-diagnostics-report");
+    if (!result || !verdictTag || !report) {
       return;
     }
     const setCardText = (id, value) => {
@@ -8160,65 +8239,69 @@
       }
     };
 
+    const checkedAt = new Date();
     const verdict = PROXY_VERDICTS[data?.verdict] || PROXY_VERDICTS.unknown;
+    state.proxyDiagnosticsVerdict = data?.verdict || null;
+    updateServiceHealthOverall();
     verdictTag.className = `app-ai-status-tag app-health-tag--${verdict.tag}`;
     verdictTag.textContent = verdict.label;
-
-    const findings = data?.findings || {};
-    const received = data?.received || {};
-    const config = data?.config || {};
-    const current = config.trusted_proxy_header || "-";
-    const recommended = data?.recommended_trusted_proxy_header;
-    let settingText = current;
-    if (!recommended) {
-      settingText = `${current} (no safe setting)`;
-    } else if (recommended !== current) {
-      settingText = `${current} (change to ${recommended})`;
+    setCardText("proxy-diagnostics-meaning", verdict.meaning);
+    const problemList = document.getElementById("proxy-diagnostics-problems");
+    if (problemList) {
+      problemList.replaceChildren();
+      const problems = (Array.isArray(data?.checks) ? data.checks : []).filter((check) => check.passed === false);
+      problems.forEach((check) => {
+        const item = document.createElement("li");
+        item.textContent = String(check.problem || PROXY_CHECK_TITLES[check.id] || check.id);
+        problemList.appendChild(item);
+      });
+      problemList.hidden = problems.length === 0;
     }
-    setCardText("proxy-diagnostics-setting", settingText);
-    setCardText(
-      "proxy-diagnostics-source",
-      data?.remote_addr ? `${data.remote_addr}${data.remote_is_trusted_proxy ? " (trusted)" : " (not trusted)"}` : null,
-    );
     setCardText("proxy-diagnostics-client-ip", data?.resolved_client_ip);
-    setCardText("proxy-diagnostics-checked", new Date().toLocaleString());
+    setCardText("proxy-diagnostics-checked", checkedAt.toLocaleString());
+    const copyStatus = document.getElementById("proxy-diagnostics-copy-status");
+    if (copyStatus) {
+      copyStatus.textContent = "";
+    }
 
-    messageList.replaceChildren();
-    const messages = Array.isArray(data?.messages) ? data.messages : [];
-    messages.forEach((message) => {
-      const item = document.createElement("li");
-      item.textContent = String(message);
-      messageList.appendChild(item);
-    });
-    messageList.hidden = messages.length === 0;
-
-    summary.replaceChildren();
-    const describeFinding = (value) => PROXY_HEADER_FINDING_LABELS[value] || value || "-";
-    appendProxySummaryRow(summary, "Forwarded", describeFinding(findings.forwarded));
-    appendProxySummaryRow(summary, "X-Forwarded-For", describeFinding(findings.x_forwarded_for));
-    appendProxySummaryRow(summary, "X-Forwarded-Host", describeFinding(findings.x_forwarded_host));
-    appendProxySummaryRow(summary, "X-Forwarded-Proto", describeFinding(findings.x_forwarded_proto));
-    appendProxySummaryRow(summary, "Received Forwarded", received.forwarded);
-    appendProxySummaryRow(summary, "Received X-Forwarded-For", received.x_forwarded_for);
-    appendProxySummaryRow(summary, "Received X-Forwarded-Host", received.x_forwarded_host);
-    appendProxySummaryRow(summary, "Received X-Forwarded-Proto", received.x_forwarded_proto);
-    appendProxySummaryRow(summary, "Received X-Real-IP", received.x_real_ip);
-    appendProxySummaryRow(summary, "Received Host", received.host);
-    appendProxySummaryRow(summary, "TRUSTED_PROXY_CIDRS", (config.trusted_proxy_cidrs || []).join(", "));
+    report.textContent = buildProxyDiagnosticsReport(data, checkedAt);
     result.hidden = false;
+    if (data?.verdict === "unsafe") {
+      result.open = true;
+    }
+  }
+
+  async function copyProxyDiagnosticsReport() {
+    const report = document.getElementById("proxy-diagnostics-report");
+    const status = document.getElementById("proxy-diagnostics-copy-status");
+    if (!report || !report.textContent) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(report.textContent);
+      if (status) {
+        status.textContent = "Copied.";
+      }
+    } catch (_error) {
+      // Clipboard unavailable: select the text so it can be copied manually.
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(report);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      if (status) {
+        status.textContent = "Text selected: press Ctrl+C to copy.";
+      }
+    }
   }
 
   async function runProxyDiagnostics() {
-    const button = document.getElementById("proxy-diagnostics-run");
     const status = document.getElementById("proxy-diagnostics-status");
-    if (!state.user) {
+    if (!state.user || !state.adminTabVisibility.health) {
       return;
     }
-    if (button) {
-      button.disabled = true;
-    }
     if (status) {
-      status.textContent = "Checking proxy headers...";
+      status.textContent = "Running check...";
     }
     const probeHost = window.location.hostname;
     try {
@@ -8238,11 +8321,7 @@
       }
     } catch (error) {
       if (status) {
-        status.textContent = `Proxy header check failed: ${error.message}`;
-      }
-    } finally {
-      if (button) {
-        button.disabled = false;
+        status.textContent = `The check could not run: ${error.message}`;
       }
     }
   }
@@ -10632,9 +10711,9 @@
     if (elements.serviceHealthRerun) {
       elements.serviceHealthRerun.addEventListener("click", () => runServiceHealthProbe({ force: true }));
     }
-    const proxyDiagnosticsButton = document.getElementById("proxy-diagnostics-run");
-    if (proxyDiagnosticsButton) {
-      proxyDiagnosticsButton.addEventListener("click", runProxyDiagnostics);
+    const proxyDiagnosticsCopyButton = document.getElementById("proxy-diagnostics-copy");
+    if (proxyDiagnosticsCopyButton) {
+      proxyDiagnosticsCopyButton.addEventListener("click", copyProxyDiagnosticsReport);
     }
     if (elements.adminSubtabs) {
       elements.adminSubtabs.addEventListener("click", handleAdminTabClick);

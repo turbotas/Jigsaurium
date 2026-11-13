@@ -54,7 +54,7 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `TRUSTED_PROXY_HEADER`: which forwarding header family the proxy sets or overwrites: `x-forwarded` (default; `X-Forwarded-For`/`-Proto`/`-Host`) or `forwarded` (RFC7239 `Forwarded`). Only that family is read; the other is ignored.
 - `GUNICORN_THREADS`, `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT`, `GUNICORN_KEEPALIVE`, `GUNICORN_MAX_REQUESTS`, `GUNICORN_MAX_REQUESTS_JITTER`, `GUNICORN_BIND`, `GUNICORN_LOG_LEVEL`: optional overrides for the container's WSGI server (defaults in `gunicorn.conf.py`).
 - `TRUSTED_CLIENT_CIDRS`: comma-separated client CIDRs exempt from automatic 404-streak IP blocking.
-- `REQUIRE_TRUSTED_PROXY`: proxy-only access (default `1`). Requests whose socket peer is not in `TRUSTED_PROXY_CIDRS` get `403`, so connections that bypass the reverse proxy are refused. Loopback peers and the liveness endpoint `GET /api/v1/health` are always allowed. Has no effect while `TRUSTED_PROXY_CIDRS` is empty (a startup warning is logged). Set `0` only if direct access is deliberately needed.
+- `REQUIRE_TRUSTED_PROXY`: proxy-only access (default `1`). Requests whose socket peer is not in `TRUSTED_PROXY_CIDRS` get `403`, so connections that bypass the reverse proxy are refused. Only the liveness endpoint `GET /api/v1/health` is always allowed (container healthchecks and the deploy agent use it); loopback gets no exception. Has no effect while `TRUSTED_PROXY_CIDRS` is empty (a startup warning is logged). Set `0` only if direct access is deliberately needed.
 - `STFD_ENABLED`: enable/disable STFD-backed authentication mode.
 - `STFD_ALLOW_LOCAL_LOGIN`: optional breakglass/fallback toggle; when `1`, local email/password login remains available while STFD is enabled.
 - `STFD_APP_UNI`: STFD application UNI for this environment.
@@ -116,7 +116,7 @@ Host enforcement policy:
   - `forwarded`: read RFC7239 `Forwarded` (`for`, `proto`, `host`); ignore `X-Forwarded-*`.
 - Why one family only: most proxies set one family and pass the other through from the client unchanged. Reading both (or preferring `Forwarded` when present) lets any client choose its own IP, host and scheme, which defeats login throttling and IP bans and lets a client get someone else's IP banned.
 - Use `forwarded` only when the proxy overwrites `Forwarded` on every request (see the Nginx example below).
-- To find out what the proxy does without access to its config, sign in as an administrator through the public URL and use **Service Health > Reverse proxy headers > Check proxy headers**. It sends fake forwarding headers and reports which ones the proxy passed through, appended to, overwrote or removed, plus the safe `TRUSTED_PROXY_HEADER` value. Re-run it after any proxy change.
+- To find out what the proxy does without access to its config, sign in as an administrator through the public URL and open **Service Health**. The **Visitor address handling** card runs automatically (and again on **Re-run checks**): it sends fake forwarding headers and shows a plain-language status, with a copyable technical report listing which headers the proxy passed through, appended to, overwrote or removed, plus the safe `TRUSTED_PROXY_HEADER` value. It shows **Problem** if any edge security check fails: proxy-only access off or no trusted proxy range, the check not arriving through the proxy, a visitor address that can be faked, a trusted range that covers visitors, insecure cookies (not `test`/`prod`), or HSTS off. Re-run it after any proxy or settings change.
 - Client IP: the right-most address in the chain that is not a trusted proxy (CIDR mode), or the `TRUSTED_PROXY_HOPS`-th address from the right (hops mode).
 - `proto`/`host`: the right-most value, which is the one the nearest proxy added.
 - Ignore forwarded headers from untrusted sources.
@@ -216,6 +216,7 @@ location / {
 - Image upload endpoints accept raster image MIME types only (`image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`); SVG and other active/image-document formats are rejected.
 - The declared type is not trusted: uploaded bytes (including zip entries) must decode as one of those formats, and the stored MIME type is the detected one.
 - Unauthenticated callers only receive re-encoded thumbnail/preview derivatives. When a derivative could not be generated, guests get `404` rather than the original upload bytes.
+- One-off after upgrading from a version before v0.2.11: images uploaded while Pillow was unavailable (Pillow 13 import bug) stored the original bytes as their thumbnail/preview, so guests received original photos including EXIF data. Run `scripts/regenerate_image_derivatives.py` inside the app container (`--dry-run` first to see the count). It re-encodes those derivatives, bumps `content_version` so cached copies are not reused, records one `system.image_derivatives_regenerated` audit event, and is safe to re-run.
 
 ## Release Checks (manual now, automated later)
 

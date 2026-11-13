@@ -93,6 +93,8 @@ def test_admin_can_list_and_terminate_active_session_with_resolved_ip(app, seede
     proxy_remote = {"REMOTE_ADDR": "192.168.100.12"}
 
     admin_client = app.test_client()
+    # With trusted proxies configured, every request must arrive through the proxy (proxy-only access).
+    admin_client.environ_base["REMOTE_ADDR"] = proxy_remote["REMOTE_ADDR"]
     admin_login = _login(
         admin_client,
         email=seeded_session_identity_data["admin_email"],
@@ -102,6 +104,7 @@ def test_admin_can_list_and_terminate_active_session_with_resolved_ip(app, seede
     )
 
     member_client = app.test_client()
+    member_client.environ_base["REMOTE_ADDR"] = proxy_remote["REMOTE_ADDR"]
     _login(
         member_client,
         email=seeded_session_identity_data["member_email"],

@@ -250,9 +250,11 @@ def is_ip_in_cidrs(ip_text, cidrs):
 
 
 def is_direct_connection_allowed(remote_addr, trusted_proxy_cidrs):
-    """Proxy-only policy: allow a socket peer only if it is a trusted proxy or loopback.
+    """Proxy-only policy: allow a socket peer only if it is a trusted proxy.
 
-    With no trusted proxy CIDRs configured there is no proxy to enforce, so everything is allowed.
+    Loopback gets no exception: every environment is reached through the proxy, and the in-container
+    healthcheck uses the exempt liveness path. With no trusted proxy CIDRs configured there is no
+    proxy to enforce, so everything is allowed (the Service Health check reports that as a problem).
     """
     trusted_proxy_list = [cidr for cidr in (trusted_proxy_cidrs or []) if str(cidr).strip()]
     if not trusted_proxy_list:
@@ -260,8 +262,6 @@ def is_direct_connection_allowed(remote_addr, trusted_proxy_cidrs):
     remote_ip = _parse_ip_candidate(remote_addr)
     if remote_ip is None:
         return False
-    if ip_address(remote_ip).is_loopback:
-        return True
     return _is_trusted_proxy_ip(remote_ip, trusted_proxy_list)
 
 
@@ -375,8 +375,16 @@ def analyse_proxy_header_probe(
     trusted_proxy_hops,
     trusted_proxy_header,
     probe_host,
+    require_trusted_proxy=True,
+    app_env="prod",
+    session_cookie_secure=True,
+    hsts_max_age_seconds=31536000,
 ):
-    """Report how the proxy treated client-supplied forwarding headers and recommend a setting.
+    """Run the edge security checks for the Service Health "Visitor address handling" card.
+
+    Reports how the proxy treated the client-supplied forwarding headers, recommends a
+    TRUSTED_PROXY_HEADER value, and evaluates each security check. The verdict is "unsafe" when
+    any check fails, "ok" when all pass, and "unknown" when no probe was sent.
 
     `headers` maps header names to received values. `probe_host` is the host the browser was on;
     the probe sends it with a `:1` port so a passed-through host value is recognisable while still
@@ -405,47 +413,15 @@ def analyse_proxy_header_probe(
             "x_forwarded_host": _classify_probed_single_header(headers.get("X-Forwarded-Host"), probe_host_value),
         }
 
-    messages = []
     recommended = None
-    verdict = "unknown"
-    if not remote_is_trusted_proxy:
-        verdict = "warning"
-        messages.append(
-            f"{remote_ip} is not in TRUSTED_PROXY_CIDRS, so forwarding headers are ignored and every client "
-            "appears as that address."
-        )
     if probe_sent:
-        xff_safe = findings["x_forwarded_for"] in PROXY_HEADER_PROXY_SET_SAFE
-        forwarded_safe = findings["forwarded"] in PROXY_HEADER_PROXY_SET_SAFE
-        if xff_safe:
+        if findings["x_forwarded_for"] in PROXY_HEADER_PROXY_SET_SAFE:
             recommended = TRUSTED_PROXY_HEADER_X_FORWARDED
-        elif forwarded_safe:
+        elif findings["forwarded"] in PROXY_HEADER_PROXY_SET_SAFE:
             recommended = TRUSTED_PROXY_HEADER_FORWARDED
-
-        if recommended is None:
-            verdict = "unsafe"
-            messages.append("The proxy sets no client-IP header the app can trust.")
-        else:
-            if verdict == "unknown":
-                verdict = "ok"
-            if recommended != trusted_proxy_header:
-                verdict = "unsafe"
-                messages.append(
-                    f"Clients can choose their own IP: set TRUSTED_PROXY_HEADER={recommended}."
-                )
-
-        if trusted_proxy_header == TRUSTED_PROXY_HEADER_X_FORWARDED:
-            header_labels = {"x_forwarded_host": "X-Forwarded-Host", "x_forwarded_proto": "X-Forwarded-Proto"}
-            spoofable = [
-                label for name, label in header_labels.items() if findings[name] == PROXY_HEADER_PASSED_THROUGH
-            ]
-            if spoofable:
-                if verdict == "ok":
-                    verdict = "warning"
-                messages.append(
-                    f"The proxy does not set {' or '.join(spoofable)}, so the app cannot trust the "
-                    "host or scheme it sees."
-                )
+        # Host/proto headers that pass through from the client are reported in `findings` only. A
+        # client that fakes them changes just its own response (canonical-host check, whether HSTS
+        # is added), so they are not a check.
 
     context = resolve_client_request_context(
         remote_addr=remote_addr,
@@ -455,6 +431,107 @@ def analyse_proxy_header_probe(
         trusted_proxy_hops=trusted_proxy_hops,
         trusted_proxy_header=trusted_proxy_header,
     )
+
+    trusted_proxy_list = [cidr for cidr in (trusted_proxy_cidrs or []) if str(cidr).strip()]
+    environment = str(app_env or "").strip().lower()
+    hsts_seconds = int(hsts_max_age_seconds or 0)
+    deployed = environment in {"test", "prod"}
+    checks = []
+
+    def add_check(check_id, passed, problem, detail):
+        checks.append({"id": check_id, "passed": passed, "problem": problem, "detail": detail})
+
+    add_check(
+        "proxy_only_access",
+        bool(require_trusted_proxy) and bool(trusted_proxy_list),
+        "Direct connections to the app are allowed, bypassing the proxy.",
+        "REQUIRE_TRUSTED_PROXY={}, TRUSTED_PROXY_CIDRS={}. Both are needed to refuse connections that do "
+        "not come from the proxy.".format("1" if require_trusted_proxy else "0", ", ".join(trusted_proxy_list) or "(empty)"),
+    )
+    add_check(
+        "arrived_via_proxy",
+        bool(remote_is_trusted_proxy),
+        "This check did not arrive through the trusted proxy.",
+        "Request came from {}, which is {}in TRUSTED_PROXY_CIDRS. If the proxy's address changed, update "
+        "TRUSTED_PROXY_CIDRS; otherwise traffic is reaching the app another way.".format(
+            remote_ip, "" if remote_is_trusted_proxy else "not "
+        ),
+    )
+    if not probe_sent:
+        header_passed, header_detail = None, "No probe headers were sent, so this was not checked."
+    elif recommended is None:
+        header_passed = False
+        header_detail = (
+            "The proxy adds the visitor address to neither X-Forwarded-For nor Forwarded; client-supplied "
+            "values arrive unchanged or not at all."
+        )
+    elif recommended != trusted_proxy_header:
+        header_passed = False
+        header_detail = (
+            "TRUSTED_PROXY_HEADER={}, but the proxy only sets the {} family. Set TRUSTED_PROXY_HEADER={}.".format(
+                trusted_proxy_header, recommended, recommended
+            )
+        )
+    else:
+        header_passed = True
+        header_detail = "The proxy sets the {} family, which TRUSTED_PROXY_HEADER uses.".format(recommended)
+    add_check("visitor_address_trusted", header_passed, "Visitors could fake their address.", header_detail)
+
+    if header_passed and remote_is_trusted_proxy:
+        visitor_ip = context.client_ip_resolved
+        visitor_in_range = is_ip_in_cidrs(visitor_ip, trusted_proxy_list)
+        # A real visitor address inside the trusted range is skipped as if it were a proxy, so the
+        # app falls through to the fake value the browser sent: that is the tell-tale sign.
+        resolved_to_fake = visitor_ip in {PROXY_PROBE_FORWARDED_FOR, PROXY_PROBE_X_FORWARDED_FOR}
+        if resolved_to_fake:
+            range_detail = (
+                "The app resolved the visitor address to {}, the fake value the browser sent, because the real "
+                "visitor address falls inside TRUSTED_PROXY_CIDRS ({}). Narrow the range to the proxy's own "
+                "address(es).".format(visitor_ip, ", ".join(trusted_proxy_list))
+            )
+        else:
+            range_detail = (
+                "Visitor address {} is {}inside TRUSTED_PROXY_CIDRS. The range should cover only the proxy's own "
+                "address(es).".format(visitor_ip, "" if visitor_in_range else "not ")
+            )
+        add_check(
+            "proxy_range_excludes_visitors",
+            not (visitor_in_range or resolved_to_fake),
+            "The trusted proxy range also covers visitors' addresses.",
+            range_detail,
+        )
+    else:
+        add_check(
+            "proxy_range_excludes_visitors",
+            None,
+            "The trusted proxy range also covers visitors' addresses.",
+            "Not checked: needs the two checks above to pass first.",
+        )
+    add_check(
+        "secure_cookies",
+        deployed and bool(session_cookie_secure),
+        "Sign-in cookies could be sent over an unencrypted connection.",
+        "APP_ENV={}, secure session cookies {}. Deployed environments need APP_ENV=test or prod.".format(
+            environment or "(unset)", "on" if session_cookie_secure else "off"
+        ),
+    )
+    add_check(
+        "hsts",
+        deployed and hsts_seconds > 0,
+        "Browsers are not told to always use an encrypted connection (HSTS is off).",
+        "APP_ENV={}, HSTS_MAX_AGE_SECONDS={}. HSTS is only sent in test/prod with a positive max-age.".format(
+            environment or "(unset)", hsts_seconds
+        ),
+    )
+
+    if not probe_sent:
+        verdict = "unknown"
+    elif any(check["passed"] is False for check in checks):
+        verdict = "unsafe"
+    else:
+        verdict = "ok"
+    messages = [check["problem"] for check in checks if check["passed"] is False]
+
     return {
         "probe_sent": probe_sent,
         "remote_addr": remote_ip,
@@ -475,6 +552,7 @@ def analyse_proxy_header_probe(
         "resolved_client_ip": context.client_ip_resolved,
         "findings": findings,
         "recommended_trusted_proxy_header": recommended,
+        "checks": checks,
         "verdict": verdict,
         "messages": messages,
     }

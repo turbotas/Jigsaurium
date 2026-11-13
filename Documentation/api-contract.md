@@ -10,7 +10,7 @@
 ## Auth and Authorization
 
 - API access requires authenticated user context except for explicitly public endpoints.
-- Proxy-only access (`REQUIRE_TRUSTED_PROXY=1`, the default): requests whose socket peer is not a configured trusted proxy (or loopback) receive `403` with error code `forbidden`, before authentication. Pages get a plain-text `403`. `GET /api/v1/health` is exempt.
+- Proxy-only access (`REQUIRE_TRUSTED_PROXY=1`, the default): requests whose socket peer is not a configured trusted proxy (loopback included) receive `403` with error code `forbidden`, before authentication. Pages get a plain-text `403`. `GET /api/v1/health` is exempt.
 - Session authentication endpoints:
   - `GET /api/v1/auth/stfd/login-url` (public, returns STFD sign-in URL when STFD mode is enabled)
   - `POST /api/v1/auth/login` (public, expects `token` when STFD mode is enabled; otherwise expects `email` + `password`)
@@ -112,7 +112,7 @@
     - `overall_status`: `down` if any enabled probe is down, else `degraded` if any is degraded, else `ok`.
     - `cache_seconds`
     - `probes.<name>`: `status`, `checked_at`, `latency_ms`, `cached`, `error_code`, `error_message`, `details` (AI: `model`, `endpoint_host`, `http_status`, `total_tokens`, `cost_usd`; embeddings: `model_key`, `model_was_loaded`, `vector_dim`, `vector_norm`, `stored_vector_dims`). Secrets such as the API key are never returned.
-- `GET /api/v1/system/proxy-diagnostics` (administrator-only, `Cache-Control: no-store`) reports what the reverse proxy does with forwarding headers; backs the **Reverse proxy headers** check on the Service Health tab:
+- `GET /api/v1/system/proxy-diagnostics` (administrator-only, `Cache-Control: no-store`) reports what the reverse proxy does with forwarding headers; backs the **Visitor address handling** card on the Service Health tab (plain-language status for service managers, plus a copyable technical report for technicians):
   - The caller sends probe headers: `X-Jigsaurium-Proxy-Probe: 1`, `Forwarded: for=192.0.2.1;proto=http;host="<host>:1"`, `X-Forwarded-For: 192.0.2.2`, `X-Forwarded-Host: <host>:1`, `X-Forwarded-Proto: http` (192.0.2.0/24 is a documentation-only range).
   - Query: `probe_host` (optional, up to 255 chars): the host the browser used; defaults to the request host.
   - Response `data`:
@@ -121,8 +121,16 @@
     - `received`: raw `host`, `forwarded`, `x_forwarded_for`, `x_forwarded_proto`, `x_forwarded_host`, `x_real_ip`
     - `findings` (only when the probe was sent): per header (`forwarded`, `x_forwarded_for`, `x_forwarded_proto`, `x_forwarded_host`) one of `passed_through` (client value arrived unchanged), `appended` (proxy added its own value after it), `overwritten` (proxy replaced it), `stripped` (nothing arrived)
     - `recommended_trusted_proxy_header`: `x-forwarded` when the proxy sets `X-Forwarded-For`, else `forwarded` when it sets `Forwarded`, else `null`
-    - `verdict`: `ok`, `warning` (for example host/proto pass through, or the request did not come from a trusted proxy), `unsafe` (the configured header family is client-controlled, or no trustworthy client-IP header exists), or `unknown` (no probe sent)
-    - `messages`: plain-language explanations
+    - `checks`: ordered list of `{id, passed, problem, detail}`; `passed` is `true`, `false`, or `null` (not checked). `problem` is a plain-language sentence for service managers; `detail` is technical, for whoever fixes it. Checks:
+      - `proxy_only_access`: `REQUIRE_TRUSTED_PROXY` is on and `TRUSTED_PROXY_CIDRS` is non-empty.
+      - `arrived_via_proxy`: the probe's socket peer is in `TRUSTED_PROXY_CIDRS`.
+      - `visitor_address_trusted`: the proxy sets the client-IP header family that `TRUSTED_PROXY_HEADER` uses.
+      - `proxy_range_excludes_visitors`: the resolved visitor address is neither inside `TRUSTED_PROXY_CIDRS` nor one of the probe's fake values (a visitor inside the range is skipped as a proxy, so the fake value wins). `null` unless the two checks above pass.
+      - `secure_cookies`: `APP_ENV` is `test` or `prod` and `SESSION_COOKIE_SECURE` is on.
+      - `hsts`: `APP_ENV` is `test` or `prod` and `HSTS_MAX_AGE_SECONDS` is positive.
+    - `verdict`: `ok` (every check passed), `unsafe` (any check failed), or `unknown` (no probe sent)
+    - `messages`: the `problem` text of each failed check
+    - `X-Forwarded-Host`/`X-Forwarded-Proto` that pass through from the client are reported in `findings` only and do not change the verdict: a faked value only changes that client's own response (canonical-host check, whether HSTS is added).
     - `resolved_client_ip`, `resolved_scheme`, `resolved_host`
 
 ## Filtering, Sorting, Pagination

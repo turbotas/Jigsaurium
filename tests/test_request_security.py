@@ -218,13 +218,22 @@ def test_direct_connection_rejection_ignores_client_forwarding_headers(client, a
 
 
 @pytest.mark.functional
-@pytest.mark.parametrize("remote_addr", ["172.18.0.5", "127.0.0.1", "::1"])
-def test_trusted_proxy_and_loopback_connections_are_allowed(client, app, remote_addr):
+def test_trusted_proxy_connections_are_allowed(client, app):
     app.config["TRUSTED_PROXY_CIDRS"] = ["172.18.0.0/16"]
 
-    response = client.get("/api/v1/jigsaws", environ_overrides={"REMOTE_ADDR": remote_addr})
+    response = client.get("/api/v1/jigsaws", environ_overrides={"REMOTE_ADDR": "172.18.0.5"})
 
     assert response.status_code == 200
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize("remote_addr", ["127.0.0.1", "::1"])
+def test_loopback_connections_are_refused_when_proxy_only(client, app, remote_addr):
+    # Every environment is reached through the proxy; only the liveness path is exempt.
+    app.config["TRUSTED_PROXY_CIDRS"] = ["172.18.0.0/16"]
+
+    assert client.get("/api/v1/jigsaws", environ_overrides={"REMOTE_ADDR": remote_addr}).status_code == 403
+    assert client.get("/api/v1/health", environ_overrides={"REMOTE_ADDR": remote_addr}).status_code == 200
 
 
 @pytest.mark.functional
