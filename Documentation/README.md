@@ -62,6 +62,7 @@ Community/governance files at repository root:
   - GOV.UK asset updates (`scripts/update_govuk_assets.bat`, `scripts/update_govuk_assets.sh`)
   - admin bootstrap (`scripts/bootstrap_admin.py`)
   - demo seed/reset (`scripts/seed_demo_data.py`, `scripts/reset_demo_data.py`)
+  - AI model comparison for image suggestions (`scripts/ai_benchmark.py`, with `scripts/ai_benchmark_labeller.html` for marking the right answers; photos go in `instance/ai-benchmark/`, which git ignores)
 
 ## Pending Decisions Checklist
 
