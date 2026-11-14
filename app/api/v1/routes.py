@@ -3852,12 +3852,14 @@ def _build_ai_image_prompt(*, include_image_suggestion=True, image_count=1):
     return base_prompt
 
 
-def _prepare_ai_image_payload(image):
+def _prepare_ai_image_payload(image, *, max_edge=None):
     """Return (mime_type, bytes) for sending an image to the AI provider.
 
-    Photos keep their full resolution (the model reads box text and piece counts from them),
-    but EXIF orientation is applied first so the model sees the image the same way up as the
-    browser shows it. AI corners are relative to that upright image.
+    By default photos keep their full resolution (the model reads box text and piece counts
+    from them). EXIF orientation is always applied first so the model sees the image the same
+    way up as the browser shows it; AI corners are relative to that upright image. When
+    ``max_edge`` is given, larger images are scaled down so their longest edge fits it. Corners
+    are on a resolution-independent grid, so scaling does not change what they mean.
     """
     image_data = image.image_data
     mime_type = image.mime_type
@@ -3867,10 +3869,15 @@ def _prepare_ai_image_payload(image):
     try:
         with Image.open(BytesIO(image_data)) as source_image:
             orientation = source_image.getexif().get(AI_EXIF_ORIENTATION_TAG, 1)
-            if orientation in (None, 1):
+            needs_rotation = orientation not in (None, 1)
+            needs_resize = bool(max_edge) and max(source_image.size) > int(max_edge)
+            if not needs_rotation and not needs_resize:
                 return mime_type, image_data
             source_format = (source_image.format or "").upper()
             upright = ImageOps.exif_transpose(source_image)
+            if needs_resize:
+                resampling = getattr(Image, "Resampling", Image).LANCZOS
+                upright.thumbnail((int(max_edge), int(max_edge)), resampling)
             output_buffer = BytesIO()
             if source_format == "PNG" or "A" in upright.getbands():
                 upright.save(output_buffer, format="PNG")
@@ -4354,7 +4361,7 @@ def _build_ai_prompt_audit_payload(images, instruction_text, *, include_image_su
     }
 
 
-def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_image_suggestion=None):
+def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_image_suggestion=None, max_image_edge=None):
     if not current_app.config.get("AI_ENABLED", False):
         raise RuntimeError("AI image inference is disabled")
 
@@ -4375,7 +4382,7 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_imag
 
     user_content = [{"type": "text", "text": instruction_text}]
     for image in images:
-        send_mime_type, send_data = _prepare_ai_image_payload(image)
+        send_mime_type, send_data = _prepare_ai_image_payload(image, max_edge=max_image_edge)
         image_base64 = base64.b64encode(send_data).decode("ascii")
         user_content.append(
             {
