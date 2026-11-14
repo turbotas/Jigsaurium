@@ -367,7 +367,7 @@
 
 ## 2026-11-14 - AI Image Suggestion Contract (Issue #1)
 
-- Decision: the AI is sent each image at full resolution with EXIF orientation applied, and reports rotation as a quarter-turn `orientation` plus a separate `skew` (`-45..45`). It returns the corners of the main four-sided subject for `Box`, `Box side` and `Completed` images, on a fixed `0-1000` grid over the image as sent, before any rotation.
+- Decision: the AI is sent each image at full resolution with EXIF orientation applied, and reports rotation as a quarter-turn `orientation` plus a separate `skew` (`-45..45`). It tags each photo as `Box` (front), `Box back`, `Box side`, `In progress`, `Completed` or `Reference`, matching the app's built-in tags, and returns the corners of the main four-sided subject for every tag except `Reference`, on a fixed `0-1000` grid over the image as sent, before any rotation.
 - Rationale: phone photos taken looking down are often saved sideways, and raw bytes with EXIF orientation do not match what the browser shows. Providers also resize images internally, so pixel answers referred to a size the app never knew; the old fallback (dividing by the largest corner value) always stretched the crop to the right and bottom edges. A fixed grid that does not depend on resolution, plus a separate skew, removes those ambiguities while keeping full resolution for text and piece-count extraction.
 - Consequences: `ai_suggested_rotation_degrees_raw` is replaced by `ai_suggested_skew_degrees` (the migration converts existing values). The image browser does not yet apply skew (its editor rotates in 90-degree steps only), and a visual review screen for AI suggestions is planned as follow-up work.
 

@@ -72,8 +72,8 @@ TEXT_MATCH_RATIO = 0.8
 CORNER_GOOD_IOU = 0.9
 INSTRUCTION_TEXT = "Extract jigsaw metadata from this image."
 # The AI is asked for these four tags; the app's finer box tags map onto them.
-AI_TAGS = {"Box", "Box side", "Completed", "Reference"}
-AI_TAG_FOR_APP_TAG = {"Box front": "Box", "Box back": "Box side"}
+AI_TAGS = {"Box", "Box back", "Box side", "In progress", "Completed", "Reference"}
+AI_TAG_FOR_APP_TAG = {"Box front": "Box"}
 
 
 # ---------------------------------------------------------------- loading

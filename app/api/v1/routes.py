@@ -3792,8 +3792,10 @@ def _extract_json_object_from_text(raw_text):
 AI_IMAGE_SUGGESTION_FIELDS_PROMPT = (
     "tag classifies what the photo shows and must be one of these, or null when unsure: "
     "Box = the front (lid) of the puzzle box, showing the main puzzle picture; "
-    "Box side = any other face of the box, such as a narrow side edge or the back with product details; "
-    "Completed = the puzzle itself, assembled or partly assembled, out of the box; "
+    "Box back = the back of the box, usually with product details, a smaller copy of the picture or other puzzles in the range; "
+    "Box side = one of the narrow side edges of the box; "
+    "In progress = the puzzle partly assembled, out of the box; "
+    "Completed = the puzzle fully assembled, out of the box; "
     "Reference = anything else kept for reference, such as a poster, leaflet, loose pieces or a close-up. "
     "Photos are often taken with a phone held flat above the subject, so the phone may have saved them "
     "sideways or upside down. "
@@ -3801,8 +3803,9 @@ AI_IMAGE_SUGGESTION_FIELDS_PROMPT = (
     "exactly one of 0, 90, 180 or 270; use 0 when already upright and null when you cannot tell. "
     "skew is the extra clockwise rotation in degrees, between -45 and 45, needed after that quarter turn "
     "to make the main subject's edges level; use 0 when already level and null when unsure. "
-    "corners is for tags Box, Box side and Completed, otherwise null: the four corners of the main four-sided "
-    "subject (the box face for Box and Box side, the puzzle itself for Completed) as they appear in the image "
+    "corners is for every tag except Reference, otherwise null: the four corners of the main four-sided "
+    "subject (the box face for Box, Box back and Box side, the puzzle or its frame or board for In progress "
+    "and Completed) as they appear in the image "
     "exactly as provided, before any rotation. The subject may be tilted or seen at an angle, so the corners "
     "need not form a rectangle; follow its real edges. "
     "Give them as an array of 4 objects {\"x\": number, \"y\": number} "
@@ -4143,6 +4146,7 @@ def _normalize_ai_suggested_tag(value):
         IMAGE_BROWSER_TAG_BOX_FRONT,
         IMAGE_BROWSER_TAG_BOX_SIDE,
         IMAGE_BROWSER_TAG_BOX_BACK,
+        IMAGE_BROWSER_TAG_IN_PROGRESS,
         IMAGE_BROWSER_TAG_COMPLETED,
         IMAGE_BROWSER_TAG_REFERENCE,
     }:

@@ -118,7 +118,7 @@ def test_suggestion_with_only_upright_unskewed_rotation_is_not_pending_review():
 def test_ai_image_prompt_explains_tags_rotation_and_corner_grid():
     prompt = routes._build_ai_image_prompt(include_image_suggestion=True, image_count=1)
 
-    for phrase in ("Box =", "Box side =", "Completed =", "Reference =", "orientation", "skew", "0-1000 grid"):
+    for phrase in ("Box =", "Box back =", "Box side =", "In progress =", "Completed =", "Reference =", "orientation", "skew", "0-1000 grid"):
         assert phrase in prompt
     assert "coordinate_space" not in prompt
     assert "rotation_degrees" not in prompt
@@ -158,3 +158,12 @@ def test_inference_sends_upright_image_to_provider(app, monkeypatch):
     sent = base64.b64decode(data_url.split(",", 1)[1])
     with Image.open(BytesIO(sent)) as sent_image:
         assert sent_image.size == (300, 400)
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    "raw_tag, expected",
+    [("Box back", "Box back"), ("in progress", "In progress"), ("Box side", "Box side"), ("Poster", None)],
+)
+def test_ai_suggested_tag_accepts_box_back_and_in_progress(raw_tag, expected):
+    assert routes._normalize_ai_suggested_tag(raw_tag) == expected
