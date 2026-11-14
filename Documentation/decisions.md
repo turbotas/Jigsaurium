@@ -373,6 +373,6 @@
 
 ## 2026-11-14 - Choose AI Models With a Scored Benchmark (Issue #1)
 
-- Decision: pick the AI model (and image size) for image suggestions with `scripts/ai_benchmark.py`, which sends labelled test photos through the app's own AI request to each candidate model and scores tag, orientation, corners (overlap with the right shape), text fields, cost and time.
+- Decision: pick the AI model (and image size) for image suggestions with `scripts/ai_benchmark.py`, which sends labelled test photos through the app's own AI request to each candidate model and scores every answer the AI is asked for: tag, orientation, corners (overlap with the right shape) and every jigsaw detail (title, series, manufacturer, artist, pieces, size, tags, description), plus whether a photo was entirely right, cost and time.
 - Rationale: judging models by eye on a few photos proved misleading (for example, handwritten labels in demo photos changed what "upright" meant). Scores from photos labelled separately, in a JSON file beside each one, give a repeatable comparison as models and prompts change.
 - Consequences: test photos are private and stay out of git (`instance/ai-benchmark/`). Right answers are marked with `scripts/ai_benchmark_labeller.html`, a standalone page needing no server. Each run records its total cost as one `ai_benchmark` row in AI Spend, so benchmark spend is tracked with the rest and counts toward the daily budget. The planned split into a description call and a shape call will add a job option to the benchmark.

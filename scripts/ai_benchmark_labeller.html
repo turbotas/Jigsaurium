@@ -7,7 +7,9 @@
 <!--
   Marks the right answers for the photos used by scripts/ai_benchmark.py.
   Open this file directly in Chrome or Edge (no server needed), choose the benchmark folder,
-  then for each photo set the tag, which way up it should be, the four corners and any text.
+  then for each photo set the tag, which way up it should be, the four corners and every jigsaw
+  detail the photo shows (the same fields the AI is asked for). Saved answers load back for editing,
+  and fields this page does not know about are kept.
   Answers are saved as <photo>.json beside each photo. Browsers without folder write access
   download the .json files instead; move them into the folder afterwards.
 -->
@@ -23,7 +25,7 @@
   body { margin: 0; font: 15px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--text); }
   header { padding: 10px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid var(--line); background: var(--panel); }
   header h1 { font-size: 18px; margin: 0 12px 0 0; }
-  main { display: grid; grid-template-columns: 220px 1fr 300px; gap: 12px; padding: 12px 16px; height: calc(100vh - 56px); }
+  main { display: grid; grid-template-columns: 220px 1fr 340px; gap: 12px; padding: 12px 16px; height: calc(100vh - 56px); }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; height: auto; } }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px; overflow: auto; }
   ul { list-style: none; margin: 0; padding: 0; }
@@ -34,6 +36,10 @@
   #canvas-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 300px; }
   canvas#photo { max-width: 100%; max-height: 100%; cursor: crosshair; touch-action: none; }
   label { display: block; margin: 10px 0 4px; font-weight: 600; }
+  h2 { font-size: 16px; margin: 16px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
+  h2:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+  label.inline { display: flex; gap: 6px; align-items: flex-start; font-weight: normal; }
+  textarea { width: 100%; min-height: 70px; padding: 5px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 3px; font: inherit; }
   input[type=text], input[type=number], select { width: 100%; padding: 5px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 3px; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; }
   .hint { color: var(--muted); font-size: 13px; margin: 4px 0; }
@@ -61,6 +67,7 @@
     </div>
   </section>
   <section class="panel" aria-label="Answers">
+    <h2>Photo</h2>
     <label for="tag">Tag</label>
     <select id="tag">
       <option value="">(don't score)</option>
@@ -87,12 +94,28 @@
       <option value="skip">Don't score corners</option>
     </select>
 
-    <label for="title">Title (optional)</label>
+    <h2>Jigsaw details</h2>
+    <div class="hint">Fill in what this photo shows. A blank field is not scored, unless you tick the box below.</div>
+    <label for="title">Title</label>
     <input type="text" id="title">
-    <label for="manufacturer">Manufacturer (optional)</label>
+    <div class="row">
+      <div style="flex:2"><label for="series-name">Series</label><input type="text" id="series-name"></div>
+      <div style="flex:1"><label for="series-number">Series no.</label><input type="text" id="series-number"></div>
+    </div>
+    <label for="manufacturer">Manufacturer</label>
     <input type="text" id="manufacturer">
-    <label for="piece-count">Piece count (optional)</label>
-    <input type="number" id="piece-count" min="1">
+    <label for="artist">Artist</label>
+    <input type="text" id="artist">
+    <div class="row">
+      <div style="flex:1"><label for="piece-count">Pieces</label><input type="number" id="piece-count" min="1"></div>
+      <div style="flex:1"><label for="dimensions">Size (cm)</label><input type="text" id="dimensions" placeholder="68 x 48"></div>
+    </div>
+    <label for="tags">Tags (comma separated)</label>
+    <input type="text" id="tags" placeholder="flowers, garden, collage">
+    <label for="description">Description</label>
+    <textarea id="description"></textarea>
+    <div class="hint">Only checked for being given at all; write a line so the photo expects one.</div>
+    <label class="inline"><input type="checkbox" id="metadata-complete"> Details complete: blank fields should come back empty (catches made-up answers)</label>
 
     <div class="row" style="margin-top:14px">
       <button class="action primary" id="save-next">Save and next</button>
@@ -161,9 +184,17 @@
     if (photos.length) selectPhoto(0);
   }
 
+  // Text fields: answers key -> input id. Kept in the same order as the AI prompt.
+  const TEXT_FIELDS = {
+    title: "title", series_name: "series-name", series_number: "series-number",
+    manufacturer: "manufacturer", artist: "artist", dimensions_cm: "dimensions", description: "description",
+  };
+  // Keys this page edits; anything else in a saved file is kept as it is.
+  const MANAGED_KEYS = ["tag", "orientation", "skew", "corners", "piece_count", "tags", "metadata_complete", ...Object.keys(TEXT_FIELDS)];
+
   function isLabelled(photo) {
     const a = photo.answers;
-    return Boolean(a && (a.tag || a.orientation !== null && a.orientation !== undefined || "corners" in a));
+    return Boolean(a && (a.tag || a.orientation !== null && a.orientation !== undefined || "corners" in a || a.title));
   }
 
   function renderList() {
@@ -196,9 +227,10 @@
       ? [] : (Array.isArray(answers.orientation) ? answers.orientation : [answers.orientation]).map(Number);
     for (const box of el("orientation").querySelectorAll("input")) box.checked = orientations.includes(Number(box.value));
     el("skew").value = answers.skew ?? "";
-    el("title").value = answers.title ?? "";
-    el("manufacturer").value = answers.manufacturer ?? "";
+    for (const [key, id] of Object.entries(TEXT_FIELDS)) el(id).value = answers[key] ?? "";
     el("piece-count").value = answers.piece_count ?? "";
+    el("tags").value = Array.isArray(answers.tags) ? answers.tags.join(", ") : (answers.tags ?? "");
+    el("metadata-complete").checked = Boolean(answers.metadata_complete);
     if (!("corners" in answers)) {
       el("corners-mode").value = "marked";
       state.corners = [];
@@ -291,6 +323,8 @@
 
   function collectAnswers() {
     const answers = {};
+    const previous = state.photos[state.index].answers || {};
+    for (const [key, value] of Object.entries(previous)) if (!MANAGED_KEYS.includes(key)) answers[key] = value;
     if (el("tag").value) answers.tag = el("tag").value;
     const turns = [...el("orientation").querySelectorAll("input")].filter((b) => b.checked).map((b) => Number(b.value));
     answers.orientation = turns.length === 0 ? null : (turns.length === 1 ? turns[0] : turns);
@@ -307,9 +341,14 @@
         throw new Error("Mark all four corners, or clear them.");
       }
     }
-    if (el("title").value.trim()) answers.title = el("title").value.trim();
-    if (el("manufacturer").value.trim()) answers.manufacturer = el("manufacturer").value.trim();
+    for (const [key, id] of Object.entries(TEXT_FIELDS)) {
+      const value = el(id).value.trim();
+      if (value) answers[key] = value;
+    }
     if (el("piece-count").value) answers.piece_count = Number(el("piece-count").value);
+    const tags = el("tags").value.split(",").map((tag) => tag.trim()).filter(Boolean);
+    if (tags.length) answers.tags = tags;
+    if (el("metadata-complete").checked) answers.metadata_complete = true;
     return answers;
   }
 

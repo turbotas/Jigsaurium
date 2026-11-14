@@ -89,7 +89,7 @@ def test_score_case_penalises_missing_and_unwanted_corners(bench):
 @pytest.mark.functional
 def test_score_case_skips_answers_not_given(bench):
     scores = bench.score_case({"tag": "Box"}, {"title": "x"}, _suggestion("Reference", 0))
-    assert scores == {"tag_ok": False}
+    assert scores == {"tag_ok": False, "all_ok": False}
 
 
 @pytest.mark.functional
@@ -263,3 +263,88 @@ def test_prepare_ai_image_payload_scales_to_max_edge_only_when_larger():
 def test_corner_iou_scores_crossed_corners_as_the_sorted_shape(bench):
     crossed = [(0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (0.9, 0.9)]
     assert bench.corner_iou(SQUARE, crossed) == pytest.approx(1.0, abs=0.01)
+
+
+@pytest.mark.functional
+def test_score_case_scores_every_jigsaw_detail(bench):
+    expected = {
+        "title": "Four Seasons",
+        "series_name": "Garden Birds",
+        "series_number": "No. 3",
+        "manufacturer": "Otter House",
+        "artist": "Pollyanna Pickering",
+        "piece_count": 1000,
+        "tags": ["birds", "seasons", "garden", "music"],
+        "dimensions_cm": "68 x 48",
+        "description": "Birds through the year.",
+    }
+    metadata = {
+        "title": "Four Seasons Jigsaw",
+        "series_name": "garden birds",
+        "series_number": "3",
+        "manufacturer": "Otter House Puzzles",
+        "artist": "P. Pickering",
+        "piece_count": "1000",
+        "tags": "Birds, Seasons, nature",
+        "dimensions_cm": "68.5x48cm",
+        "description": "A puzzle.",
+    }
+
+    scores = bench.score_case(expected, metadata, _suggestion())
+
+    assert scores["title_ok"] and scores["series_name_ok"] and scores["manufacturer_ok"]
+    assert scores["series_number_ok"] is False  # "No. 3" and "3" differ once simplified
+    assert scores["artist_ok"] is False
+    assert scores["piece_count_ok"] and scores["dimensions_cm_ok"] and scores["description_ok"]
+    assert scores["tags_recall"] == 0.5
+    assert scores["tags_ok"] is True
+    assert scores["all_ok"] is False
+
+
+@pytest.mark.functional
+def test_metadata_complete_expects_blank_details_to_come_back_empty(bench):
+    expected = {"title": "Four Seasons", "metadata_complete": True}
+
+    invented_series = {"title": "Four Seasons", "series_name": "Made Up"}
+    scores = bench.score_case(expected, invented_series, _suggestion())
+    assert scores["series_name_ok"] is False
+    assert scores["artist_ok"] is True
+    assert scores["all_ok"] is False
+
+    clean = {"title": "Four Seasons", "tags": []}
+    assert bench.score_case(expected, clean, _suggestion())["all_ok"] is True
+
+
+@pytest.mark.functional
+def test_all_ok_needs_good_corners(bench):
+    expected = {"tag": "Box", "corners": [[100, 100], [900, 100], [900, 900], [100, 900]]}
+    good = [{"x": x, "y": y} for x, y in SQUARE]
+    poor = [{"x": x, "y": y} for x, y in [(0.1, 0.1), (0.5, 0.1), (0.5, 0.9), (0.1, 0.9)]]
+    assert bench.score_case(expected, {}, _suggestion("Box", corners=good))["all_ok"] is True
+    assert bench.score_case(expected, {}, _suggestion("Box", corners=poor))["all_ok"] is False
+
+
+@pytest.mark.functional
+def test_summary_counts_failed_calls_as_not_all_right(bench):
+    results = [
+        {"model": "m", "max_edge": None, "error": None, "scores": {"title_ok": True, "all_ok": True}},
+        {"model": "m", "max_edge": None, "error": "bad json", "scores": {}},
+    ]
+    row = bench.summarize(results)[0]
+    assert row["all_right"] == (1, 2)
+    assert row["details_right"] == (1, 1)
+
+
+@pytest.mark.functional
+def test_jigsaw_details_for_export(bench):
+    jigsaw = SimpleNamespace(
+        title="Garden Collage", series_name=None, series_number="", manufacturer="Corner Piece",
+        artist=None, piece_count=1000, tags="flowers, garden", dimensions_cm="68 x 48", description=None,
+    )
+    assert bench.jigsaw_details(jigsaw) == {
+        "title": "Garden Collage",
+        "manufacturer": "Corner Piece",
+        "piece_count": 1000,
+        "tags": ["flowers", "garden"],
+        "dimensions_cm": "68 x 48",
+    }

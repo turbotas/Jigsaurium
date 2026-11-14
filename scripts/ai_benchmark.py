@@ -11,9 +11,16 @@ answers (``box-front-1.jpg`` + ``box-front-1.json``). Fill these in with
       "corners": [[60, 190], [880, 190], [930, 885], [110, 885]],
                                           # 0-1000 grid over the photo as the browser shows it,
                                           # null when no corners are expected, omit to skip
-      "title": "Garden Collage",          # optional text fields, omit to skip
+      "title": "Garden Collage",          # the jigsaw details the AI is asked for; omit to skip
+      "series_name": null,
+      "series_number": null,
       "manufacturer": "Corner Piece",
-      "piece_count": 1000
+      "artist": null,
+      "piece_count": 1000,
+      "dimensions_cm": "68 x 48",         # compared by its numbers, to within 1 cm
+      "tags": ["flowers", "garden"],      # scored by how many of these the AI also gives
+      "description": "A collage of ...",  # scored only on whether one is given
+      "metadata_complete": true           # blank details above are expected to come back empty
     }
 
 The script sends every photo to every model, at every requested image size, using the same
@@ -40,6 +47,7 @@ import difflib
 import json
 import math
 import os
+import re
 import sys
 import time
 import threading
@@ -72,6 +80,14 @@ from app.api.v1 import routes as api_routes  # noqa: E402
 IMAGE_SUFFIXES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 GRID = api_routes.AI_CORNER_GRID_SIZE
 TEXT_MATCH_RATIO = 0.8
+TAGS_GOOD_RECALL = 0.5
+DIMENSION_TOLERANCE_CM = 1.0
+# Every jigsaw detail the AI is asked for, in the order the prompt lists them.
+METADATA_FIELDS = (
+    "title", "series_name", "series_number", "manufacturer", "artist",
+    "piece_count", "tags", "dimensions_cm", "description",
+)
+FREE_TEXT_FIELDS = ("title", "series_name", "manufacturer", "artist")
 CORNER_GOOD_IOU = 0.9
 INSTRUCTION_TEXT = "Extract jigsaw metadata from this image."
 # The AI is asked for these four tags; the app's finer box tags map onto them.
@@ -162,8 +178,93 @@ def _text_matches(expected, actual):
     return a in b or b in a or difflib.SequenceMatcher(None, a, b).ratio() >= TEXT_MATCH_RATIO
 
 
+def _is_blank(value):
+    return value is None or value == [] or (isinstance(value, str) and not value.strip())
+
+
+def _expected_metadata(expected):
+    """(field, right answer) pairs to score: the details given, plus the blank ones as None
+    (expected empty) when the photo is marked ``metadata_complete``."""
+    complete = bool(expected.get("metadata_complete"))
+    for field in METADATA_FIELDS:
+        value = expected.get(field)
+        if not _is_blank(value):
+            yield field, value
+        elif complete:
+            yield field, None
+
+
+def _numbers(text):
+    return sorted(float(n) for n in re.findall(r"\d+(?:\.\d+)?", str(text)))
+
+
+def _dimensions_match(expected, actual):
+    want, got = _numbers(expected), _numbers(actual)
+    return bool(want) and len(want) == len(got) and all(
+        abs(w - g) <= DIMENSION_TOLERANCE_CM for w, g in zip(want, got)
+    )
+
+
+def _tag_list(value):
+    if _is_blank(value):
+        return []
+    items = value if isinstance(value, list) else str(value).split(",")
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def tag_recall(expected, actual):
+    """Share of the right tags that the answer also gives (fuzzy match)."""
+    want, got = _tag_list(expected), _tag_list(actual)
+    if not want:
+        return 1.0
+    return sum(1 for tag in want if any(_text_matches(tag, other) for other in got)) / len(want)
+
+
+def _simplify_code(value):
+    return re.sub(r"[^0-9a-z]", "", str(value).lower())
+
+
+def _score_metadata_field(field, want, got, scores):
+    if want is None:
+        scores[f"{field}_ok"] = _is_blank(got)
+    elif field == "piece_count":
+        try:
+            scores["piece_count_ok"] = int(got) == int(want)
+        except (TypeError, ValueError):
+            scores["piece_count_ok"] = False
+    elif field == "series_number":
+        scores["series_number_ok"] = not _is_blank(got) and _simplify_code(got) == _simplify_code(want)
+    elif field == "dimensions_cm":
+        scores["dimensions_cm_ok"] = not _is_blank(got) and _dimensions_match(want, got)
+    elif field == "tags":
+        recall = tag_recall(want, got)
+        scores["tags_recall"] = round(recall, 3)
+        scores["tags_ok"] = recall >= TAGS_GOOD_RECALL
+    elif field == "description":
+        scores["description_ok"] = not _is_blank(got)
+    else:
+        scores[f"{field}_ok"] = _text_matches(want, got)
+
+
+def _all_right(scores):
+    for key, value in scores.items():
+        if key == "corners_spurious":
+            if value:
+                return False
+        elif key == "corner_iou":
+            if value < CORNER_GOOD_IOU:
+                return False
+        elif key.endswith("_ok") and not value:
+            return False
+    return True
+
+
 def score_case(expected, metadata, suggestion):
-    """Compare one answer against the right answers. Fields not given in ``expected`` are skipped."""
+    """Compare one answer against the right answers. Fields not given in ``expected`` are skipped.
+
+    ``all_ok`` is True when every scored field is right (corners need an overlap of at least
+    CORNER_GOOD_IOU); skew is reported but not part of it.
+    """
     scores = {}
 
     if expected.get("tag") is not None:
@@ -190,14 +291,11 @@ def score_case(expected, metadata, suggestion):
                 scores["corner_iou"] = 0.0
                 scores["corner_max_distance"] = None
 
-    for field in ("title", "manufacturer"):
-        if expected.get(field):
-            scores[f"{field}_ok"] = _text_matches(expected[field], metadata.get(field))
-    if expected.get("piece_count") is not None:
-        try:
-            scores["piece_count_ok"] = int(metadata.get("piece_count")) == int(expected["piece_count"])
-        except (TypeError, ValueError):
-            scores["piece_count_ok"] = False
+    for field, want in _expected_metadata(expected):
+        _score_metadata_field(field, want, (metadata or {}).get(field), scores)
+
+    if scores:
+        scores["all_ok"] = _all_right(scores)
     return scores
 
 
@@ -221,6 +319,9 @@ def summarize(results):
             return (sum(values), len(values)) if values else None
 
         ious = [s["corner_iou"] for s in scored if "corner_iou" in s]
+        detail_results = [
+            s[f"{field}_ok"] for s in scored for field in METADATA_FIELDS if f"{field}_ok" in s
+        ]
         rows.append(
             {
                 "model": model,
@@ -234,8 +335,21 @@ def summarize(results):
                 "corners_spurious": rate("corners_spurious"),
                 "skew_error_mean": _mean([s.get("skew_error") for s in scored]),
                 "title": rate("title_ok"),
+                "series_name": rate("series_name_ok"),
+                "series_number": rate("series_number_ok"),
                 "manufacturer": rate("manufacturer_ok"),
+                "artist": rate("artist_ok"),
                 "piece_count": rate("piece_count_ok"),
+                "dimensions_cm": rate("dimensions_cm_ok"),
+                "tags": rate("tags_ok"),
+                "tags_recall_mean": _mean([s.get("tags_recall") for s in scored]),
+                "description": rate("description_ok"),
+                "details_right": (sum(detail_results), len(detail_results)) if detail_results else None,
+                # Failed calls count as wrong: the user gets nothing from them.
+                "all_right": (
+                    sum(1 for s in scored if s.get("all_ok")),
+                    len(scored) + sum(1 for item in items if item.get("error")),
+                ) if any("all_ok" in s for s in scored) else None,
                 "cost_usd_mean": _mean([item.get("cost_usd") for item in items]),
                 "seconds_mean": _mean([item.get("seconds") for item in items]),
             }
@@ -255,14 +369,16 @@ def _fmt_number(value, digits):
 def render_summary_markdown(rows):
     header = (
         "| Model | Max edge | Photos | Errors | Tag | Orientation | Corner IoU | Corners good | "
-        "Spurious corners | Skew error | Title | Manufacturer | Pieces | Cost/photo $ | Seconds |\n"
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+        "Spurious corners | Skew error | Title | Series | Series no. | Manufacturer | Artist | Pieces | "
+        "Dimensions | Tags | Description | Details right | All right | Cost/photo $ | Seconds |\n"
+        "|" + "---|" * 23 + "\n"
     )
     lines = []
     for row in rows:
         lines.append(
             "| {model} | {edge} | {photos} | {errors} | {tag} | {orientation} | {iou} | {good} | {spurious} | "
-            "{skew} | {title} | {manufacturer} | {pieces} | {cost} | {seconds} |".format(
+            "{skew} | {title} | {series} | {series_number} | {manufacturer} | {artist} | {pieces} | "
+            "{dimensions} | {tags} | {description} | {details} | {all_right} | {cost} | {seconds} |".format(
                 model=row["model"],
                 edge=row["max_edge"] or "full",
                 photos=row["photos"],
@@ -274,15 +390,26 @@ def render_summary_markdown(rows):
                 spurious=_fmt_rate(row["corners_spurious"]),
                 skew=_fmt_number(row["skew_error_mean"], 1),
                 title=_fmt_rate(row["title"]),
+                series=_fmt_rate(row["series_name"]),
+                series_number=_fmt_rate(row["series_number"]),
                 manufacturer=_fmt_rate(row["manufacturer"]),
+                artist=_fmt_rate(row["artist"]),
                 pieces=_fmt_rate(row["piece_count"]),
+                dimensions=_fmt_rate(row["dimensions_cm"]),
+                tags=_fmt_rate(row["tags"]),
+                description=_fmt_rate(row["description"]),
+                details=_fmt_rate(row["details_right"]),
+                all_right=_fmt_rate(row["all_right"]),
                 cost=_fmt_number(row["cost_usd_mean"], 5),
                 seconds=_fmt_number(row["seconds_mean"], 1),
             )
         )
     notes = (
         f"\nCorner IoU is the overlap between the right shape and the model's (1 = perfect); "
-        f"'Corners good' counts IoU of at least {CORNER_GOOD_IOU}. Photos with no corners returned score 0.\n"
+        f"'Corners good' counts IoU of at least {CORNER_GOOD_IOU}. Photos with no corners returned score 0. "
+        f"'Tags' counts photos where the AI gave at least {TAGS_GOOD_RECALL:.0%} of the right tags; "
+        "'Description' only checks that one was given. 'Details right' adds up every jigsaw detail scored. "
+        "'All right' counts photos where every scored answer was right (skew aside); failed calls count as wrong.\n"
     )
     return header + "\n".join(lines) + "\n" + notes
 
@@ -544,17 +671,33 @@ def _run_all(args, cases, app, database_url):
     return 0
 
 
+BOX_TAGS = {"Box", "Box back", "Box side"}
+
+
+def jigsaw_details(jigsaw):
+    """The jigsaw's stored details as answer fields, as a starting point to check against the photo."""
+    details = {}
+    for field in METADATA_FIELDS:
+        value = getattr(jigsaw, field, None)
+        if field == "tags":
+            value = _tag_list(value)
+        if not _is_blank(value):
+            details[field] = value
+    return details
+
+
 def command_export(args):
     from sqlalchemy import select
 
     from app import create_app
     from app.db import get_session
-    from app.models import JigsawImage
+    from app.models import Jigsaw, JigsawImage
 
     folder = Path(args.folder)
     folder.mkdir(parents=True, exist_ok=True)
     app = create_app()
     with app.app_context():
+        jigsaw = get_session().get(Jigsaw, args.jigsaw)
         images = get_session().execute(
             select(JigsawImage).where(JigsawImage.jigsaw_id == args.jigsaw).order_by(JigsawImage.id)
         ).scalars().all()
@@ -567,9 +710,14 @@ def command_export(args):
                 answers = {"tag": AI_TAG_FOR_APP_TAG.get(image.tag, image.tag), "orientation": None}
                 if answers["tag"] not in AI_TAGS:
                     answers["tag"] = None
+                if jigsaw is not None and answers["tag"] in BOX_TAGS:
+                    answers.update(jigsaw_details(jigsaw))
                 answers_path.write_text(json.dumps(answers, indent=2) + "\n", encoding="utf-8")
             print(f"wrote {photo_path.name}")
-    print(f"{len(images)} photos exported. Fill in the .json answer files before running.")
+    print(
+        f"{len(images)} photos exported. Box photos start with the jigsaw's stored details: check each "
+        "against what the photo actually shows before running."
+    )
     return 0
 
 
