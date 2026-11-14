@@ -3808,7 +3808,7 @@ AI_IMAGE_SUGGESTION_FIELDS_PROMPT = (
     "and Completed) as they appear in the image "
     "exactly as provided, before any rotation. The subject may be tilted or seen at an angle, so the corners "
     "need not form a rectangle; follow its real edges. "
-    "Give them as an array of 4 objects {\"x\": number, \"y\": number} "
+    "Give them as an array of 4 [x, y] number pairs, for example [[120, 80], [880, 95], [870, 910], [130, 900]], "
     f"on a 0-{AI_CORNER_GRID_SIZE} grid, where x=0,y=0 is the top-left of the image and "
     f"x={AI_CORNER_GRID_SIZE},y={AI_CORNER_GRID_SIZE} is the bottom-right, whatever the image's pixel size. "
     "List them in the order top-left, top-right, bottom-right, bottom-left as seen in the provided image. "

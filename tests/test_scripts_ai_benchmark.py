@@ -210,6 +210,35 @@ def test_run_no_record_and_thinking_off(bench, app, tmp_path, monkeypatch):
 
 
 @pytest.mark.functional
+def test_failed_answer_keeps_raw_text_and_cost(bench, app, tmp_path, monkeypatch):
+    Image.new("RGB", (400, 300)).save(tmp_path / "box.jpg", format="JPEG")
+    (tmp_path / "box.json").write_text(json.dumps({"tag": "Box"}), encoding="utf-8")
+    monkeypatch.setenv("AI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_ENDPOINT_URL", "https://example.invalid/v1/chat/completions")
+
+    def fake_post(*, endpoint_url, api_key, request_payload, timeout_seconds):
+        return json.dumps({"choices": [{"message": {"content": "not json"}}], "usage": {"cost": 0.003}})
+
+    monkeypatch.setattr(routes, "_post_ai_chat_completion", fake_post)
+
+    assert bench.main(["run", str(tmp_path), "--model", "fake/model"]) == 0
+
+    assert routes._post_ai_chat_completion is fake_post
+    run_dir = next((tmp_path / "runs").iterdir())
+    result = json.loads((run_dir / "results.json").read_text(encoding="utf-8"))["results"][0]
+    assert "valid metadata JSON" in result["error"]
+    assert '"not json"' in result["raw_response"]
+    assert result["cost_usd"] == pytest.approx(0.003)
+    from app.db import get_session
+    from app.models import AiUsageEvent
+
+    with app.app_context():
+        event = get_session().query(AiUsageEvent).one()
+    assert event.status == "error"
+    assert float(event.final_cost_usd) == pytest.approx(0.003)
+
+
+@pytest.mark.functional
 def test_reasoning_for_thinking(bench):
     assert bench.reasoning_for_thinking("default") is None
     assert bench.reasoning_for_thinking("off") == {"enabled": False}
@@ -228,3 +257,9 @@ def test_prepare_ai_image_payload_scales_to_max_edge_only_when_larger():
 
     _, untouched = routes._prepare_ai_image_payload(image, max_edge=4000)
     assert untouched == image.image_data
+
+
+@pytest.mark.functional
+def test_corner_iou_scores_crossed_corners_as_the_sorted_shape(bench):
+    crossed = [(0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (0.9, 0.9)]
+    assert bench.corner_iou(SQUARE, crossed) == pytest.approx(1.0, abs=0.01)

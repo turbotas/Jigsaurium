@@ -42,6 +42,7 @@ import math
 import os
 import sys
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from decimal import Decimal
@@ -134,9 +135,13 @@ def _count_set(mask):
 
 
 def corner_iou(expected, predicted, size=400):
-    """Overlap (intersection over union) of two 4-point shapes given in 0..1 coordinates."""
-    expected_mask = _polygon_mask(expected, size)
-    predicted_mask = _polygon_mask(predicted, size)
+    """Overlap (intersection over union) of two 4-point shapes given in 0..1 coordinates.
+
+    Both are put in geometric order first, as the app's crop editor does, so corners listed in a
+    crossed order are scored as the shape the user would see.
+    """
+    expected_mask = _polygon_mask(order_corners(expected), size)
+    predicted_mask = _polygon_mask(order_corners(predicted), size)
     union = _count_set(ImageChops.logical_or(expected_mask, predicted_mask))
     if union == 0:
         return 0.0
@@ -367,6 +372,37 @@ def record_run_spend(results, *, run_name, database_url, thinking=None):
         engine.dispose()
 
 
+_last_response = threading.local()
+
+
+def _remember_provider_response(post):
+    """Wrap the provider call so a failed answer can still be reported, and its cost counted."""
+
+    def wrapper(**kwargs):
+        _last_response.text = None
+        _last_response.text = post(**kwargs)
+        return _last_response.text
+
+    return wrapper
+
+
+def _failed_call_details(raw_text):
+    """Raw answer text and cost from a provider response the app could not use."""
+    if not raw_text:
+        return {}
+    details = {"raw_response": raw_text[:4000]}
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return details
+    costs = api_routes._build_ai_usage_costs(payload)
+    cost = costs.get("final_cost_usd")
+    details["cost_usd"] = float(cost) if cost else None
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        details[key] = costs.get(key)
+    return details
+
+
 def run_case(app, case, model, max_edge):
     image = SimpleNamespace(
         id=1,
@@ -379,6 +415,7 @@ def run_case(app, case, model, max_edge):
     )
     result = {"photo": case["name"], "model": model, "max_edge": max_edge or None}
     started = time.monotonic()
+    _last_response.text = None
     try:
         with app.app_context():
             inference = api_routes._infer_jigsaw_metadata_from_images(
@@ -386,6 +423,7 @@ def run_case(app, case, model, max_edge):
             )
     except Exception as error:  # noqa: BLE001 - a failed call is a result to report, not a crash
         result.update(error=str(error)[:500], seconds=round(time.monotonic() - started, 2), scores={})
+        result.update(_failed_call_details(getattr(_last_response, "text", None)))
         return result
 
     metadata = inference["metadata"]
@@ -454,6 +492,15 @@ def command_run(args):
         return 1
 
     app = build_ai_app(args.timeout, args.thinking)
+    original_post = api_routes._post_ai_chat_completion
+    api_routes._post_ai_chat_completion = _remember_provider_response(original_post)
+    try:
+        return _run_all(args, cases, app, database_url)
+    finally:
+        api_routes._post_ai_chat_completion = original_post
+
+
+def _run_all(args, cases, app, database_url):
     edges = args.max_edge or [0]
     run_dir = Path(args.folder) / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)

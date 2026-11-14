@@ -122,6 +122,7 @@ def test_ai_image_prompt_explains_tags_rotation_and_corner_grid():
         assert phrase in prompt
     assert "coordinate_space" not in prompt
     assert "rotation_degrees" not in prompt
+    assert "[x, y] number pairs" in prompt
 
     multi_prompt = routes._build_ai_image_prompt(include_image_suggestion=True, image_count=3)
     assert "image_suggestions" in multi_prompt
