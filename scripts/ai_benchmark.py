@@ -19,8 +19,10 @@ answers (``box-front-1.jpg`` + ``box-front-1.json``). Fill these in with
 The script sends every photo to every model, at every requested image size, using the same
 request the app makes, then scores the answers and writes a report.
 
-Run from the repo (reads AI_API_KEY and AI_ENDPOINT_URL from .env; nothing is written to the
-database):
+Run from the repo (reads AI_API_KEY, AI_ENDPOINT_URL and DATABASE_URL from .env). Each run is
+recorded as one ``ai_benchmark`` row in the app's AI calls table with the run's total cost, so the
+spend shows in AI Spend and counts toward the daily budget; ``--no-record`` skips that.
+``--thinking off`` asks the provider to switch model thinking off:
     .venv\\Scripts\\python.exe scripts\\ai_benchmark.py run instance\\ai-benchmark ^
         --model openai/gpt-4o-mini --model google/gemini-3.1-flash-lite --max-edge 0 --max-edge 1024
 
@@ -74,6 +76,9 @@ INSTRUCTION_TEXT = "Extract jigsaw metadata from this image."
 # The AI is asked for these four tags; the app's finer box tags map onto them.
 AI_TAGS = {"Box", "Box back", "Box side", "In progress", "Completed", "Reference"}
 AI_TAG_FOR_APP_TAG = {"Box front": "Box"}
+AI_BENCHMARK_OPERATION = "ai_benchmark"
+MODEL_COLUMN_MAX_LENGTH = 128
+THINKING_CHOICES = ("default", "off", "low", "medium", "high")
 
 
 # ---------------------------------------------------------------- loading
@@ -280,7 +285,16 @@ def render_summary_markdown(rows):
 # ---------------------------------------------------------------- running
 
 
-def build_ai_app(timeout_seconds=None):
+def reasoning_for_thinking(thinking):
+    """OpenRouter ``reasoning`` request field for a --thinking choice (None = provider default)."""
+    if not thinking or thinking == "default":
+        return None
+    if thinking == "off":
+        return {"enabled": False}
+    return {"effort": thinking}
+
+
+def build_ai_app(timeout_seconds=None, thinking=None):
     app = Flask("ai_benchmark")
     app.config.update(
         AI_ENABLED=True,
@@ -288,8 +302,69 @@ def build_ai_app(timeout_seconds=None):
         AI_ENDPOINT_URL=os.environ.get("AI_ENDPOINT_URL", ""),
         AI_MODEL="",
         AI_TIMEOUT_SECONDS=int(timeout_seconds or os.environ.get("AI_TIMEOUT_SECONDS") or 120),
+        AI_REASONING=reasoning_for_thinking(thinking),
     )
     return app
+
+
+def _sum_or_none(values):
+    present = [value for value in values if isinstance(value, (int, float))]
+    return sum(present) if present else None
+
+
+def record_run_spend(results, *, run_name, database_url, thinking=None):
+    """Write one ai_benchmark row with the run's total cost to the app's AI calls table."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.db import ensure_sqlite_datetime_adapters
+    from app.models import AiUsageEvent
+
+    models = list(dict.fromkeys(result["model"] for result in results))
+    cost_by_model = {}
+    for result in results:
+        cost_by_model[result["model"]] = cost_by_model.get(result["model"], 0.0) + (result.get("cost_usd") or 0.0)
+    total_cost = round(sum(cost_by_model.values()), 6)
+    succeeded = sum(1 for result in results if not result.get("error"))
+    model_label = models[0] if len(models) == 1 else f"{len(models)} models: " + ", ".join(models)
+    if len(model_label) > MODEL_COLUMN_MAX_LENGTH:
+        model_label = model_label[: MODEL_COLUMN_MAX_LENGTH - 3] + "..."
+
+    if database_url.startswith("sqlite"):
+        ensure_sqlite_datetime_adapters()
+    engine = create_engine(database_url)
+    try:
+        with Session(engine) as session:
+            event = AiUsageEvent(
+                actor_user_id=None,
+                image_id=None,
+                operation=AI_BENCHMARK_OPERATION,
+                status="success" if succeeded else "error",
+                model=model_label,
+                endpoint_url=os.environ.get("AI_ENDPOINT_URL") or None,
+                prompt_tokens=_sum_or_none(r.get("prompt_tokens") for r in results),
+                completion_tokens=_sum_or_none(r.get("completion_tokens") for r in results),
+                total_tokens=_sum_or_none(r.get("total_tokens") for r in results),
+                provider_cost_usd=Decimal(str(total_cost)),
+                final_cost_usd=Decimal(str(total_cost)),
+                error_code=None if succeeded else "all_calls_failed",
+                payload_json=json.dumps(
+                    {
+                        "run": run_name,
+                        "calls": len(results),
+                        "failed_calls": len(results) - succeeded,
+                        "photos": len({result["photo"] for result in results}),
+                        "thinking": thinking or "default",
+                        "cost_usd_by_model": {model: round(cost, 6) for model, cost in cost_by_model.items()},
+                    },
+                    sort_keys=True,
+                ),
+            )
+            session.add(event)
+            session.commit()
+            return event.id, total_cost
+    finally:
+        engine.dispose()
 
 
 def run_case(app, case, model, max_edge):
@@ -320,6 +395,9 @@ def run_case(app, case, model, max_edge):
         error=None,
         seconds=round(time.monotonic() - started, 2),
         cost_usd=float(cost) if isinstance(cost, (Decimal, int, float)) else None,
+        prompt_tokens=inference.get("prompt_tokens"),
+        completion_tokens=inference.get("completion_tokens"),
+        total_tokens=inference.get("total_tokens"),
         metadata=metadata,
         suggestion=suggestion,
         scores=score_case(case["expected"], metadata, suggestion),
@@ -370,7 +448,12 @@ def command_run(args):
         print("AI_API_KEY and AI_ENDPOINT_URL must be set (in .env or the environment).", file=sys.stderr)
         return 1
 
-    app = build_ai_app(args.timeout)
+    database_url = None if args.no_record else os.environ.get("DATABASE_URL")
+    if not args.no_record and not database_url:
+        print("DATABASE_URL is not set, so the spend cannot be recorded. Set it or pass --no-record.", file=sys.stderr)
+        return 1
+
+    app = build_ai_app(args.timeout, args.thinking)
     edges = args.max_edge or [0]
     run_dir = Path(args.folder) / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -398,8 +481,19 @@ def command_run(args):
         json.dumps({"results": results, "summary": rows}, indent=1, default=_json_default), encoding="utf-8"
     )
     print()
+    if args.thinking and args.thinking != "default":
+        print(f"Thinking: {args.thinking}")
     print(summary)
     print(f"Report written to {run_dir}")
+    if database_url:
+        try:
+            event_id, total_cost = record_run_spend(
+                results, run_name=run_dir.name, database_url=database_url, thinking=args.thinking
+            )
+        except Exception as error:  # noqa: BLE001 - the report is saved; say what failed
+            print(f"WARNING: could not record the spend in AI Spend: {error}", file=sys.stderr)
+            return 2
+        print(f"Recorded ${total_cost:.4f} in AI Spend as an {AI_BENCHMARK_OPERATION} call (row {event_id}).")
     return 0
 
 
@@ -448,6 +542,13 @@ def build_parser():
     run.add_argument("--workers", type=int, default=4, help="photos sent at the same time (default 4)")
     run.add_argument("--timeout", type=int, help="seconds to wait for each answer")
     run.add_argument("--overlays", action="store_true", help="save pictures of the right and returned corners")
+    run.add_argument(
+        "--thinking",
+        choices=THINKING_CHOICES,
+        default="default",
+        help="ask the provider to switch model thinking off or set its effort (default: the model's own)",
+    )
+    run.add_argument("--no-record", action="store_true", help="do not record the spend in AI Spend")
     run.set_defaults(handler=command_run)
 
     export = commands.add_parser("export", help="copy a jigsaw's photos from the app database into the folder")

@@ -4418,6 +4418,10 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_imag
             {"role": "user", "content": user_content},
         ],
     }
+    # Optional provider reasoning ("thinking") control; only the model benchmark sets it today.
+    reasoning = current_app.config.get("AI_REASONING")
+    if reasoning:
+        request_payload["reasoning"] = reasoning
 
     response_raw = _post_ai_chat_completion(
         endpoint_url=endpoint_url,

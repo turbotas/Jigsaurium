@@ -118,7 +118,7 @@ def test_summarize_and_render(bench):
 
 
 @pytest.mark.functional
-def test_run_scores_photos_and_writes_report(bench, tmp_path, monkeypatch):
+def test_run_scores_photos_and_writes_report(bench, app, tmp_path, monkeypatch):
     photo = Image.new("RGB", (2000, 1000), (120, 40, 200))
     photo.save(tmp_path / "box.jpg", format="JPEG")
     (tmp_path / "box.json").write_text(
@@ -144,7 +144,11 @@ def test_run_scores_photos_and_writes_report(bench, tmp_path, monkeypatch):
                 "corners": [[100, 100], [900, 100], [900, 900], [100, 900]],
             },
         })
-        return json.dumps({"choices": [{"message": {"content": content}}], "usage": {"cost": 0.002}})
+        assert "reasoning" not in request_payload
+        return json.dumps({
+            "choices": [{"message": {"content": content}}],
+            "usage": {"cost": 0.002, "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+        })
 
     monkeypatch.setattr(routes, "_post_ai_chat_completion", fake_post)
 
@@ -161,6 +165,55 @@ def test_run_scores_photos_and_writes_report(bench, tmp_path, monkeypatch):
     assert "| fake/model | full | 1 | 0 | 1/1 | 1/1 |" in summary
     assert "| fake/model | 500 | 1 | 0 | 1/1 | 1/1 |" in summary
     assert (run_dir / "overlays" / "fake_model__500" / "box.jpg").exists()
+
+    from app.db import get_session
+    from app.models import AiUsageEvent
+
+    with app.app_context():
+        events = get_session().query(AiUsageEvent).all()
+    assert len(events) == 1
+    event = events[0]
+    assert event.operation == "ai_benchmark"
+    assert event.status == "success"
+    assert event.model == "fake/model"
+    assert float(event.final_cost_usd) == pytest.approx(0.004)
+    assert event.total_tokens == 240
+    payload = json.loads(event.payload_json)
+    assert payload["run"] == run_dir.name
+    assert payload["calls"] == 2
+    assert payload["cost_usd_by_model"] == {"fake/model": pytest.approx(0.004)}
+
+
+@pytest.mark.functional
+def test_run_no_record_and_thinking_off(bench, app, tmp_path, monkeypatch):
+    Image.new("RGB", (400, 300)).save(tmp_path / "box.jpg", format="JPEG")
+    (tmp_path / "box.json").write_text(json.dumps({"tag": "Box"}), encoding="utf-8")
+    monkeypatch.setenv("AI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_ENDPOINT_URL", "https://example.invalid/v1/chat/completions")
+    sent = []
+
+    def fake_post(*, endpoint_url, api_key, request_payload, timeout_seconds):
+        sent.append(request_payload.get("reasoning"))
+        content = json.dumps({"image_suggestion": {"tag": "Box"}})
+        return json.dumps({"choices": [{"message": {"content": content}}], "usage": {"cost": 0.001}})
+
+    monkeypatch.setattr(routes, "_post_ai_chat_completion", fake_post)
+
+    assert bench.main(["run", str(tmp_path), "--model", "fake/model", "--thinking", "off", "--no-record"]) == 0
+
+    assert sent == [{"enabled": False}]
+    from app.db import get_session
+    from app.models import AiUsageEvent
+
+    with app.app_context():
+        assert get_session().query(AiUsageEvent).count() == 0
+
+
+@pytest.mark.functional
+def test_reasoning_for_thinking(bench):
+    assert bench.reasoning_for_thinking("default") is None
+    assert bench.reasoning_for_thinking("off") == {"enabled": False}
+    assert bench.reasoning_for_thinking("low") == {"effort": "low"}
 
 
 @pytest.mark.functional
