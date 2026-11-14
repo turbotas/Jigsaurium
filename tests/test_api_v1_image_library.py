@@ -1330,7 +1330,7 @@ def test_image_library_list_includes_ai_suggestion_and_cropped_fields(client, se
         image.is_cropped = True
         image.ai_suggested_tag = "Reference"
         image.ai_suggested_rotation_degrees = 90
-        image.ai_suggested_rotation_degrees_raw = 91.25
+        image.ai_suggested_skew_degrees = 1.25
         image.ai_suggested_corners_json = json.dumps(
             [
                 {"x": 0.1, "y": 0.1},
@@ -1351,7 +1351,7 @@ def test_image_library_list_includes_ai_suggestion_and_cropped_fields(client, se
     assert row["is_cropped"] is True
     assert row["ai_suggested_tag"] == "Reference"
     assert row["ai_suggested_rotation_degrees"] == 90
-    assert row["ai_suggested_rotation_degrees_raw"] == 91.25
+    assert row["ai_suggested_skew_degrees"] == 1.25
     assert row["ai_suggestions_pending_review"] is True
     assert isinstance(row["ai_suggested_corners"], list)
     assert len(row["ai_suggested_corners"]) == 4
@@ -1961,13 +1961,13 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
                 "description": "Inferred from box image",
                 "image_suggestion": {
                     "tag": "Box side",
-                    "rotation_degrees": 180,
-                    "coordinate_space": "normalized",
+                    "orientation": 180,
+                    "skew": -2.5,
                     "corners": [
-                        {"x": 0.08, "y": 0.09},
-                        {"x": 0.92, "y": 0.09},
-                        {"x": 0.91, "y": 0.88},
-                        {"x": 0.07, "y": 0.9},
+                        {"x": 80, "y": 90},
+                        {"x": 920, "y": 90},
+                        [910, 880],
+                        {"x": 70, "y": 900},
                     ],
                 },
             },
@@ -2009,10 +2009,14 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
     assert payload["image"]["tag"] == "Box side"
     assert payload["image"]["ai_suggested_tag"] == "Box side"
     assert payload["image"]["ai_suggested_rotation_degrees"] == 180
-    assert payload["image"]["ai_suggested_rotation_degrees_raw"] == 180.0
+    assert payload["image"]["ai_suggested_skew_degrees"] == -2.5
     assert payload["image"]["ai_suggestions_pending_review"] is True
-    assert isinstance(payload["image"]["ai_suggested_corners"], list)
-    assert len(payload["image"]["ai_suggested_corners"]) == 4
+    assert payload["image"]["ai_suggested_corners"] == [
+        {"x": 0.08, "y": 0.09},
+        {"x": 0.92, "y": 0.09},
+        {"x": 0.91, "y": 0.88},
+        {"x": 0.07, "y": 0.9},
+    ]
     assert payload["ai"]["prompt_tokens"] == 500
 
     with app.app_context():
@@ -2024,7 +2028,7 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
         assert "provider_response_text" in payload
         assert payload["image_suggestions"]["suggested_tag"] == "Box side"
         assert payload["image_suggestions"]["suggested_rotation_degrees"] == 180
-        assert payload["image_suggestions"]["suggested_rotation_degrees_raw"] == 180.0
+        assert payload["image_suggestions"]["suggested_skew_degrees"] == -2.5
         assert len(payload["image_suggestions"]["suggested_corners"]) == 4
         assert isinstance(payload.get("ai_prompt"), dict)
         assert payload["ai_prompt"]["include_image_suggestion"] is True
@@ -2034,7 +2038,7 @@ def test_admin_can_create_jigsaw_from_unassigned_image_with_ai_inference(client,
 
 
 @pytest.mark.functional
-def test_create_jigsaw_from_image_ignores_invalid_corner_coordinate_space(client, seeded_image_library_data, app, monkeypatch):
+def test_create_jigsaw_from_image_rejects_off_grid_corners_and_splits_legacy_rotation(client, seeded_image_library_data, app, monkeypatch):
     _set_user_session(client, seeded_image_library_data["admin_user_id"])
 
     upload_response = client.post(
@@ -2061,13 +2065,12 @@ def test_create_jigsaw_from_image_ignores_invalid_corner_coordinate_space(client
                 "piece_count": 500,
                 "image_suggestion": {
                     "tag": "Reference",
-                    "rotation_degrees": 45,
-                    "coordinate_space": "galactic",
+                    "rotation_degrees": 91.25,
                     "corners": [
-                        {"x": 2, "y": 2},
-                        {"x": 40, "y": 2},
-                        {"x": 40, "y": 30},
-                        {"x": 2, "y": 30},
+                        {"x": 20, "y": 20},
+                        {"x": 4000, "y": 20},
+                        {"x": 4000, "y": 3000},
+                        {"x": 20, "y": 3000},
                     ],
                 },
             },
@@ -2094,7 +2097,7 @@ def test_create_jigsaw_from_image_ignores_invalid_corner_coordinate_space(client
     assert payload["image"]["tag"] == "Reference"
     assert payload["image"]["ai_suggested_tag"] == "Reference"
     assert payload["image"]["ai_suggested_rotation_degrees"] == 90
-    assert payload["image"]["ai_suggested_rotation_degrees_raw"] == 45.0
+    assert payload["image"]["ai_suggested_skew_degrees"] == 1.25
     assert payload["image"]["ai_suggested_corners"] is None
 
 
@@ -2425,8 +2428,8 @@ def test_admin_can_enrich_jigsaw_from_assigned_images_non_destructive(client, se
                     {
                         "image_id": int(_images[0].id),
                         "tag": "Box front",
-                        "rotation_degrees": 270,
-                        "coordinate_space": "normalized",
+                        "orientation": 270,
+                        "skew": 0,
                         "corners": [
                             {"x": 0.04, "y": 0.06},
                             {"x": 0.95, "y": 0.06},
@@ -2520,8 +2523,8 @@ def test_enrich_jigsaw_from_images_persists_ai_suggestions_per_image(client, see
                     {
                         "image_id": first_id,
                         "tag": "Box front",
-                        "rotation_degrees": 90,
-                        "coordinate_space": "normalized",
+                        "orientation": 90,
+                        "skew": 3,
                         "corners": [
                             {"x": 0.05, "y": 0.08},
                             {"x": 0.95, "y": 0.08},
@@ -2532,13 +2535,13 @@ def test_enrich_jigsaw_from_images_persists_ai_suggestions_per_image(client, see
                     {
                         "image_id": second_id,
                         "tag": "Box side",
-                        "rotation_degrees": 180,
-                        "coordinate_space": "pixel",
+                        "orientation": 180,
+                        "skew": None,
                         "corners": [
                             {"x": 0, "y": 0},
-                            {"x": 1365, "y": 0},
-                            {"x": 1365, "y": 768},
-                            {"x": 0, "y": 768},
+                            {"x": 1000, "y": 0},
+                            {"x": 1000, "y": 1000},
+                            {"x": 0, "y": 1000},
                         ],
                     },
                 ],
@@ -2574,12 +2577,12 @@ def test_enrich_jigsaw_from_images_persists_ai_suggestions_per_image(client, see
         assert first.ai_suggestions_pending_review is True
         assert first.ai_suggested_tag == "Box front"
         assert first.ai_suggested_rotation_degrees == 90
-        assert first.ai_suggested_rotation_degrees_raw == 90.0
+        assert first.ai_suggested_skew_degrees == 3.0
         assert isinstance(json.loads(first.ai_suggested_corners_json), list)
         assert second.ai_suggestions_pending_review is True
         assert second.ai_suggested_tag == "Box side"
         assert second.ai_suggested_rotation_degrees == 180
-        assert second.ai_suggested_rotation_degrees_raw == 180.0
+        assert second.ai_suggested_skew_degrees is None
         second_corners = json.loads(second.ai_suggested_corners_json)
         assert isinstance(second_corners, list)
         assert len(second_corners) == 4
