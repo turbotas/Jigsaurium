@@ -4588,14 +4588,12 @@
     if (!item) {
       return null;
     }
-    let raw = Number(item.ai_suggested_rotation_degrees);
+    if (item.ai_suggested_rotation_degrees === null || item.ai_suggested_rotation_degrees === undefined) {
+      return null;
+    }
+    const raw = Number(item.ai_suggested_rotation_degrees);
     if (!Number.isFinite(raw)) {
-      raw = Number(item.ai_suggested_rotation_degrees_raw);
-      if (!Number.isFinite(raw)) {
-        return null;
-      }
-      const normalizedRaw = ((raw % 360) + 360) % 360;
-      return normalizeRotationDegrees(Math.round(normalizedRaw / 90) * 90);
+      return null;
     }
     const normalized = ((Math.round(raw) % 360) + 360) % 360;
     if (normalized === 0 || normalized === 90 || normalized === 180 || normalized === 270) {
@@ -4604,13 +4602,22 @@
     return null;
   }
 
+  function parseAiSuggestedSkewDegrees(item) {
+    if (!item || item.ai_suggested_skew_degrees === null || item.ai_suggested_skew_degrees === undefined) {
+      return null;
+    }
+    const skew = Number(item.ai_suggested_skew_degrees);
+    return Number.isFinite(skew) ? skew : null;
+  }
+
   function imageHasPendingAiSuggestion(item) {
     if (!item || !item.ai_suggestions_pending_review) {
       return false;
     }
     return Boolean(item.ai_suggested_tag)
       || Boolean(parseAiSuggestedCorners(item))
-      || parseAiSuggestedRotationDegrees(item) !== null;
+      || Boolean(parseAiSuggestedRotationDegrees(item))
+      || Boolean(parseAiSuggestedSkewDegrees(item));
   }
 
   function shouldOfferAiCornerSuggestion(item) {
@@ -5485,14 +5492,13 @@
       const aiLine = document.createElement("p");
       aiLine.className = "app-image-browser__status-line";
       const rotation = parseAiSuggestedRotationDegrees(item);
-      const rawRotation = Number(item.ai_suggested_rotation_degrees_raw);
+      const skew = parseAiSuggestedSkewDegrees(item);
       const corners = parseAiSuggestedCorners(item);
       const cornerLabel = corners
         ? (isAiCornerSuggestionFullFrame(corners) ? "corners: full image" : "corners: provided")
         : "corners: none";
-      const rotationLabel = Number.isFinite(rawRotation)
-        ? `rotation: ${rotation === null ? "none" : `${rotation}°`} (raw ${rawRotation}°)`
-        : (rotation === null ? "rotation: none" : `rotation: ${rotation}°`);
+      const rotationLabel = `rotation: ${rotation === null ? "none" : `${rotation}°`}`
+        + (skew ? ` (skew ${skew > 0 ? "+" : ""}${skew}°)` : "");
       const tagLabel = item.ai_suggested_tag ? `tag: ${item.ai_suggested_tag}` : "tag: none";
       if (currentUserHasCapability("image.tag")) {
         aiLine.textContent = `AI suggestion pending review · ${tagLabel} · ${rotationLabel} · ${cornerLabel}. Use 'Use AI suggestion' to accept or 'Reject AI suggestion' to clear.`;
@@ -6296,12 +6302,28 @@
       return false;
     }
 
+    // AI corners are measured on the upright-as-stored image, before any rotation. The crop
+    // overlay is drawn on the rotated canvas, so carry each point through the same clockwise
+    // quarter turn that drawRotatedImageToContext applies.
+    const rotation = normalizeRotationDegrees(state.imageBrowser.rotationDegrees);
+    const toCanvasPoint = (point) => {
+      const x = point.x * imageWidth;
+      const y = point.y * imageHeight;
+      if (rotation === 90) {
+        return { x: imageHeight - y, y: x };
+      }
+      if (rotation === 180) {
+        return { x: imageWidth - x, y: imageHeight - y };
+      }
+      if (rotation === 270) {
+        return { x: y, y: imageWidth - x };
+      }
+      return { x, y };
+    };
+
     state.imageBrowser.cropModeType = IMAGE_BROWSER_CROP_MODE_PERSPECTIVE;
     state.imageBrowser.cropMode = true;
-    state.imageBrowser.cropPerspectivePoints = normalizedCorners.map((point) => ({
-      x: point.x * imageWidth,
-      y: point.y * imageHeight,
-    }));
+    state.imageBrowser.cropPerspectivePoints = normalizedCorners.map(toCanvasPoint);
     state.imageBrowser.cropPerspectivePreviewPoint = null;
     state.imageBrowser.cropPerspectiveActivePointIndex = -1;
     state.imageBrowser.aiSuggestionUsedForCurrentImage = true;

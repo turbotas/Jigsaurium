@@ -148,14 +148,9 @@ AI_USAGE_STATUS_SUCCESS = "success"
 AI_USAGE_STATUS_ERROR = "error"
 AI_USAGE_STATUS_BLOCKED = "blocked"
 AI_BOX_IMAGE_TAG = "Box"
-AI_IMAGE_SUGGESTION_SPACE_NORMALIZED = "normalized"
-AI_IMAGE_SUGGESTION_SPACE_PIXEL = "pixel"
-AI_IMAGE_SUGGESTION_SPACE_UNKNOWN = "unknown"
-AI_IMAGE_SUGGESTION_ALLOWED_SPACES = {
-    AI_IMAGE_SUGGESTION_SPACE_NORMALIZED,
-    AI_IMAGE_SUGGESTION_SPACE_PIXEL,
-    AI_IMAGE_SUGGESTION_SPACE_UNKNOWN,
-}
+AI_CORNER_GRID_SIZE = 1000
+AI_SUGGESTED_SKEW_MAX_DEGREES = 45.0
+AI_EXIF_ORIENTATION_TAG = 0x0112
 DIARY_ENTRY_NOTES_MAX_LENGTH = 4000
 DIARY_ENTRY_DIFFICULTY_MIN = 1
 DIARY_ENTRY_DIFFICULTY_MAX = 5
@@ -1091,7 +1086,7 @@ def _serialize_jigsaw_image(image):
         "is_cropped": bool(getattr(image, "is_cropped", False)),
         "ai_suggested_tag": getattr(image, "ai_suggested_tag", None),
         "ai_suggested_rotation_degrees": getattr(image, "ai_suggested_rotation_degrees", None),
-        "ai_suggested_rotation_degrees_raw": getattr(image, "ai_suggested_rotation_degrees_raw", None),
+        "ai_suggested_skew_degrees": getattr(image, "ai_suggested_skew_degrees", None),
         "ai_suggested_corners": _deserialize_json_text(getattr(image, "ai_suggested_corners_json", None)),
         "ai_suggestions_pending_review": bool(getattr(image, "ai_suggestions_pending_review", False)),
         "ai_suggested_at": image.ai_suggested_at.isoformat() if getattr(image, "ai_suggested_at", None) else None,
@@ -1113,7 +1108,7 @@ def _serialize_jigsaw_image_fields(
     is_cropped=False,
     ai_suggested_tag=None,
     ai_suggested_rotation_degrees=None,
-    ai_suggested_rotation_degrees_raw=None,
+    ai_suggested_skew_degrees=None,
     ai_suggested_corners_json=None,
     ai_suggestions_pending_review=False,
     ai_suggested_at=None,
@@ -1138,7 +1133,7 @@ def _serialize_jigsaw_image_fields(
         "is_cropped": bool(is_cropped),
         "ai_suggested_tag": ai_suggested_tag,
         "ai_suggested_rotation_degrees": ai_suggested_rotation_degrees,
-        "ai_suggested_rotation_degrees_raw": ai_suggested_rotation_degrees_raw,
+        "ai_suggested_skew_degrees": ai_suggested_skew_degrees,
         "ai_suggested_corners": _deserialize_json_text(ai_suggested_corners_json),
         "ai_suggestions_pending_review": bool(ai_suggestions_pending_review),
         "ai_suggested_at": ai_suggested_at.isoformat() if ai_suggested_at else None,
@@ -1161,7 +1156,7 @@ def _jigsaw_image_metadata_columns():
         JigsawImage.is_cropped,
         JigsawImage.ai_suggested_tag,
         JigsawImage.ai_suggested_rotation_degrees,
-        JigsawImage.ai_suggested_rotation_degrees_raw,
+        JigsawImage.ai_suggested_skew_degrees,
         JigsawImage.ai_suggested_corners_json,
         JigsawImage.ai_suggestions_pending_review,
         JigsawImage.ai_suggested_at,
@@ -3794,6 +3789,31 @@ def _extract_json_object_from_text(raw_text):
     return parsed
 
 
+AI_IMAGE_SUGGESTION_FIELDS_PROMPT = (
+    "tag classifies what the photo shows and must be one of these, or null when unsure: "
+    "Box = the front (lid) of the puzzle box, showing the main puzzle picture; "
+    "Box side = any other face of the box, such as a narrow side edge or the back with product details; "
+    "Completed = the puzzle itself, assembled or partly assembled, out of the box; "
+    "Reference = anything else kept for reference, such as a poster, leaflet, loose pieces or a close-up. "
+    "Photos are often taken with a phone held flat above the subject, so the phone may have saved them "
+    "sideways or upside down. "
+    "orientation is the clockwise quarter turn needed to make the photo upright, judged from its text and artwork: "
+    "exactly one of 0, 90, 180 or 270; use 0 when already upright and null when you cannot tell. "
+    "skew is the extra clockwise rotation in degrees, between -45 and 45, needed after that quarter turn "
+    "to make the main subject's edges level; use 0 when already level and null when unsure. "
+    "corners is for tags Box, Box side and Completed, otherwise null: the four corners of the main four-sided "
+    "subject (the box face for Box and Box side, the puzzle itself for Completed) as they appear in the image "
+    "exactly as provided, before any rotation. The subject may be tilted or seen at an angle, so the corners "
+    "need not form a rectangle; follow its real edges. "
+    "Give them as an array of 4 objects {\"x\": number, \"y\": number} "
+    f"on a 0-{AI_CORNER_GRID_SIZE} grid, where x=0,y=0 is the top-left of the image and "
+    f"x={AI_CORNER_GRID_SIZE},y={AI_CORNER_GRID_SIZE} is the bottom-right, whatever the image's pixel size. "
+    "List them in the order top-left, top-right, bottom-right, bottom-left as seen in the provided image. "
+    "Mark the corners of the subject itself, not the edges of the photo; "
+    "use null when any corner of the subject is hidden or outside the photo. "
+)
+
+
 def _build_ai_image_prompt(*, include_image_suggestion=True, image_count=1):
     base_prompt = (
         "You are extracting metadata from a jigsaw puzzle box image. "
@@ -3813,47 +3833,52 @@ def _build_ai_image_prompt(*, include_image_suggestion=True, image_count=1):
     if include_image_suggestion:
         if int(image_count or 0) > 1:
             base_prompt += (
-                "Also include image_suggestions (array) with one object per provided image. "
-                "Each image_suggestions item must contain: image_id (integer), tag (string|null), rotation_degrees (number|null), coordinate_space (string), corners (array|null). "
-                "image_id must match one of the provided image ids from the user instruction image list. "
-                "tag should classify image purpose as one of: Box, Box side, Completed, Reference; "
-                "use null when uncertain. "
-                "rotation_degrees should be clockwise degrees that best align puzzle box/image edges for square crop preparation. "
-                "Fractional values are allowed when useful. "
-                "Use null when uncertain. "
-                "Do not return full-frame corners unless the box/image genuinely fills the frame edge-to-edge. "
-                "corners should contain exactly 4 points in reading order around the rectangular subject (top-left, top-right, bottom-right, bottom-left). "
-                "For most images, attempt corners even when imperfect. "
-                "Each point must be object with numeric x and y. "
-                "Set coordinate_space to one of normalized, pixel, unknown. "
-                "When normalized, x/y are between 0 and 1. "
-                "When pixel, x/y are absolute pixels in the source image. "
-                "If corners are not confidently available, set corners to null and coordinate_space to unknown. "
+                "Also include image_suggestions (array) with one object per provided image, each with keys: "
+                "image_id (integer), tag (string|null), orientation (integer|null), skew (number|null), corners (array|null). "
+                "image_id must match the id of that image in the image list given in the user instruction, "
+                "which lists the images in the order they are provided. "
             )
         else:
             base_prompt += (
                 "Also include image_suggestion (object) with keys: "
-                "tag (string|null), rotation_degrees (number|null), coordinate_space (string), corners (array|null). "
-                "tag should classify image purpose as one of: Box, Box side, Completed, Reference; "
-                "use null when uncertain. "
-                "rotation_degrees should be clockwise degrees that best align puzzle box/image edges for square crop preparation. "
-                "Fractional values are allowed when useful. "
-                "Use null when uncertain. "
-                "Do not return full-frame corners unless the box/image genuinely fills the frame edge-to-edge. "
-                "corners should contain exactly 4 points in reading order around the rectangular subject (top-left, top-right, bottom-right, bottom-left). "
-                "For most images, attempt corners even when imperfect. "
-                "Each point must be object with numeric x and y. "
-                "Set coordinate_space to one of normalized, pixel, unknown. "
-                "When normalized, x/y are between 0 and 1. "
-                "When pixel, x/y are absolute pixels in the source image. "
-                "If corners are not confidently available, set corners to null and coordinate_space to unknown. "
+                "tag (string|null), orientation (integer|null), skew (number|null), corners (array|null). "
             )
+        base_prompt += AI_IMAGE_SUGGESTION_FIELDS_PROMPT
 
     base_prompt += (
         "Do not include markdown, code fences, comments, or any text before/after the JSON object. "
         "Output must be parseable by json.loads without preprocessing."
     )
     return base_prompt
+
+
+def _prepare_ai_image_payload(image):
+    """Return (mime_type, bytes) for sending an image to the AI provider.
+
+    Photos keep their full resolution (the model reads box text and piece counts from them),
+    but EXIF orientation is applied first so the model sees the image the same way up as the
+    browser shows it. AI corners are relative to that upright image.
+    """
+    image_data = image.image_data
+    mime_type = image.mime_type
+    if Image is None or ImageOps is None or not image_data:
+        return mime_type, image_data
+
+    try:
+        with Image.open(BytesIO(image_data)) as source_image:
+            orientation = source_image.getexif().get(AI_EXIF_ORIENTATION_TAG, 1)
+            if orientation in (None, 1):
+                return mime_type, image_data
+            source_format = (source_image.format or "").upper()
+            upright = ImageOps.exif_transpose(source_image)
+            output_buffer = BytesIO()
+            if source_format == "PNG" or "A" in upright.getbands():
+                upright.save(output_buffer, format="PNG")
+                return "image/png", output_buffer.getvalue()
+            upright.convert("RGB").save(output_buffer, format="JPEG", quality=95)
+            return "image/jpeg", output_buffer.getvalue()
+    except (UnidentifiedImageError, DecompressionBombError, OSError, ValueError):
+        return mime_type, image_data
 
 
 def _build_ai_usage_costs(result_payload):
@@ -4118,59 +4143,71 @@ def _normalize_ai_suggested_tag(value):
     return None
 
 
-def _coerce_ai_suggested_rotation_degrees_raw(value):
-    if value is None:
+def _coerce_finite_float(value):
+    if value is None or isinstance(value, bool):
         return None
     try:
-        rotation = float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
-    if not math.isfinite(rotation):
+    if not math.isfinite(number):
         return None
-    normalized = rotation % 360.0
-    return round(normalized, 6)
+    return number
 
 
-def _normalize_ai_suggested_rotation_degrees(value):
-    normalized_raw = _coerce_ai_suggested_rotation_degrees_raw(value)
-    if normalized_raw is None:
-        return None
+def _split_ai_rotation(raw_item):
+    """Return (orientation, skew) from an AI image suggestion item.
 
-    # Current editor backend applies 90-degree steps only. Preserve raw value
-    # separately and snap here for immediate compatibility.
-    snapped_quarter_turn = int(((normalized_raw + 45.0) // 90.0) % 4)
-    return snapped_quarter_turn * 90
+    orientation is the clockwise quarter turn (0/90/180/270) that makes the image upright;
+    skew is the extra clockwise angle in [-45, 45] that levels the subject after that turn.
+    A legacy single ``rotation_degrees`` angle is split into the same two parts.
+    """
+    orientation = None
+    raw_orientation = _coerce_finite_float(raw_item.get("orientation"))
+    if raw_orientation is not None:
+        snapped = int(round((raw_orientation % 360.0) / 90.0)) % 4 * 90
+        orientation = snapped
 
+    skew = _coerce_finite_float(raw_item.get("skew"))
 
-def _extract_image_pixel_dimensions(image_data):
-    if Image is None or not image_data:
-        return None, None
-    try:
-        with Image.open(BytesIO(image_data)) as image_obj:
-            width, height = image_obj.size
-            width = int(width or 0)
-            height = int(height or 0)
-            if width <= 0 or height <= 0:
-                return None, None
-            return width, height
-    except Exception:
-        return None, None
+    if orientation is None and skew is None:
+        legacy_rotation = _coerce_finite_float(raw_item.get("rotation_degrees"))
+        if legacy_rotation is not None:
+            normalized = legacy_rotation % 360.0
+            orientation = int(((normalized + 45.0) // 90.0) % 4) * 90
+            skew = normalized - orientation
+            if skew > 180.0:
+                skew -= 360.0
+
+    if skew is not None:
+        if abs(skew) > AI_SUGGESTED_SKEW_MAX_DEGREES:
+            skew = None
+        else:
+            skew = round(skew, 2)
+    return orientation, skew
 
 
 def _parse_ai_corner_point(raw_point):
-    if not isinstance(raw_point, dict):
+    if isinstance(raw_point, (list, tuple)) and len(raw_point) == 2:
+        raw_x, raw_y = raw_point
+    elif isinstance(raw_point, dict):
+        raw_x, raw_y = raw_point.get("x"), raw_point.get("y")
+    else:
         return None
-    try:
-        x_value = float(raw_point.get("x"))
-        y_value = float(raw_point.get("y"))
-    except (TypeError, ValueError):
-        return None
-    if not (x_value == x_value and y_value == y_value):  # NaN guard
+    x_value = _coerce_finite_float(raw_x)
+    y_value = _coerce_finite_float(raw_y)
+    if x_value is None or y_value is None:
         return None
     return {"x": x_value, "y": y_value}
 
 
-def _normalize_ai_suggested_corners(raw_corners, *, coordinate_space, image_width, image_height):
+def _normalize_ai_suggested_corners(raw_corners):
+    """Convert AI corners on the 0-1000 grid to stored 0-1 values.
+
+    Some models answer in 0-1 despite the prompt; when every value is at most 1 the points
+    are read as already normalized. Anything outside the grid (beyond a small tolerance)
+    rejects the whole set rather than guessing a scale.
+    """
     if not isinstance(raw_corners, list) or len(raw_corners) != 4:
         return None
 
@@ -4181,68 +4218,53 @@ def _normalize_ai_suggested_corners(raw_corners, *, coordinate_space, image_widt
             return None
         parsed_points.append(parsed_point)
 
-    if coordinate_space == AI_IMAGE_SUGGESTION_SPACE_PIXEL:
-        def _normalize_with_divisor(divisor_width, divisor_height):
-            if not divisor_width or not divisor_height:
-                return None
-            try:
-                width_value = float(divisor_width)
-                height_value = float(divisor_height)
-            except (TypeError, ValueError):
-                return None
-            if width_value <= 0 or height_value <= 0:
-                return None
+    max_value = max(max(point["x"], point["y"]) for point in parsed_points)
+    scale = 1.0 if max_value <= 1.0 else float(AI_CORNER_GRID_SIZE)
 
-            normalized_points = []
-            for point in parsed_points:
-                normalized_x = point["x"] / width_value
-                normalized_y = point["y"] / height_value
-                if normalized_x < -0.05 or normalized_x > 1.05 or normalized_y < -0.05 or normalized_y > 1.05:
-                    return None
-                normalized_points.append(
-                    {
-                        "x": round(min(max(normalized_x, 0.0), 1.0), 6),
-                        "y": round(min(max(normalized_y, 0.0), 1.0), 6),
-                    }
-                )
-            return normalized_points
-
-        # First preference: normalize against actual source dimensions.
-        normalized_from_source = _normalize_with_divisor(image_width, image_height)
-        if normalized_from_source is not None:
-            return normalized_from_source
-
-        # Fallback: some models return pixel corners for their internal resized image.
-        # If so, normalize against the observed max corner extents so we can still surface
-        # a useful review hint instead of dropping corners entirely.
-        max_x = max(point["x"] for point in parsed_points)
-        max_y = max(point["y"] for point in parsed_points)
-        if max_x <= 0 or max_y <= 0:
+    normalized_points = []
+    for point in parsed_points:
+        normalized_x = point["x"] / scale
+        normalized_y = point["y"] / scale
+        if min(normalized_x, normalized_y) < -0.01 or max(normalized_x, normalized_y) > 1.01:
             return None
-        return _normalize_with_divisor(max_x, max_y)
+        normalized_points.append(
+            {
+                "x": round(min(max(normalized_x, 0.0), 1.0), 6),
+                "y": round(min(max(normalized_y, 0.0), 1.0), 6),
+            }
+        )
 
-    if coordinate_space == AI_IMAGE_SUGGESTION_SPACE_NORMALIZED:
-        normalized_points = []
-        for point in parsed_points:
-            if point["x"] < -0.05 or point["x"] > 1.05 or point["y"] < -0.05 or point["y"] > 1.05:
-                return None
-            normalized_points.append(
-                {
-                    "x": round(min(max(point["x"], 0.0), 1.0), 6),
-                    "y": round(min(max(point["y"], 0.0), 1.0), 6),
-                }
-            )
-        return normalized_points
-
-    return None
+    unique_points = {(point["x"], point["y"]) for point in normalized_points}
+    if len(unique_points) != 4:
+        return None
+    return normalized_points
 
 
-def _normalize_ai_image_suggestions(raw_payload, *, image):
+def _normalize_ai_image_suggestion_item(raw_item):
+    suggested_tag = _normalize_ai_suggested_tag(raw_item.get("tag") or raw_item.get("image_type"))
+    orientation, skew = _split_ai_rotation(raw_item)
+    suggested_corners = _normalize_ai_suggested_corners(raw_item.get("corners"))
+    has_suggestion = (
+        suggested_tag is not None
+        or bool(suggested_corners)
+        or orientation not in (None, 0)
+        or skew not in (None, 0)
+    )
+    return {
+        "suggested_tag": suggested_tag,
+        "suggested_rotation_degrees": orientation,
+        "suggested_skew_degrees": skew,
+        "suggested_corners": suggested_corners,
+        "has_suggestion": has_suggestion,
+    }
+
+
+def _normalize_ai_image_suggestions(raw_payload, *, image=None):
     if not isinstance(raw_payload, dict):
         return {
             "suggested_tag": None,
             "suggested_rotation_degrees": None,
-            "suggested_rotation_degrees_raw": None,
+            "suggested_skew_degrees": None,
             "suggested_corners": None,
             "has_suggestion": False,
         }
@@ -4250,34 +4272,7 @@ def _normalize_ai_image_suggestions(raw_payload, *, image):
     image_suggestion = raw_payload.get("image_suggestion")
     if not isinstance(image_suggestion, dict):
         image_suggestion = raw_payload
-
-    suggested_tag = _normalize_ai_suggested_tag(image_suggestion.get("tag") or image_suggestion.get("image_type"))
-    suggested_rotation_degrees_raw = _coerce_ai_suggested_rotation_degrees_raw(image_suggestion.get("rotation_degrees"))
-    suggested_rotation_degrees = _normalize_ai_suggested_rotation_degrees(image_suggestion.get("rotation_degrees"))
-
-    raw_coordinate_space = str(image_suggestion.get("coordinate_space") or "").strip().lower()
-    if raw_coordinate_space not in AI_IMAGE_SUGGESTION_ALLOWED_SPACES:
-        raw_coordinate_space = AI_IMAGE_SUGGESTION_SPACE_UNKNOWN
-
-    image_width = image_height = None
-    if raw_coordinate_space == AI_IMAGE_SUGGESTION_SPACE_PIXEL:
-        image_width, image_height = _extract_image_pixel_dimensions(getattr(image, "image_data", None))
-
-    suggested_corners = _normalize_ai_suggested_corners(
-        image_suggestion.get("corners"),
-        coordinate_space=raw_coordinate_space,
-        image_width=image_width,
-        image_height=image_height,
-    )
-
-    has_suggestion = suggested_tag is not None or bool(suggested_corners) or suggested_rotation_degrees_raw is not None
-    return {
-        "suggested_tag": suggested_tag,
-        "suggested_rotation_degrees": suggested_rotation_degrees,
-        "suggested_rotation_degrees_raw": suggested_rotation_degrees_raw,
-        "suggested_corners": suggested_corners,
-        "has_suggestion": has_suggestion,
-    }
+    return _normalize_ai_image_suggestion_item(image_suggestion)
 
 
 def _normalize_ai_image_suggestions_for_images(raw_payload, *, images):
@@ -4285,9 +4280,6 @@ def _normalize_ai_image_suggestions_for_images(raw_payload, *, images):
         return {}
 
     image_rows = [image for image in (images or []) if image is not None]
-    if len(image_rows) == 0:
-        return {}
-
     images_by_id = {int(image.id): image for image in image_rows if getattr(image, "id", None) is not None}
     if len(images_by_id) == 0:
         return {}
@@ -4303,43 +4295,11 @@ def _normalize_ai_image_suggestions_for_images(raw_payload, *, images):
             except (TypeError, ValueError):
                 continue
             image = images_by_id.get(image_id)
-            if image is None:
+            if image is None or bool(getattr(image, "is_cropped", False)):
                 continue
-            if bool(getattr(image, "is_cropped", False)):
-                continue
-
-            raw_coordinate_space = str(raw_item.get("coordinate_space") or "").strip().lower()
-            if raw_coordinate_space not in AI_IMAGE_SUGGESTION_ALLOWED_SPACES:
-                raw_coordinate_space = AI_IMAGE_SUGGESTION_SPACE_UNKNOWN
-
-            image_width = image_height = None
-            if raw_coordinate_space == AI_IMAGE_SUGGESTION_SPACE_PIXEL:
-                image_width, image_height = _extract_image_pixel_dimensions(getattr(image, "image_data", None))
-
-            suggested_tag = _normalize_ai_suggested_tag(raw_item.get("tag") or raw_item.get("image_type"))
-            suggested_rotation_degrees_raw = _coerce_ai_suggested_rotation_degrees_raw(raw_item.get("rotation_degrees"))
-            suggested_rotation_degrees = _normalize_ai_suggested_rotation_degrees(raw_item.get("rotation_degrees"))
-            suggested_corners = _normalize_ai_suggested_corners(
-                raw_item.get("corners"),
-                coordinate_space=raw_coordinate_space,
-                image_width=image_width,
-                image_height=image_height,
-            )
-            has_suggestion = (
-                suggested_tag is not None
-                or bool(suggested_corners)
-                or suggested_rotation_degrees_raw is not None
-            )
-            if not has_suggestion:
-                continue
-
-            normalized[image_id] = {
-                "suggested_tag": suggested_tag,
-                "suggested_rotation_degrees": suggested_rotation_degrees,
-                "suggested_rotation_degrees_raw": suggested_rotation_degrees_raw,
-                "suggested_corners": suggested_corners,
-                "has_suggestion": True,
-            }
+            suggestion = _normalize_ai_image_suggestion_item(raw_item)
+            if suggestion["has_suggestion"]:
+                normalized[image_id] = suggestion
 
     if normalized:
         return normalized
@@ -4415,12 +4375,13 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_imag
 
     user_content = [{"type": "text", "text": instruction_text}]
     for image in images:
-        image_base64 = base64.b64encode(image.image_data).decode("ascii")
+        send_mime_type, send_data = _prepare_ai_image_payload(image)
+        image_base64 = base64.b64encode(send_data).decode("ascii")
         user_content.append(
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:{image.mime_type};base64,{image_base64}",
+                    "url": f"data:{send_mime_type};base64,{image_base64}",
                 },
             }
         )
@@ -6546,7 +6507,7 @@ def list_jigsaw_images(jigsaw_id):
             is_cropped=row.is_cropped,
             ai_suggested_tag=row.ai_suggested_tag,
             ai_suggested_rotation_degrees=row.ai_suggested_rotation_degrees,
-            ai_suggested_rotation_degrees_raw=row.ai_suggested_rotation_degrees_raw,
+            ai_suggested_skew_degrees=row.ai_suggested_skew_degrees,
             ai_suggested_corners_json=row.ai_suggested_corners_json,
             ai_suggestions_pending_review=row.ai_suggestions_pending_review,
             ai_suggested_at=row.ai_suggested_at,
@@ -6775,7 +6736,7 @@ def list_image_library_images():
             is_cropped=row.is_cropped,
             ai_suggested_tag=row.ai_suggested_tag,
             ai_suggested_rotation_degrees=row.ai_suggested_rotation_degrees,
-            ai_suggested_rotation_degrees_raw=row.ai_suggested_rotation_degrees_raw,
+            ai_suggested_skew_degrees=row.ai_suggested_skew_degrees,
             ai_suggested_corners_json=row.ai_suggested_corners_json,
             ai_suggestions_pending_review=row.ai_suggestions_pending_review,
             ai_suggested_at=row.ai_suggested_at,
@@ -7563,7 +7524,7 @@ def review_image_library_ai_suggestions(image_id):
         image.ai_suggestions_pending_review = False
         image.ai_suggested_tag = None
         image.ai_suggested_rotation_degrees = None
-        image.ai_suggested_rotation_degrees_raw = None
+        image.ai_suggested_skew_degrees = None
         image.ai_suggested_corners_json = None
         image.ai_suggested_at = None
 
@@ -7719,7 +7680,7 @@ def replace_image_library_item_content(image_id):
         image.ai_suggestions_pending_review = False
         image.ai_suggested_tag = None
         image.ai_suggested_rotation_degrees = None
-        image.ai_suggested_rotation_degrees_raw = None
+        image.ai_suggested_skew_degrees = None
         image.ai_suggested_corners_json = None
         image.ai_suggested_at = None
 
@@ -7868,7 +7829,7 @@ def create_jigsaw_from_image(image_id):
     image.tag = image_suggestions["suggested_tag"] or AI_BOX_IMAGE_TAG
     image.ai_suggested_tag = image_suggestions["suggested_tag"]
     image.ai_suggested_rotation_degrees = image_suggestions.get("suggested_rotation_degrees")
-    image.ai_suggested_rotation_degrees_raw = image_suggestions.get("suggested_rotation_degrees_raw")
+    image.ai_suggested_skew_degrees = image_suggestions.get("suggested_skew_degrees")
     image.ai_suggested_corners_json = (
         json.dumps(image_suggestions["suggested_corners"], sort_keys=True)
         if image_suggestions["suggested_corners"]
@@ -7911,7 +7872,7 @@ def create_jigsaw_from_image(image_id):
             "cost_usd": str(inference.get("final_cost_usd") or Decimal("0")),
             "ai_suggested_tag": image.ai_suggested_tag,
             "ai_suggested_rotation_degrees": image.ai_suggested_rotation_degrees,
-            "ai_suggested_rotation_degrees_raw": image.ai_suggested_rotation_degrees_raw,
+            "ai_suggested_skew_degrees": image.ai_suggested_skew_degrees,
             "ai_suggestions_pending_review": bool(image.ai_suggestions_pending_review),
         },
     )
@@ -7995,7 +7956,7 @@ def enrich_jigsaw_from_images(jigsaw_id):
         f"series_number={jigsaw.series_number!r}, manufacturer={jigsaw.manufacturer!r}, artist={jigsaw.artist!r}, "
         f"piece_count={jigsaw.piece_count!r}, tags={jigsaw.tags!r}, dimensions_cm={jigsaw.dimensions_cm!r}, "
         f"description={jigsaw.description!r}. "
-        "Image list: " + "; ".join(image_descriptors)
+        "Image list, in the order the images are provided: " + "; ".join(image_descriptors)
     )
     include_image_suggestion = any(not bool(getattr(image, "is_cropped", False)) for image in images)
     prompt_audit_payload = _build_ai_prompt_audit_payload(
@@ -8095,7 +8056,7 @@ def enrich_jigsaw_from_images(jigsaw_id):
             continue
         image.ai_suggested_tag = suggestion.get("suggested_tag")
         image.ai_suggested_rotation_degrees = suggestion.get("suggested_rotation_degrees")
-        image.ai_suggested_rotation_degrees_raw = suggestion.get("suggested_rotation_degrees_raw")
+        image.ai_suggested_skew_degrees = suggestion.get("suggested_skew_degrees")
         image.ai_suggested_corners_json = (
             json.dumps(suggestion.get("suggested_corners"), sort_keys=True)
             if suggestion.get("suggested_corners")
