@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Benchmark Labeller</title>
+<!--
+  Marks the right answers for the photos used by scripts/ai_benchmark.py.
+  Open this file directly in Chrome or Edge (no server needed), choose the benchmark folder,
+  then for each photo set the tag, which way up it should be, the four corners and every jigsaw
+  detail the photo shows (the same fields the AI is asked for). Saved answers load back for editing,
+  and fields this page does not know about are kept.
+  Answers are saved as <photo>.json beside each photo. Browsers without folder write access
+  download the .json files instead; move them into the folder afterwards.
+-->
+<style>
+  :root {
+    --bg: #f4f4f4; --panel: #ffffff; --text: #0b0c0c; --muted: #505a5f; --line: #b1b4b6;
+    --accent: #1d70b8; --done: #00703c; --corner: #ffdd00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161718; --panel: #222426; --text: #f3f2f1; --muted: #b1b4b6; --line: #505a5f; --accent: #5694ca; --done: #4cae7a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 10px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 18px; margin: 0 12px 0 0; }
+  main { display: grid; grid-template-columns: 220px 1fr 340px; gap: 12px; padding: 12px 16px; height: calc(100vh - 56px); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; height: auto; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px; overflow: auto; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li button { width: 100%; text-align: left; background: none; border: 0; color: var(--text); padding: 5px 6px; cursor: pointer; border-radius: 3px; }
+  li button.active { background: var(--accent); color: #fff; }
+  li .done { color: var(--done); font-weight: bold; }
+  #stage { display: flex; flex-direction: column; gap: 8px; min-height: 300px; }
+  #canvas-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 300px; }
+  canvas#photo { max-width: 100%; max-height: 100%; cursor: crosshair; touch-action: none; }
+  label { display: block; margin: 10px 0 4px; font-weight: 600; }
+  h2 { font-size: 16px; margin: 16px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
+  h2:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+  label.inline { display: flex; gap: 6px; align-items: flex-start; font-weight: normal; }
+  textarea { width: 100%; min-height: 70px; padding: 5px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 3px; font: inherit; }
+  input[type=text], input[type=number], select { width: 100%; padding: 5px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 3px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .hint { color: var(--muted); font-size: 13px; margin: 4px 0; }
+  button.action { padding: 6px 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #preview { width: 100%; border: 1px solid var(--line); margin-top: 6px; }
+  #status { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI benchmark labeller</h1>
+  <button class="action primary" id="open-folder">Choose folder</button>
+  <input type="file" id="folder-input" webkitdirectory multiple hidden>
+  <span id="status">No folder chosen.</span>
+</header>
+<main>
+  <section class="panel" aria-label="Photos"><ul id="photo-list"></ul></section>
+  <section class="panel" id="stage" aria-label="Photo">
+    <div class="hint">Click the four corners of the subject (any order). Drag a corner to move it. The photo is shown the way the browser displays it, which is what the AI is sent.</div>
+    <div id="canvas-wrap"><canvas id="photo" width="10" height="10"></canvas></div>
+    <div class="row">
+      <button class="action" id="clear-corners">Clear corners</button>
+      <span class="hint" id="corner-count"></span>
+    </div>
+  </section>
+  <section class="panel" aria-label="Answers">
+    <h2>Photo</h2>
+    <label for="tag">Tag</label>
+    <select id="tag">
+      <option value="">(don't score)</option>
+      <option>Box</option><option>Box back</option><option>Box side</option><option>In progress</option><option>Completed</option><option>Reference</option>
+    </select>
+
+    <label>Turn clockwise to make it upright</label>
+    <div class="row" id="orientation">
+      <label><input type="checkbox" value="0"> 0°</label>
+      <label><input type="checkbox" value="90"> 90°</label>
+      <label><input type="checkbox" value="180"> 180°</label>
+      <label><input type="checkbox" value="270"> 270°</label>
+    </div>
+    <div class="hint">Tick more than one if either is acceptable. None ticked = don't score.</div>
+    <canvas id="preview" width="10" height="10"></canvas>
+
+    <label for="skew">Skew after the turn (degrees clockwise, optional)</label>
+    <input type="number" id="skew" step="0.5" min="-45" max="45">
+
+    <label for="corners-mode">Corners</label>
+    <select id="corners-mode">
+      <option value="marked">Score against the corners I marked</option>
+      <option value="none">No corners expected (photo has no clear four-sided subject)</option>
+      <option value="skip">Don't score corners</option>
+    </select>
+
+    <h2>Jigsaw details</h2>
+    <div class="hint">Fill in what this photo shows. A blank field is not scored, unless you tick the box below.</div>
+    <label for="title">Title</label>
+    <input type="text" id="title">
+    <div class="row">
+      <div style="flex:2"><label for="series-name">Series</label><input type="text" id="series-name"></div>
+      <div style="flex:1"><label for="series-number">Series no.</label><input type="text" id="series-number"></div>
+    </div>
+    <label for="manufacturer">Manufacturer</label>
+    <input type="text" id="manufacturer">
+    <label for="artist">Artist</label>
+    <input type="text" id="artist">
+    <div class="row">
+      <div style="flex:1"><label for="piece-count">Pieces</label><input type="number" id="piece-count" min="1"></div>
+      <div style="flex:1"><label for="dimensions">Size (cm)</label><input type="text" id="dimensions" placeholder="68 x 48"></div>
+    </div>
+    <label for="tags">Tags (comma separated)</label>
+    <input type="text" id="tags" placeholder="flowers, garden, collage">
+    <label for="description">Description</label>
+    <textarea id="description"></textarea>
+    <div class="hint">Only checked for being given at all; write a line so the photo expects one.</div>
+    <label class="inline"><input type="checkbox" id="metadata-complete"> Details complete: blank fields should come back empty (catches made-up answers)</label>
+
+    <div class="row" style="margin-top:14px">
+      <button class="action primary" id="save-next">Save and next</button>
+      <button class="action" id="save">Save</button>
+    </div>
+    <div class="hint">Ctrl+S saves.</div>
+  </section>
+</main>
+<script>
+(() => {
+  const GRID = 1000;
+  const IMAGE_RE = /\.(jpe?g|png|webp)$/i;
+  const state = { dirHandle: null, photos: [], index: -1, bitmap: null, corners: [], dragIndex: -1 };
+  const el = (id) => document.getElementById(id);
+  const canvas = el("photo");
+  const ctx = canvas.getContext("2d");
+
+  function setStatus(text) { el("status").textContent = text; }
+
+  async function openFolder() {
+    if (window.showDirectoryPicker) {
+      try {
+        state.dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+      } catch (error) { return; }
+      const files = {};
+      for await (const [name, handle] of state.dirHandle.entries()) {
+        if (handle.kind === "file") files[name] = handle;
+      }
+      const photos = [];
+      for (const name of Object.keys(files).sort()) {
+        if (!IMAGE_RE.test(name)) continue;
+        const jsonName = name.replace(/\.[^.]+$/, ".json");
+        let answers = null;
+        if (files[jsonName]) {
+          try { answers = JSON.parse(await (await files[jsonName].getFile()).text()); } catch (error) { answers = null; }
+        }
+        photos.push({ name, jsonName, getFile: () => files[name].getFile(), answers });
+      }
+      loadPhotos(photos, true);
+    } else {
+      el("folder-input").click();
+    }
+  }
+
+  async function loadFromInput(fileList) {
+    const files = {};
+    for (const file of fileList) files[file.name] = file;
+    const photos = [];
+    for (const name of Object.keys(files).sort()) {
+      if (!IMAGE_RE.test(name)) continue;
+      const jsonName = name.replace(/\.[^.]+$/, ".json");
+      let answers = null;
+      if (files[jsonName]) {
+        try { answers = JSON.parse(await files[jsonName].text()); } catch (error) { answers = null; }
+      }
+      photos.push({ name, jsonName, getFile: async () => files[name], answers });
+    }
+    state.dirHandle = null;
+    loadPhotos(photos, false);
+  }
+
+  function loadPhotos(photos, canWrite) {
+    state.photos = photos;
+    setStatus(`${photos.length} photos. ` + (canWrite ? "Answers save into the folder." : "This browser can't write to the folder: answers download instead."));
+    renderList();
+    if (photos.length) selectPhoto(0);
+  }
+
+  // Text fields: answers key -> input id. Kept in the same order as the AI prompt.
+  const TEXT_FIELDS = {
+    title: "title", series_name: "series-name", series_number: "series-number",
+    manufacturer: "manufacturer", artist: "artist", dimensions_cm: "dimensions", description: "description",
+  };
+  // Keys this page edits; anything else in a saved file is kept as it is.
+  const MANAGED_KEYS = ["tag", "orientation", "skew", "corners", "piece_count", "tags", "metadata_complete", ...Object.keys(TEXT_FIELDS)];
+
+  function isLabelled(photo) {
+    const a = photo.answers;
+    return Boolean(a && (a.tag || a.orientation !== null && a.orientation !== undefined || "corners" in a || a.title));
+  }
+
+  function renderList() {
+    const list = el("photo-list");
+    list.innerHTML = "";
+    state.photos.forEach((photo, index) => {
+      const li = document.createElement("li");
+      const button = document.createElement("button");
+      button.className = index === state.index ? "active" : "";
+      const mark = document.createElement("span");
+      mark.className = "done";
+      mark.textContent = isLabelled(photo) ? "✓ " : "  ";
+      button.append(mark, document.createTextNode(photo.name));
+      button.addEventListener("click", () => selectPhoto(index));
+      li.appendChild(button);
+      list.appendChild(li);
+    });
+  }
+
+  async function selectPhoto(index) {
+    state.index = index;
+    const photo = state.photos[index];
+    const file = await photo.getFile();
+    state.bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    canvas.width = state.bitmap.width;
+    canvas.height = state.bitmap.height;
+    const answers = photo.answers || {};
+    el("tag").value = answers.tag && !Array.isArray(answers.tag) ? answers.tag : (Array.isArray(answers.tag) ? answers.tag[0] : "");
+    const orientations = answers.orientation === null || answers.orientation === undefined
+      ? [] : (Array.isArray(answers.orientation) ? answers.orientation : [answers.orientation]).map(Number);
+    for (const box of el("orientation").querySelectorAll("input")) box.checked = orientations.includes(Number(box.value));
+    el("skew").value = answers.skew ?? "";
+    for (const [key, id] of Object.entries(TEXT_FIELDS)) el(id).value = answers[key] ?? "";
+    el("piece-count").value = answers.piece_count ?? "";
+    el("tags").value = Array.isArray(answers.tags) ? answers.tags.join(", ") : (answers.tags ?? "");
+    el("metadata-complete").checked = Boolean(answers.metadata_complete);
+    if (!("corners" in answers)) {
+      el("corners-mode").value = "marked";
+      state.corners = [];
+    } else if (answers.corners === null) {
+      el("corners-mode").value = "none";
+      state.corners = [];
+    } else {
+      el("corners-mode").value = "marked";
+      state.corners = answers.corners.map(([x, y]) => ({ x: x / GRID * canvas.width, y: y / GRID * canvas.height }));
+    }
+    renderList();
+    draw();
+  }
+
+  function orderCorners(points) {
+    const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
+    const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
+    const sorted = [...points].sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+    let start = 0;
+    sorted.forEach((p, i) => { if (p.x + p.y < sorted[start].x + sorted[start].y) start = i; });
+    return sorted.slice(start).concat(sorted.slice(0, start));
+  }
+
+  function draw() {
+    if (!state.bitmap) return;
+    ctx.drawImage(state.bitmap, 0, 0);
+    const radius = Math.max(8, canvas.width / 120);
+    const points = state.corners.length === 4 ? orderCorners(state.corners) : state.corners;
+    ctx.lineWidth = Math.max(3, canvas.width / 300);
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--corner") || "#ffdd00";
+    if (points.length > 1) {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      points.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
+      if (points.length === 4) ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#d4351c";
+    for (const p of state.corners) { ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); ctx.fill(); }
+    el("corner-count").textContent = `${state.corners.length}/4 corners marked`;
+    drawPreview();
+  }
+
+  function drawPreview() {
+    const preview = el("preview");
+    const pctx = preview.getContext("2d");
+    const first = [...el("orientation").querySelectorAll("input")].find((box) => box.checked);
+    const turn = first ? Number(first.value) : 0;
+    const scale = 280 / Math.max(state.bitmap.width, state.bitmap.height);
+    const w = state.bitmap.width * scale;
+    const h = state.bitmap.height * scale;
+    const quarter = turn === 90 || turn === 270;
+    preview.width = quarter ? h : w;
+    preview.height = quarter ? w : h;
+    pctx.save();
+    pctx.translate(preview.width / 2, preview.height / 2);
+    pctx.rotate((turn + Number(el("skew").value || 0)) * Math.PI / 180);
+    pctx.drawImage(state.bitmap, -w / 2, -h / 2, w, h);
+    pctx.restore();
+  }
+
+  function canvasPoint(event) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) * (canvas.width / rect.width),
+      y: (event.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  }
+
+  canvas.addEventListener("pointerdown", (event) => {
+    if (!state.bitmap) return;
+    const point = canvasPoint(event);
+    const reach = Math.max(20, canvas.width / 40);
+    const hit = state.corners.findIndex((p) => Math.hypot(p.x - point.x, p.y - point.y) < reach);
+    if (hit >= 0) {
+      state.dragIndex = hit;
+      canvas.setPointerCapture(event.pointerId);
+    } else if (state.corners.length < 4) {
+      state.corners.push(point);
+      el("corners-mode").value = "marked";
+      draw();
+    }
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (state.dragIndex < 0) return;
+    state.corners[state.dragIndex] = canvasPoint(event);
+    draw();
+  });
+  canvas.addEventListener("pointerup", () => { state.dragIndex = -1; });
+
+  function collectAnswers() {
+    const answers = {};
+    const previous = state.photos[state.index].answers || {};
+    for (const [key, value] of Object.entries(previous)) if (!MANAGED_KEYS.includes(key)) answers[key] = value;
+    if (el("tag").value) answers.tag = el("tag").value;
+    const turns = [...el("orientation").querySelectorAll("input")].filter((b) => b.checked).map((b) => Number(b.value));
+    answers.orientation = turns.length === 0 ? null : (turns.length === 1 ? turns[0] : turns);
+    if (el("skew").value !== "") answers.skew = Number(el("skew").value);
+    const mode = el("corners-mode").value;
+    if (mode === "none") {
+      answers.corners = null;
+    } else if (mode === "marked") {
+      if (state.corners.length === 4) {
+        answers.corners = orderCorners(state.corners).map((p) => [
+          Math.round(p.x / canvas.width * GRID), Math.round(p.y / canvas.height * GRID),
+        ]);
+      } else if (state.corners.length > 0) {
+        throw new Error("Mark all four corners, or clear them.");
+      }
+    }
+    for (const [key, id] of Object.entries(TEXT_FIELDS)) {
+      const value = el(id).value.trim();
+      if (value) answers[key] = value;
+    }
+    if (el("piece-count").value) answers.piece_count = Number(el("piece-count").value);
+    const tags = el("tags").value.split(",").map((tag) => tag.trim()).filter(Boolean);
+    if (tags.length) answers.tags = tags;
+    if (el("metadata-complete").checked) answers.metadata_complete = true;
+    return answers;
+  }
+
+  async function save() {
+    if (state.index < 0) return false;
+    let answers;
+    try { answers = collectAnswers(); } catch (error) { setStatus(error.message); return false; }
+    const photo = state.photos[state.index];
+    const text = JSON.stringify(answers, null, 2) + "\n";
+    if (state.dirHandle) {
+      const handle = await state.dirHandle.getFileHandle(photo.jsonName, { create: true });
+      const writable = await handle.createWritable();
+      await writable.write(text);
+      await writable.close();
+    } else {
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+      link.download = photo.jsonName;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    }
+    photo.answers = answers;
+    setStatus(`Saved ${photo.jsonName}.`);
+    renderList();
+    return true;
+  }
+
+  el("open-folder").addEventListener("click", openFolder);
+  el("folder-input").addEventListener("change", (event) => loadFromInput(event.target.files));
+  el("clear-corners").addEventListener("click", () => { state.corners = []; draw(); });
+  el("orientation").addEventListener("change", drawPreview);
+  el("skew").addEventListener("input", drawPreview);
+  el("save").addEventListener("click", save);
+  el("save-next").addEventListener("click", async () => {
+    if (await save() && state.index < state.photos.length - 1) selectPhoto(state.index + 1);
+  });
+  document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); save(); }
+  });
+})();
+</script>
+</body>
+</html>

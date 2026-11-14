@@ -105,7 +105,7 @@
     - `force` (boolean, default `false`): bypass the result cache.
     - `probes` (non-empty list, default all): any of `ai`, `image_embeddings`.
   - Probe statuses: `ok`, `degraded`, `down`, `disabled`.
-  - `ai` probe: sends a minimal text-only chat-completion request to the configured AI provider (same transport as image inference) and expects `{"ok": true}` back. Each live run is recorded as an `AiUsageEvent` with `operation=health_probe`, so its cost appears in AI Spend. `down` on transport/HTTP failure or incomplete config; `degraded` on an unexpected answer or latency above `AI_HEALTH_PROBE_SLOW_MS` (default 15000). Timeout: `AI_HEALTH_PROBE_TIMEOUT_SECONDS` (default 20).
+  - `ai` probe: sends a minimal text-only chat-completion request to the configured AI provider (same transport as image inference) and expects `{"ok": true}` back. Each live run is recorded as an `AiUsageEvent` with `operation=health_probe`, so its cost appears in AI Spend. Each run of `scripts/ai_benchmark.py` is likewise recorded as one `AiUsageEvent` with `operation=ai_benchmark`, no user and no image, holding the run's total cost (per-model costs in its payload); it counts toward the daily AI budget. `down` on transport/HTTP failure or incomplete config; `degraded` on an unexpected answer or latency above `AI_HEALTH_PROBE_SLOW_MS` (default 15000). Timeout: `AI_HEALTH_PROBE_TIMEOUT_SECONDS` (default 20).
   - `image_embeddings` probe: embeds a built-in 64x64 reference PNG with the real engine (test fallback never used). `down` if runtime dependencies are missing or inference fails; `degraded` if the vector is not unit-normalised or its dimension differs from stored embeddings for the active model key.
   - Results are cached per probe for `HEALTH_PROBE_CACHE_SECONDS` (default 60).
   - Response `data`:
@@ -382,7 +382,7 @@
     - `ai_suggested_tag` (nullable string)
     - `ai_suggested_rotation_degrees` (nullable integer `0/90/180/270`, the clockwise quarter turn that makes the image upright)
     - `ai_suggested_skew_degrees` (nullable number in `-45..45`, extra clockwise rotation that levels the subject after the quarter turn)
-    - `ai_suggested_corners` (nullable array of 4 normalized `{x,y}` points in `0..1`, measured on the image as stored with EXIF orientation applied and before any rotation; requested for `Box`, `Box side` and `Completed` images)
+    - `ai_suggested_corners` (nullable array of 4 normalized `{x,y}` points in `0..1`, measured on the image as stored with EXIF orientation applied and before any rotation; requested for every tag except `Reference`)
     - `ai_suggestions_pending_review` (boolean)
     - `ai_suggested_at` (nullable UTC ISO 8601)
   - `GET /api/v1/jigsaws/{id}/images/{image_id}/content` remains supported for jigsaw-associated images.
@@ -431,8 +431,9 @@
   - AI image suggestions are requested for all images unless `is_cropped=true`. An image suggestion is only flagged for review when it has a tag, corners, or a non-zero orientation or skew.
   - AI provider request (create-from-image and enrich-from-images):
     - Images are sent at full resolution; when the stored bytes carry an EXIF orientation other than upright, the image is rotated upright and re-encoded before sending, so the model sees what the browser shows.
-    - The prompt defines the tags (`Box`, `Box side`, `Completed`, `Reference`) and asks for `orientation` (`0/90/180/270` or `null`), `skew` (`-45..45` or `null`) and, for `Box`, `Box side` and `Completed` images, `corners` (the four-sided subject, which may be tilted or seen at an angle) as 4 `{x,y}` points on a `0-1000` grid over the image as sent.
+    - The prompt defines the tags (`Box` for the front, `Box back`, `Box side` for a narrow edge, `In progress`, `Completed`, `Reference`) and asks for `orientation` (`0/90/180/270` or `null`), `skew` (`-45..45` or `null`) and, for every tag except `Reference`, `corners` (the four-sided subject, which may be tilted or seen at an angle) as 4 `[x, y]` pairs on a `0-1000` grid (plain pairs rather than `{x,y}` objects, which some models closed wrongly; both are accepted) over the image as sent.
     - Corners are stored divided by 1000. A set where every value is at most 1 is read as already normalized. Sets that are not 4 distinct points inside the grid are dropped rather than rescaled.
+    - When the app config holds `AI_REASONING` (set only by `scripts/ai_benchmark.py --thinking`, not an environment setting), it is sent as the provider's `reasoning` field.
     - Skew values outside `-45..45` are dropped. A legacy single `rotation_degrees` answer is split into the nearest quarter turn plus the remainder as skew.
   - `POST /api/v1/image-library/bulk-create-jigsaws` is admin-only and queues (or runs inline in test mode) one create-from-image action per provided image id.
   - `POST /api/v1/image-library/bulk-create-jigsaws` requires JSON body with `image_ids` as a non-empty list of positive integers (max 500).

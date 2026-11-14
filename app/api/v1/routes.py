@@ -3792,8 +3792,10 @@ def _extract_json_object_from_text(raw_text):
 AI_IMAGE_SUGGESTION_FIELDS_PROMPT = (
     "tag classifies what the photo shows and must be one of these, or null when unsure: "
     "Box = the front (lid) of the puzzle box, showing the main puzzle picture; "
-    "Box side = any other face of the box, such as a narrow side edge or the back with product details; "
-    "Completed = the puzzle itself, assembled or partly assembled, out of the box; "
+    "Box back = the back of the box, usually with product details, a smaller copy of the picture or other puzzles in the range; "
+    "Box side = one of the narrow side edges of the box; "
+    "In progress = the puzzle partly assembled, out of the box; "
+    "Completed = the puzzle fully assembled, out of the box; "
     "Reference = anything else kept for reference, such as a poster, leaflet, loose pieces or a close-up. "
     "Photos are often taken with a phone held flat above the subject, so the phone may have saved them "
     "sideways or upside down. "
@@ -3801,11 +3803,12 @@ AI_IMAGE_SUGGESTION_FIELDS_PROMPT = (
     "exactly one of 0, 90, 180 or 270; use 0 when already upright and null when you cannot tell. "
     "skew is the extra clockwise rotation in degrees, between -45 and 45, needed after that quarter turn "
     "to make the main subject's edges level; use 0 when already level and null when unsure. "
-    "corners is for tags Box, Box side and Completed, otherwise null: the four corners of the main four-sided "
-    "subject (the box face for Box and Box side, the puzzle itself for Completed) as they appear in the image "
+    "corners is for every tag except Reference, otherwise null: the four corners of the main four-sided "
+    "subject (the box face for Box, Box back and Box side, the puzzle or its frame or board for In progress "
+    "and Completed) as they appear in the image "
     "exactly as provided, before any rotation. The subject may be tilted or seen at an angle, so the corners "
     "need not form a rectangle; follow its real edges. "
-    "Give them as an array of 4 objects {\"x\": number, \"y\": number} "
+    "Give them as an array of 4 [x, y] number pairs, for example [[120, 80], [880, 95], [870, 910], [130, 900]], "
     f"on a 0-{AI_CORNER_GRID_SIZE} grid, where x=0,y=0 is the top-left of the image and "
     f"x={AI_CORNER_GRID_SIZE},y={AI_CORNER_GRID_SIZE} is the bottom-right, whatever the image's pixel size. "
     "List them in the order top-left, top-right, bottom-right, bottom-left as seen in the provided image. "
@@ -3852,12 +3855,14 @@ def _build_ai_image_prompt(*, include_image_suggestion=True, image_count=1):
     return base_prompt
 
 
-def _prepare_ai_image_payload(image):
+def _prepare_ai_image_payload(image, *, max_edge=None):
     """Return (mime_type, bytes) for sending an image to the AI provider.
 
-    Photos keep their full resolution (the model reads box text and piece counts from them),
-    but EXIF orientation is applied first so the model sees the image the same way up as the
-    browser shows it. AI corners are relative to that upright image.
+    By default photos keep their full resolution (the model reads box text and piece counts
+    from them). EXIF orientation is always applied first so the model sees the image the same
+    way up as the browser shows it; AI corners are relative to that upright image. When
+    ``max_edge`` is given, larger images are scaled down so their longest edge fits it. Corners
+    are on a resolution-independent grid, so scaling does not change what they mean.
     """
     image_data = image.image_data
     mime_type = image.mime_type
@@ -3867,10 +3872,15 @@ def _prepare_ai_image_payload(image):
     try:
         with Image.open(BytesIO(image_data)) as source_image:
             orientation = source_image.getexif().get(AI_EXIF_ORIENTATION_TAG, 1)
-            if orientation in (None, 1):
+            needs_rotation = orientation not in (None, 1)
+            needs_resize = bool(max_edge) and max(source_image.size) > int(max_edge)
+            if not needs_rotation and not needs_resize:
                 return mime_type, image_data
             source_format = (source_image.format or "").upper()
             upright = ImageOps.exif_transpose(source_image)
+            if needs_resize:
+                resampling = getattr(Image, "Resampling", Image).LANCZOS
+                upright.thumbnail((int(max_edge), int(max_edge)), resampling)
             output_buffer = BytesIO()
             if source_format == "PNG" or "A" in upright.getbands():
                 upright.save(output_buffer, format="PNG")
@@ -4136,6 +4146,7 @@ def _normalize_ai_suggested_tag(value):
         IMAGE_BROWSER_TAG_BOX_FRONT,
         IMAGE_BROWSER_TAG_BOX_SIDE,
         IMAGE_BROWSER_TAG_BOX_BACK,
+        IMAGE_BROWSER_TAG_IN_PROGRESS,
         IMAGE_BROWSER_TAG_COMPLETED,
         IMAGE_BROWSER_TAG_REFERENCE,
     }:
@@ -4354,7 +4365,7 @@ def _build_ai_prompt_audit_payload(images, instruction_text, *, include_image_su
     }
 
 
-def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_image_suggestion=None):
+def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_image_suggestion=None, max_image_edge=None):
     if not current_app.config.get("AI_ENABLED", False):
         raise RuntimeError("AI image inference is disabled")
 
@@ -4375,7 +4386,7 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_imag
 
     user_content = [{"type": "text", "text": instruction_text}]
     for image in images:
-        send_mime_type, send_data = _prepare_ai_image_payload(image)
+        send_mime_type, send_data = _prepare_ai_image_payload(image, max_edge=max_image_edge)
         image_base64 = base64.b64encode(send_data).decode("ascii")
         user_content.append(
             {
@@ -4407,6 +4418,10 @@ def _infer_jigsaw_metadata_from_images(images, instruction_text, *, include_imag
             {"role": "user", "content": user_content},
         ],
     }
+    # Optional provider reasoning ("thinking") control; only the model benchmark sets it today.
+    reasoning = current_app.config.get("AI_REASONING")
+    if reasoning:
+        request_payload["reasoning"] = reasoning
 
     response_raw = _post_ai_chat_completion(
         endpoint_url=endpoint_url,
