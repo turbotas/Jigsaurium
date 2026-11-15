@@ -76,6 +76,9 @@ def _validate_stfd_config_on_startup(app):
     if shared_key and len(shared_key) < 32:
         app.logger.warning("STFD_SHARED_KEY is shorter than recommended (32+ chars).")
 
+    if not str(app.config.get("STFD_ISSUER", "") or "").strip():
+        app.logger.warning("STFD_ISSUER is not set, so the token issuer (iss) is not checked.")
+
 
 def _validate_runtime_config_on_startup(app):
     errors = []
@@ -307,6 +310,7 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("STFD_ROLE_UNI_ADMINISTRATOR", "")
     app.config.setdefault("STFD_ROLE_UNI_MEMBER", "")
     app.config.setdefault("STFD_ROLE_UNI_BORROWER", "")
+    app.config.setdefault("STFD_ISSUER", "")
     app.config.setdefault("DB_BACKUP_STORAGE_PATH", "")
     app.config.setdefault("DB_BACKUP_COMPRESSION", "gzip")
     app.config.setdefault("DB_BACKUP_BLOB_CHUNK_BYTES", 32 * 1024)

@@ -7160,41 +7160,37 @@
     syncLoginUiForAuthMode();
   }
 
+  // STFD returns the token and the sign-in state together, normally in the URL fragment
+  // (response_mode=fragment), so the token never reaches server or proxy logs.
+  const STFD_URL_PARAMETER_NAMES = ["token", "jwt", "assertion", "state"];
+
   function extractStfdTokenFromUrl(url) {
-    const parameterNames = ["token", "jwt", "assertion"];
-    for (const parameterName of parameterNames) {
-      const value = String(url.searchParams.get(parameterName) || "").trim();
-      if (value) {
-        return value;
+    const tokenParameterNames = ["token", "jwt", "assertion"];
+    const sources = [url.searchParams];
+
+    const rawHash = String(url.hash || "").replace(/^#/, "").trim();
+    if (rawHash) {
+      sources.push(new URLSearchParams(rawHash));
+      const questionMarkIndex = rawHash.indexOf("?");
+      if (questionMarkIndex >= 0 && questionMarkIndex + 1 < rawHash.length) {
+        sources.push(new URLSearchParams(rawHash.slice(questionMarkIndex + 1)));
       }
     }
 
-    const rawHash = String(url.hash || "").replace(/^#/, "").trim();
-    if (!rawHash) {
-      return "";
-    }
-
-    const hashSegments = [rawHash];
-    const questionMarkIndex = rawHash.indexOf("?");
-    if (questionMarkIndex >= 0 && questionMarkIndex + 1 < rawHash.length) {
-      hashSegments.push(rawHash.slice(questionMarkIndex + 1));
-    }
-
-    for (const segment of hashSegments) {
-      const params = new URLSearchParams(segment);
-      for (const parameterName of parameterNames) {
-        const value = String(params.get(parameterName) || "").trim();
-        if (value) {
-          return value;
+    for (const params of sources) {
+      for (const parameterName of tokenParameterNames) {
+        const token = String(params.get(parameterName) || "").trim();
+        if (token) {
+          return { token, state: String(params.get("state") || "").trim() };
         }
       }
     }
 
-    return "";
+    return { token: "", state: "" };
   }
 
   function removeStfdTokenFromUrl(url) {
-    const parameterNames = ["token", "jwt", "assertion"];
+    const parameterNames = STFD_URL_PARAMETER_NAMES;
     parameterNames.forEach((parameterName) => {
       url.searchParams.delete(parameterName);
     });
@@ -7232,15 +7228,19 @@
 
   async function consumeStfdTokenFromUrl() {
     const url = new URL(window.location.href);
-    const token = extractStfdTokenFromUrl(url);
+    const { token, state: stfdState } = extractStfdTokenFromUrl(url);
     if (!token) {
       return false;
     }
 
+    // Clear the token from the address bar and history before anything else.
+    removeStfdTokenFromUrl(url);
+    window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+
     try {
       const payload = await apiRequest("/api/v1/auth/login", {
         method: "POST",
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ token, state: stfdState }),
       });
       state.user = payload.data.user;
       state.csrfToken = payload.data.csrf_token;
@@ -7248,14 +7248,9 @@
       state.currentSessionIdentifier = typeof payload.data.session_identifier === "string" ? payload.data.session_identifier : null;
       closeAuthDialog();
       setSessionSummary();
-
-      removeStfdTokenFromUrl(url);
-      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
       showFeedback("Signed in successfully.");
       return true;
     } catch (error) {
-      removeStfdTokenFromUrl(url);
-      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
       showFeedback(error.message, true);
       return false;
     }

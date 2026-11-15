@@ -17,7 +17,7 @@ from pathlib import Path
 from secrets import compare_digest, token_urlsafe
 from functools import wraps
 
-from flask import Blueprint, current_app, g, request, session
+from flask import Blueprint, current_app, g, redirect, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -62,6 +62,7 @@ from app.models import (
     Loan,
     LoginThrottleCounter,
     Role,
+    StfdUsedToken,
     User,
     UserSession,
     UserRole,
@@ -163,6 +164,17 @@ IP_BLOCK_REASON_MAX_LENGTH = 255
 IP_BLOCK_NOTES_MAX_LENGTH = 4000
 IP_BLOCK_MAX_DURATION_HOURS = 24 * 30
 STFD_JWT_ALGORITHM = "HS256"
+# STFD sign-in hardening, matching the STFD Python kit (shut-the-front-door stfd-kit/python-jwt).
+# Token age is capped from `iat` whatever `exp` STFD set, and the `exp - iat` window is bounded.
+STFD_MAX_TOKEN_AGE_SECONDS = 120
+STFD_MAX_TOKEN_LIFETIME_SECONDS = 300
+STFD_CLOCK_LEEWAY_SECONDS = 5
+# How long a sign-in started with /auth/stfd/start may take to come back.
+STFD_PENDING_STATE_TTL_SECONDS = 600
+STFD_PENDING_STATE_SESSION_KEY = "stfd_pending_state"
+STFD_RESPONSE_MODE = "fragment"
+# `state`, `nonce` and `jti` values STFD issues and accepts: 16-128 URL-safe characters.
+STFD_OPAQUE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 # Image metadata left out of the public thumbnail list for callers who are not signed in.
 GUEST_HIDDEN_IMAGE_FIELDS = frozenset(
     {"uploaded_by_user_id", "filename", "user_comment", "captured_at", "captured_at_source"}
@@ -1715,6 +1727,7 @@ def _validate_stfd_runtime_config():
         "shared_key": shared_key,
         "assert_base_url": assert_base_url,
         "redirect_uri": redirect_uri,
+        "issuer": str(current_app.config.get("STFD_ISSUER", "") or "").strip().rstrip("/"),
         "role_uni_by_name": role_uni_by_name,
         "role_name_by_uni": _get_stfd_role_name_by_uni(),
     }, None
@@ -1781,17 +1794,62 @@ def _normalize_stfd_display_name(raw_display_name):
     return display_name
 
 
-def _build_stfd_login_url(stfd_config):
-    redirect_uri = urllib.parse.quote(stfd_config["redirect_uri"], safe="")
+def _build_stfd_assert_url(stfd_config, state):
     app_uni = urllib.parse.quote(stfd_config["app_uni"], safe="")
     assert_base_url = stfd_config["assert_base_url"].rstrip("/")
-    return f"{assert_base_url}/{app_uni}?redirect_uri={redirect_uri}"
+    query = urllib.parse.urlencode(
+        {"redirect_uri": stfd_config["redirect_uri"], "state": state, "response_mode": STFD_RESPONSE_MODE}
+    )
+    return f"{assert_base_url}/{app_uni}?{query}"
 
 
-def _auth_login_via_stfd_token(token):
+def _take_stfd_pending_state():
+    """Remove and return the state this browser's sign-in started with, if it is still fresh (one use only)."""
+    pending = session.pop(STFD_PENDING_STATE_SESSION_KEY, None)
+    if not isinstance(pending, dict):
+        return None
+    value = pending.get("value")
+    issued_at = pending.get("issued_at")
+    if not isinstance(value, str) or not isinstance(issued_at, int):
+        return None
+    if int(time.time()) - issued_at > STFD_PENDING_STATE_TTL_SECONDS:
+        return None
+    return value
+
+
+def _consume_stfd_token_id(db_session, jti, keep_until_timestamp):
+    """Record a token id as used. Returns False if it was already used (a replay)."""
+    now = datetime.now(timezone.utc)
+    db_session.execute(sa_delete(StfdUsedToken).where(StfdUsedToken.expires_at < now))
+    try:
+        with db_session.begin_nested():
+            db_session.add(
+                StfdUsedToken(jti=jti, expires_at=datetime.fromtimestamp(keep_until_timestamp, tz=timezone.utc))
+            )
+    except IntegrityError:
+        return False
+    return True
+
+
+def _stfd_sign_in_failed(message):
+    return _error_response("authentication_failed", message, 401)
+
+
+def _auth_login_via_stfd_token(token, posted_state):
+    # Taken first, so a pending sign-in is spent by any attempt, successful or not.
+    expected_state = _take_stfd_pending_state()
+
     stfd_config, config_error = _validate_stfd_runtime_config()
     if config_error is not None:
         return config_error
+
+    # Login CSRF: only a sign-in this browser started (via /auth/stfd/start) can finish here.
+    if (
+        expected_state is None
+        or not isinstance(posted_state, str)
+        or not compare_digest(posted_state.encode("utf-8"), expected_state.encode("utf-8"))
+    ):
+        return _stfd_sign_in_failed("This STFD sign-in was not started from this browser or has expired. Sign in again.")
 
     db_session = get_session()
     sync_error = _sync_stfd_role_unis_from_config(db_session, stfd_config["role_uni_by_name"])
@@ -1799,19 +1857,44 @@ def _auth_login_via_stfd_token(token):
         db_session.rollback()
         return sync_error
 
+    required_claims = ["sub", "email", "app", "roles", "exp", "iat", "jti", "nonce"]
+    decode_kwargs = {}
+    if stfd_config["issuer"]:
+        required_claims.append("iss")
+        decode_kwargs["issuer"] = stfd_config["issuer"]
     try:
         decoded = jwt.decode(
             token,
             stfd_config["shared_key"],
             algorithms=[STFD_JWT_ALGORITHM],
-            options={"require": ["sub", "email", "app", "roles", "exp", "iat"]},
+            options={"require": required_claims},
+            leeway=STFD_CLOCK_LEEWAY_SECONDS,
+            **decode_kwargs,
         )
     except jwt.InvalidTokenError:
-        return _error_response("authentication_failed", "Invalid or expired STFD token.", 401)
+        return _stfd_sign_in_failed("Invalid or expired STFD token.")
 
     token_app_uni = str(decoded.get("app") or "").strip()
     if token_app_uni != stfd_config["app_uni"]:
-        return _error_response("authentication_failed", "STFD token app UNI mismatch.", 401)
+        return _stfd_sign_in_failed("STFD token app UNI mismatch.")
+
+    issued_at = decoded.get("iat")
+    expires_at = decoded.get("exp")
+    if not isinstance(issued_at, int) or not isinstance(expires_at, int):
+        return _stfd_sign_in_failed("Invalid or expired STFD token.")
+    if (
+        expires_at - issued_at > STFD_MAX_TOKEN_LIFETIME_SECONDS
+        or int(time.time()) - issued_at > STFD_MAX_TOKEN_AGE_SECONDS + STFD_CLOCK_LEEWAY_SECONDS
+    ):
+        return _stfd_sign_in_failed("Invalid or expired STFD token.")
+
+    nonce = decoded.get("nonce")
+    if not isinstance(nonce, str) or not compare_digest(nonce.encode("utf-8"), expected_state.encode("utf-8")):
+        return _stfd_sign_in_failed("This STFD sign-in was not started from this browser or has expired. Sign in again.")
+
+    token_id = decoded.get("jti")
+    if not isinstance(token_id, str) or not STFD_OPAQUE_ID_PATTERN.match(token_id):
+        return _stfd_sign_in_failed("Invalid or expired STFD token.")
 
     auth_subject = _normalize_stfd_subject(decoded.get("sub"))
     if not auth_subject:
@@ -1894,6 +1977,13 @@ def _auth_login_via_stfd_token(token):
         db_session.execute(sa_delete(UserRole).where(UserRole.user_id == user.id))
         for role in target_roles:
             db_session.add(UserRole(user_id=user.id, role_id=role.id))
+
+    # Replay: recorded last, so a token refused by any check above is not used up. The row is kept
+    # until the token would fail its age check anyway; a unique-key clash means it was used before.
+    keep_until = max(expires_at, issued_at + STFD_MAX_TOKEN_AGE_SECONDS) + STFD_CLOCK_LEEWAY_SECONDS + 60
+    if not _consume_stfd_token_id(db_session, token_id, keep_until):
+        db_session.rollback()
+        return _stfd_sign_in_failed("This STFD sign-in token has already been used. Sign in again.")
 
     csrf_token = token_urlsafe(24)
     session.clear()
@@ -4975,9 +5065,31 @@ def stfd_login_url():
         {
             "enabled": True,
             "allow_local_login": bool(current_app.config.get("STFD_ALLOW_LOCAL_LOGIN", False)),
-            "login_url": _build_stfd_login_url(stfd_config),
+            # The browser goes here first; it records a sign-in state and then redirects to STFD.
+            "login_url": url_for("api_v1.stfd_start_sign_in"),
         }
     )
+
+
+@api_v1_bp.get("/auth/stfd/start")
+def stfd_start_sign_in():
+    """Start an STFD sign-in: remember a fresh state for this browser, then send it to STFD.
+
+    STFD signs the state into the token as `nonce` and returns token and state in the URL
+    fragment, so the token stays out of proxy logs. Only this browser can then complete the sign-in.
+    """
+    if not _is_stfd_enabled():
+        return _error_response("not_found", "STFD sign-in is not enabled.", 404)
+
+    stfd_config, config_error = _validate_stfd_runtime_config()
+    if config_error is not None:
+        return config_error
+
+    state = token_urlsafe(32)
+    session[STFD_PENDING_STATE_SESSION_KEY] = {"value": state, "issued_at": int(time.time())}
+    response = redirect(_build_stfd_assert_url(stfd_config, state), code=302)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @api_v1_bp.post("/auth/login")
@@ -4989,7 +5101,7 @@ def auth_login():
     if _is_stfd_enabled():
         token = payload.get("token")
         if isinstance(token, str) and token.strip():
-            return _auth_login_via_stfd_token(token.strip())
+            return _auth_login_via_stfd_token(token.strip(), payload.get("state"))
 
         allow_local_login = bool(current_app.config.get("STFD_ALLOW_LOCAL_LOGIN", False))
         if not allow_local_login:

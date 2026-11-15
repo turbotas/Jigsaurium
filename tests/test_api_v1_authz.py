@@ -1,5 +1,8 @@
+import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import jwt
@@ -17,6 +20,7 @@ from app.models import (
     LoginThrottleCounter,
     Loan,
     Role,
+    StfdUsedToken,
     User,
     UserRole,
     UserSession,
@@ -113,18 +117,51 @@ def _configure_stfd_for_tests(app, *, allow_local_login=False):
     app.config["STFD_ROLE_UNI_BORROWER"] = "role-uni-borrower"
 
 
-def _build_stfd_token(*, sub, email, role_unis, app_uni="jigsaurium-test-app-uni"):
-    now = datetime.now(timezone.utc)
+def _build_stfd_token(
+    *,
+    sub,
+    email,
+    role_unis,
+    nonce,
+    app_uni="jigsaurium-test-app-uni",
+    jti=None,
+    issued_seconds_ago=0,
+    lifetime_seconds=60,
+    extra_claims=None,
+    omit_claims=(),
+):
+    issued_at = int(datetime.now(timezone.utc).timestamp()) - issued_seconds_ago
     payload = {
         "sub": sub,
         "email": email,
         "friendly_name": "STFD Synced User",
         "app": app_uni,
         "roles": role_unis,
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(seconds=60)).timestamp()),
+        "iat": issued_at,
+        "exp": issued_at + lifetime_seconds,
+        "jti": jti or uuid.uuid4().hex,
+        "nonce": nonce,
     }
+    payload.update(extra_claims or {})
+    for claim in omit_claims:
+        payload.pop(claim, None)
     return jwt.encode(payload, "test-shared-key-0123456789abcdef0123456789abcdef", algorithm="HS256")
+
+
+def _start_stfd_sign_in(client):
+    """Begin a sign-in as the browser does and return the state STFD would sign into the token."""
+    response = client.get("/api/v1/auth/stfd/start")
+    assert response.status_code == 302
+    query = parse_qs(urlsplit(response.headers["Location"]).query)
+    return query["state"][0]
+
+
+def _stfd_sign_in(client, **token_claims):
+    """Start a sign-in, then come back from STFD with a matching token. Returns (response, token, state)."""
+    state = _start_stfd_sign_in(client)
+    token = _build_stfd_token(nonce=state, **token_claims)
+    response = client.post("/api/v1/auth/login", json={"token": token, "state": state})
+    return response, token, state
 
 
 def _assert_authentication_required(response):
@@ -2389,13 +2426,12 @@ def test_stfd_login_jit_provisions_user_and_records_audit(app, client, seeded_id
         db_session.query(Role).filter_by(name="borrower").one().uni = "role-uni-borrower"
         db_session.commit()
 
-    token = _build_stfd_token(
+    response, _token, _state = _stfd_sign_in(
+        client,
         sub="stfd-user-uni-001",
         email="jit-provisioned@example.com",
         role_unis=["role-uni-member"],
     )
-
-    response = client.post("/api/v1/auth/login", json={"token": token})
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["data"]["user"]["email"] == "jit-provisioned@example.com"
@@ -2422,13 +2458,12 @@ def test_stfd_login_jit_provisions_user_and_records_audit(app, client, seeded_id
 def test_stfd_login_syncs_missing_role_unis_before_mapping(app, client, seeded_identity_data):
     _configure_stfd_for_tests(app)
 
-    token = _build_stfd_token(
+    response, _token, _state = _stfd_sign_in(
+        client,
         sub="stfd-user-uni-004",
         email="jit-role-sync@example.com",
         role_unis=["role-uni-admin", "role-uni-member"],
     )
-
-    response = client.post("/api/v1/auth/login", json={"token": token})
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["data"]["user"]["roles"] == ["administrator", "member"]
@@ -2468,13 +2503,12 @@ def test_stfd_login_updates_changed_identity_data_and_records_sync_audit(app, cl
         db_session.add(UserRole(user_id=user.id, role_id=borrower_role.id))
         db_session.commit()
 
-    token = _build_stfd_token(
+    response, _token, _state = _stfd_sign_in(
+        client,
         sub="stfd-user-uni-002",
         email="after-sync@example.com",
         role_unis=["role-uni-admin", "role-uni-member"],
     )
-
-    response = client.post("/api/v1/auth/login", json={"token": token})
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["data"]["user"]["email"] == "after-sync@example.com"
@@ -2519,12 +2553,12 @@ def test_auth_me_patch_is_forbidden_when_stfd_enabled(app, client, seeded_identi
         db_session.query(Role).filter_by(name="borrower").one().uni = "role-uni-borrower"
         db_session.commit()
 
-    token = _build_stfd_token(
+    login_response, _token, _state = _stfd_sign_in(
+        client,
         sub="stfd-user-uni-003",
         email="stfd-profile@example.com",
         role_unis=["role-uni-member"],
     )
-    login_response = client.post("/api/v1/auth/login", json={"token": token})
     assert login_response.status_code == 200
     csrf_token = login_response.get_json()["data"]["csrf_token"]
 
@@ -2583,4 +2617,152 @@ def test_stfd_login_url_reports_breakglass_flag(app, client, seeded_identity_dat
     payload = response.get_json()
     assert payload["data"]["enabled"] is True
     assert payload["data"]["allow_local_login"] is True
-    assert "/stfd/assert/" in payload["data"]["login_url"]
+    assert payload["data"]["login_url"] == "/api/v1/auth/stfd/start"
+
+
+@pytest.mark.functional
+def test_stfd_start_redirects_to_stfd_with_state_and_fragment_mode(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+
+    response = client.get("/api/v1/auth/stfd/start")
+
+    assert response.status_code == 302
+    assert response.headers["Cache-Control"] == "no-store"
+    location = urlsplit(response.headers["Location"])
+    assert f"{location.scheme}://{location.netloc}{location.path}" == (
+        "https://stfd.example.test/stfd/assert/jigsaurium-test-app-uni"
+    )
+    query = parse_qs(location.query)
+    assert query["redirect_uri"] == ["https://jigsaurium.example.test/"]
+    assert query["response_mode"] == ["fragment"]
+    assert re.fullmatch(r"[A-Za-z0-9_-]{16,128}", query["state"][0])
+    # Each start gets a new state.
+    assert _start_stfd_sign_in(client) != query["state"][0]
+
+
+@pytest.mark.functional
+def test_stfd_start_is_not_found_when_stfd_disabled(client, seeded_identity_data):
+    response = client.get("/api/v1/auth/stfd/start")
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "not_found"
+
+
+def _assert_stfd_sign_in_refused(response):
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "authentication_failed"
+
+
+STFD_TEST_IDENTITY = {"sub": "stfd-user-uni-100", "email": "stfd-hardening@example.com", "role_unis": ["role-uni-member"]}
+
+
+@pytest.mark.functional
+def test_stfd_token_cannot_be_replayed(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+    first, token, _state = _stfd_sign_in(client, **STFD_TEST_IDENTITY)
+    assert first.status_code == 200
+
+    # Same token again, even inside a fresh sign-in whose state is presented, is refused...
+    replay_state = _start_stfd_sign_in(client)
+    replay = client.post("/api/v1/auth/login", json={"token": token, "state": replay_state})
+    _assert_stfd_sign_in_refused(replay)
+
+    # ...and a token re-signed with the right nonce but the same jti is refused as a replay.
+    jti = jwt.decode(token, options={"verify_signature": False})["jti"]
+    second, _token, _state = _stfd_sign_in(client, jti=jti, **STFD_TEST_IDENTITY)
+    _assert_stfd_sign_in_refused(second)
+    assert "already been used" in second.get_json()["error"]["message"]
+
+    with app.app_context():
+        assert get_session().query(StfdUsedToken).filter_by(jti=jti).count() == 1
+
+
+@pytest.mark.functional
+def test_stfd_sign_in_without_started_state_is_refused(app, client, seeded_identity_data):
+    # Login CSRF: a valid token sent to a browser that never started a sign-in must not sign it in.
+    _configure_stfd_for_tests(app)
+    token = _build_stfd_token(nonce="attacker-state-0123456789abcdef", **STFD_TEST_IDENTITY)
+
+    response = client.post("/api/v1/auth/login", json={"token": token, "state": "attacker-state-0123456789abcdef"})
+
+    _assert_stfd_sign_in_refused(response)
+    with app.app_context():
+        assert get_session().query(User).filter_by(email="stfd-hardening@example.com").count() == 0
+
+
+@pytest.mark.functional
+def test_stfd_token_for_another_sign_in_is_refused(app, client, seeded_identity_data):
+    # The attacker's token carries the attacker's nonce, not the state this browser started with.
+    _configure_stfd_for_tests(app)
+    victim_state = _start_stfd_sign_in(client)
+    token = _build_stfd_token(nonce="attacker-state-0123456789abcdef", **STFD_TEST_IDENTITY)
+
+    response = client.post("/api/v1/auth/login", json={"token": token, "state": victim_state})
+
+    _assert_stfd_sign_in_refused(response)
+
+
+@pytest.mark.functional
+def test_stfd_state_works_only_once(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+    state = _start_stfd_sign_in(client)
+    bad = client.post("/api/v1/auth/login", json={"token": "not-a-jwt", "state": state})
+    _assert_stfd_sign_in_refused(bad)
+
+    # The state was spent by the failed attempt, so even a good token for it is now refused.
+    token = _build_stfd_token(nonce=state, **STFD_TEST_IDENTITY)
+    retry = client.post("/api/v1/auth/login", json={"token": token, "state": state})
+    _assert_stfd_sign_in_refused(retry)
+
+
+@pytest.mark.functional
+def test_stfd_pending_state_expires(app, client, seeded_identity_data):
+    from app.api.v1.routes import STFD_PENDING_STATE_SESSION_KEY, STFD_PENDING_STATE_TTL_SECONDS
+
+    _configure_stfd_for_tests(app)
+    state = _start_stfd_sign_in(client)
+    with client.session_transaction() as flask_session:
+        pending = dict(flask_session[STFD_PENDING_STATE_SESSION_KEY])
+        pending["issued_at"] -= STFD_PENDING_STATE_TTL_SECONDS + 1
+        flask_session[STFD_PENDING_STATE_SESSION_KEY] = pending
+    token = _build_stfd_token(nonce=state, **STFD_TEST_IDENTITY)
+
+    response = client.post("/api/v1/auth/login", json={"token": token, "state": state})
+
+    _assert_stfd_sign_in_refused(response)
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    "token_claims",
+    [
+        pytest.param({"issued_seconds_ago": 200, "lifetime_seconds": 300}, id="older-than-age-cap"),
+        pytest.param({"lifetime_seconds": 3600}, id="lifetime-window-too-long"),
+        pytest.param({"issued_seconds_ago": 120, "lifetime_seconds": 60}, id="expired"),
+        pytest.param({"omit_claims": ("jti",)}, id="missing-jti"),
+        pytest.param({"jti": "short"}, id="malformed-jti"),
+        pytest.param({"omit_claims": ("nonce",)}, id="missing-nonce"),
+    ],
+)
+def test_stfd_token_checks_refuse_bad_tokens(app, client, seeded_identity_data, token_claims):
+    _configure_stfd_for_tests(app)
+    response, _token, _state = _stfd_sign_in(client, **STFD_TEST_IDENTITY, **token_claims)
+    _assert_stfd_sign_in_refused(response)
+
+
+@pytest.mark.functional
+def test_stfd_issuer_is_checked_when_configured(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+    app.config["STFD_ISSUER"] = "https://stfd.example.test/stfd/"
+
+    wrong, _token, _state = _stfd_sign_in(
+        client, extra_claims={"iss": "https://elsewhere.example.test/stfd"}, **STFD_TEST_IDENTITY
+    )
+    _assert_stfd_sign_in_refused(wrong)
+
+    missing, _token, _state = _stfd_sign_in(client, **STFD_TEST_IDENTITY)
+    _assert_stfd_sign_in_refused(missing)
+
+    right, _token, _state = _stfd_sign_in(
+        client, extra_claims={"iss": "https://stfd.example.test/stfd"}, **STFD_TEST_IDENTITY
+    )
+    assert right.status_code == 200
