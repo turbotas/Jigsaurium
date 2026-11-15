@@ -246,10 +246,17 @@
   3. The SPA removes both from the address bar and posts them to `POST /api/v1/auth/login`.
 - An STFD login is refused with `401` `authentication_failed` unless all of these hold:
   - the session holds an unexpired pending `state` equal to the posted `state` (consumed by any attempt, successful or not), and the token's `nonce` equals it;
-  - the token is signed with `STFD_SHARED_KEY` (HS256) and has `sub`, `email`, `app`, `roles`, `iat`, `exp`, `jti` and `nonce`, plus `iss` equal to `STFD_ISSUER` when that is set;
+  - the token is signed with `STFD_SHARED_KEY` (HS256) and has `sub`, `email`, `app`, `roles`, `step_up_roles` (a list), `iat`, `exp`, `jti` and `nonce`, plus `iss` equal to `STFD_ISSUER` when that is set;
   - `app` equals `STFD_APP_UNI`;
   - `iat` is at most 120 seconds old and `exp - iat` is at most 300 seconds (5 seconds clock leeway);
   - `jti` (16–128 URL-safe characters) has not been used before. Used ids are kept in `stfd_used_tokens` until the token could no longer pass the age check.
+- STFD 2FA hop-up (step-up), matching the STFD Python kit. STFD can require a fresh TOTP check for a whole application or for chosen roles. Until the user has one, STFD leaves those roles out of `roles` and lists every gated role the user holds in `step_up_roles`; while the user is verified, the token also carries `2fa_verified: true`, `mfa_exp` (when the check runs out) and `mfa_idle` (seconds of inactivity it allows, default 1800), plus `mfa_required` when the whole application is gated.
+  - Local role assignments record every role the user holds in STFD (`roles` plus `step_up_roles`), so signing in without a hop-up never removes a gated role.
+  - On each request a gated role counts only while `mfa_exp` is in the future, and each request moves `mfa_exp` forward to now plus `mfa_idle`. Once it passes, gated roles stop counting and the user stays signed in with the rest. If `mfa_required` is true, the session ends instead (session termination reason `mfa_expired`). A gated role that arrives in `roles` without `mfa_exp` is not counted.
+  - The user object in auth responses (`POST /api/v1/auth/login`, `GET` and `PATCH /api/v1/auth/me`) includes `roles` (the roles usable now) and `step_up_roles` (roles the user holds but may use only after a hop-up; always `[]` for local sign-in).
+  - An endpoint that needs a role the user holds but may not use yet returns `403` with error code `step_up_required` and details `[{"field": "role", "issue": "<role name>"}]`.
+  - `GET /api/v1/auth/stfd/start?step_up=1&want_role=<role name>` starts a hop-up: STFD asks for TOTP first (enrolling the user if needed), then returns as for a normal sign-in. An unknown `want_role`, or `want_role` without `step_up=1`, returns `422` `validation_error`. A sign-in started this way fails rather than looping: `401` `authentication_failed` if the token comes back without `2fa_verified`, and `403` `forbidden` if it lacks the wanted role.
+  - The SPA shows a "Verify with 2FA" button while `step_up_roles` is not empty. On `step_up_required` it starts the hop-up straight away for reads, and asks the user to select the button for changes, so unsaved work is not lost. After the hop-up it returns to the view the user was on.
 - In STFD mode with `STFD_ALLOW_LOCAL_LOGIN=0`, login requests must include `token` (and `state`).
 - In STFD mode with `STFD_ALLOW_LOCAL_LOGIN=1`, login requests may use either STFD token or local email/password.
 - In STFD mode, local account edits via `PATCH /api/v1/auth/me` are rejected with `403`; profile/password are managed by STFD.

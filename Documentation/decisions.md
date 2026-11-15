@@ -386,3 +386,12 @@
 - Decision: cap token age at 120 seconds from `iat` and the `exp - iat` window at 300 seconds, whatever STFD sets; check `iss` against `STFD_ISSUER` when configured.
 - Decision: ask STFD for `response_mode=fragment`, so the token arrives in the URL fragment, which browsers never send to the server or proxy; the SPA clears it from the address bar before posting it.
 - Why these values: they match the STFD Python kit (`shut-the-front-door` `stfd-kit/python-jwt`, commit `9764a80`). Jigsaurium keeps its own implementation, not the kit package, because sign-in here provisions users, maps roles and writes audit events through its own database. Each STFD application already has its own key, so the shared-key concern in #72 needs no change here.
+
+## 2026-11-15 - STFD 2FA Hop-Up (Step-Up)
+
+- Decision: follow the STFD Python kit's 2FA hop-up model (`shut-the-front-door` `stfd-kit/python-jwt`, commit `50753b5`). Require the `step_up_roles` claim. Count 2FA-gated roles only while the hop-up (`mfa_exp`) is live, and let each request push it forward by `mfa_idle`. When it lapses, drop the gated roles, or end the session if the application requires 2FA. Admin-only endpoints answer `403` `step_up_required`, and the SPA then sends the user through `GET /api/v1/auth/stfd/start?step_up=1&want_role=…`.
+- Why: STFD now holds back gated roles (for example administrator) until the user passes a fresh TOTP check. Jigsaurium copied `roles` into its local role table, so an admin signing in without a hop-up would have lost the administrator role.
+- Decision: the local role table records every role the user holds in STFD (`roles` plus `step_up_roles`); the session decides which roles count on each request.
+- Why: role changes stay a matter of STFD membership, not of whether the user did a hop-up today, and admin user lists and audit events keep showing who holds which role.
+- Decision: a hop-up that comes back without 2FA or without the wanted role fails instead of redirecting again, as in the kit, so it cannot loop. A gated role that arrives without `mfa_exp` is not counted.
+- Consequences: STFD sessions created before this change hold no hop-up state, so those users are asked to sign in again once. Jigsaurium still keeps its own implementation rather than the kit package, for the reasons in "STFD Sign-In Hardening" above. The kit's `require_2fa()` for individual sensitive actions is not used yet: gating is per role, set in STFD.

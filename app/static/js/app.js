@@ -216,6 +216,7 @@
     authDialogBackdrop: document.getElementById("auth-dialog-backdrop"),
     authDialogCloseButton: document.getElementById("auth-dialog-close"),
     accountNavButton: document.getElementById("account-nav-button"),
+    stfdStepUpButton: document.getElementById("stfd-step-up-button"),
     workspaceTabs: document.getElementById("workspace-tabs"),
     workspaceTabButtons: Array.from(document.querySelectorAll("[data-workspace-tab]")),
     collectionSubtabs: document.getElementById("collection-subtabs"),
@@ -523,6 +524,9 @@
     if (elements.accountNavButton) {
       elements.accountNavButton.hidden = !isSignedIn || isStfdSession;
     }
+    if (elements.stfdStepUpButton) {
+      elements.stfdStepUpButton.hidden = !isSignedIn || !isStfdSession || getStfdStepUpRoles().length === 0;
+    }
     if (elements.signInHeaderControls) {
       elements.signInHeaderControls.hidden = isSignedIn;
     }
@@ -637,6 +641,21 @@
       const fallbackSnippet = responseText ? responseText.replace(/\s+/g, " ").trim().slice(0, 180) : "";
       const fallbackMessage = fallbackSnippet ? `HTTP ${response.status}: ${fallbackSnippet}` : `HTTP ${response.status}`;
       const message = detailMessage ? `${baseMessage} ${detailMessage}` : payload?.error?.message ? baseMessage : fallbackMessage;
+      if (payload?.error?.code === "step_up_required") {
+        const role = typeof details[0]?.issue === "string" ? details[0].issue : "";
+        if (state.user && role && !getStfdStepUpRoles().includes(role)) {
+          state.user.step_up_roles = [...getStfdStepUpRoles(), role].sort();
+          syncHeaderAuthControls();
+        }
+        // Reads can resume after the hop-up; for changes, let the user choose so nothing is lost.
+        if (method === "GET" && beginStfdStepUp(role)) {
+          throw new Error("Two-factor verification is needed. Redirecting to STFD...");
+        }
+        const stepUpError = new Error("This needs two-factor verification. Select Verify with 2FA, then try again.");
+        stepUpError.status = response.status;
+        stepUpError.payload = payload;
+        throw stepUpError;
+      }
       const error = new Error(message);
       error.status = response.status;
       error.payload = payload;
@@ -644,6 +663,49 @@
     }
 
     return payload;
+  }
+
+  // STFD 2FA hop-up: roles the signed-in user holds but may use only after a fresh hop-up.
+  const STFD_RETURN_HASH_STORAGE_KEY = "jigsaurium.stfdReturnHash";
+
+  function getStfdStepUpRoles() {
+    return Array.isArray(state.user?.step_up_roles) ? state.user.step_up_roles.filter((role) => typeof role === "string") : [];
+  }
+
+  function beginStfdStepUp(role) {
+    if (!state.stfdAuthEnabled || !state.stfdLoginUrl) {
+      return false;
+    }
+    const wantRole = role || getStfdStepUpRoles()[0] || "";
+    const params = new URLSearchParams({ step_up: "1" });
+    if (wantRole) {
+      params.set("want_role", wantRole);
+    }
+    try {
+      window.sessionStorage.setItem(STFD_RETURN_HASH_STORAGE_KEY, window.location.hash || "");
+    } catch (_error) {
+      // Storage can be unavailable; the user just lands on the default view afterwards.
+    }
+    const separator = state.stfdLoginUrl.includes("?") ? "&" : "?";
+    window.location.assign(`${state.stfdLoginUrl}${separator}${params.toString()}`);
+    return true;
+  }
+
+  function takeStfdReturnHash() {
+    try {
+      const value = window.sessionStorage.getItem(STFD_RETURN_HASH_STORAGE_KEY);
+      window.sessionStorage.removeItem(STFD_RETURN_HASH_STORAGE_KEY);
+      return typeof value === "string" && value.startsWith("#") ? value : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function handleStfdStepUpClick() {
+    clearFeedback();
+    if (!beginStfdStepUp("")) {
+      showFeedback("STFD sign-in is enabled but not configured correctly.", true);
+    }
   }
 
   function clearTableBody(tableBody) {
@@ -7249,8 +7311,13 @@
       closeAuthDialog();
       setSessionSummary();
       showFeedback("Signed in successfully.");
+      const returnHash = takeStfdReturnHash();
+      if (returnHash && returnHash !== window.location.hash) {
+        window.location.hash = returnHash;
+      }
       return true;
     } catch (error) {
+      takeStfdReturnHash();
       showFeedback(error.message, true);
       return false;
     }
@@ -10709,6 +10776,9 @@
       elements.stfdLoginButton.addEventListener("click", handleStfdLoginClick);
     }
 
+    if (elements.stfdStepUpButton) {
+      elements.stfdStepUpButton.addEventListener("click", handleStfdStepUpClick);
+    }
     if (elements.logoutButton) {
       elements.logoutButton.addEventListener("click", handleLogout);
     }
