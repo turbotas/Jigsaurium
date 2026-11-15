@@ -117,6 +117,7 @@ class Config:
     STFD_ROLE_UNI_ADMINISTRATOR = os.getenv("STFD_ROLE_UNI_ADMINISTRATOR", "")
     STFD_ROLE_UNI_MEMBER = os.getenv("STFD_ROLE_UNI_MEMBER", "")
     STFD_ROLE_UNI_BORROWER = os.getenv("STFD_ROLE_UNI_BORROWER", "")
+    STFD_ISSUER = os.getenv("STFD_ISSUER", "")
     DB_BACKUP_STORAGE_PATH = os.getenv("DB_BACKUP_STORAGE_PATH", "")
     DB_BACKUP_COMPRESSION = os.getenv("DB_BACKUP_COMPRESSION", "gzip")
     DB_BACKUP_BLOB_CHUNK_BYTES = _parse_optional_int(

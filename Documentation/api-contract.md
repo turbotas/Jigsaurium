@@ -12,8 +12,9 @@
 - API access requires authenticated user context except for explicitly public endpoints.
 - Proxy-only access (`REQUIRE_TRUSTED_PROXY=1`, the default): requests whose socket peer is not a configured trusted proxy (loopback included) receive `403` with error code `forbidden`, before authentication. Pages get a plain-text `403`. `GET /api/v1/health` is exempt.
 - Session authentication endpoints:
-  - `GET /api/v1/auth/stfd/login-url` (public, returns STFD sign-in URL when STFD mode is enabled)
-  - `POST /api/v1/auth/login` (public, expects `token` when STFD mode is enabled; otherwise expects `email` + `password`)
+  - `GET /api/v1/auth/stfd/login-url` (public, returns the URL that starts an STFD sign-in when STFD mode is enabled)
+  - `GET /api/v1/auth/stfd/start` (public, records a sign-in `state` in the session and redirects to STFD)
+  - `POST /api/v1/auth/login` (public, expects `token` + `state` when STFD mode is enabled; otherwise expects `email` + `password`)
   - `GET /api/v1/auth/me` (authenticated)
   - `POST /api/v1/auth/logout` (authenticated)
 - Public catalog endpoints:
@@ -33,6 +34,7 @@
 - `POST /api/v1/system/health/probe`
 - `GET /api/v1/system/proxy-diagnostics`
 - `GET /api/v1/auth/stfd/login-url`
+- `GET /api/v1/auth/stfd/start`
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
 - `PATCH /api/v1/auth/me`
@@ -230,14 +232,25 @@
 
 ```json
 {
-  "token": "jwt-from-stfd"
+  "token": "jwt-from-stfd",
+  "state": "state-returned-by-stfd"
 }
 ```
 
 - `GET /api/v1/auth/stfd/login-url` returns:
   - `enabled: false`, `allow_local_login: true`, and `login_url: null` when STFD mode is disabled.
-  - `enabled: true`, `allow_local_login`, and absolute `login_url` when STFD mode is enabled.
-- In STFD mode with `STFD_ALLOW_LOCAL_LOGIN=0`, login requests must include `token`.
+  - `enabled: true`, `allow_local_login`, and `login_url` (the app-relative path of `GET /api/v1/auth/stfd/start`) when STFD mode is enabled.
+- STFD sign-in flow:
+  1. The browser opens `GET /api/v1/auth/stfd/start`. It stores a fresh random `state` in the session (valid 10 minutes, one use) and answers `302` to `<STFD_ASSERT_BASE_URL>/<STFD_APP_UNI>?redirect_uri=…&state=…&response_mode=fragment` (`Cache-Control: no-store`). It returns `404` `not_found` when STFD mode is disabled.
+  2. STFD signs `state` into the token as `nonce` and returns to `STFD_REDIRECT_URI` with `#token=…&state=…` in the URL fragment, so the token never reaches server or proxy logs.
+  3. The SPA removes both from the address bar and posts them to `POST /api/v1/auth/login`.
+- An STFD login is refused with `401` `authentication_failed` unless all of these hold:
+  - the session holds an unexpired pending `state` equal to the posted `state` (consumed by any attempt, successful or not), and the token's `nonce` equals it;
+  - the token is signed with `STFD_SHARED_KEY` (HS256) and has `sub`, `email`, `app`, `roles`, `iat`, `exp`, `jti` and `nonce`, plus `iss` equal to `STFD_ISSUER` when that is set;
+  - `app` equals `STFD_APP_UNI`;
+  - `iat` is at most 120 seconds old and `exp - iat` is at most 300 seconds (5 seconds clock leeway);
+  - `jti` (16–128 URL-safe characters) has not been used before. Used ids are kept in `stfd_used_tokens` until the token could no longer pass the age check.
+- In STFD mode with `STFD_ALLOW_LOCAL_LOGIN=0`, login requests must include `token` (and `state`).
 - In STFD mode with `STFD_ALLOW_LOCAL_LOGIN=1`, login requests may use either STFD token or local email/password.
 - In STFD mode, local account edits via `PATCH /api/v1/auth/me` are rejected with `403`; profile/password are managed by STFD.
 - Auth payload user objects include a derived `capabilities` array to support SPA feature-gating without hardcoding role names.

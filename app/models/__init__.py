@@ -12,6 +12,7 @@ from app.models.jigsaw_image import JigsawImage
 from app.models.loan import Loan
 from app.models.login_throttle_counter import LoginThrottleCounter
 from app.models.role import Role
+from app.models.stfd_used_token import StfdUsedToken
 from app.models.user import User
 from app.models.user_session import UserSession
 from app.models.user_role import UserRole
@@ -31,6 +32,7 @@ __all__ = [
     "Loan",
     "LoginThrottleCounter",
     "Role",
+    "StfdUsedToken",
     "User",
     "UserSession",
     "UserRole",

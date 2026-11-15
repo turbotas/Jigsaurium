@@ -363,7 +363,7 @@
 - Why: a stored filename containing quotes or line breaks could otherwise alter the response header.
 - Decision: when `APP_VERSION` / `APP_BUILD_SHA` are not supplied, read them from git (`git describe --tags --match "v*" --dirty`, `git rev-parse HEAD`).
 - Why: dev runs from a checkout with `run.bat` and showed the placeholder `0.0.0-dev`. Container images still get both as build arguments and have no `.git`, so they are unaffected.
-- STFD token replay, lifetime and login CSRF are tracked separately in GitHub issue #72, because the fixes need changes in STFD too.
+- STFD token replay, lifetime and login CSRF are tracked separately in GitHub issue #72, because the fixes need changes in STFD too (done: see "STFD Sign-In Hardening" below).
 
 ## 2026-11-14 - AI Image Suggestion Contract (Issue #1)
 
@@ -376,3 +376,13 @@
 - Decision: pick the AI model (and image size) for image suggestions with `scripts/ai_benchmark.py`, which sends labelled test photos through the app's own AI request to each candidate model and scores every answer the AI is asked for: tag, orientation, corners (overlap with the right shape) and every jigsaw detail (title, series, manufacturer, artist, pieces, size, tags, description), plus whether a photo was entirely right, cost and time.
 - Rationale: judging models by eye on a few photos proved misleading (for example, handwritten labels in demo photos changed what "upright" meant). Scores from photos labelled separately, in a JSON file beside each one, give a repeatable comparison as models and prompts change.
 - Consequences: test photos are private and stay out of git (`instance/ai-benchmark/`). Right answers are marked with `scripts/ai_benchmark_labeller.html`, a standalone page needing no server. Each run records its total cost as one `ai_benchmark` row in AI Spend, so benchmark spend is tracked with the rest and counts toward the daily budget. The planned split into a description call and a shape call will add a job option to the benchmark.
+
+## 2026-11-15 - STFD Sign-In Hardening (Issue #72)
+
+- Decision: an STFD sign-in must start at `GET /api/v1/auth/stfd/start`, which keeps a one-use random `state` in the session for 10 minutes and sends it to STFD; the login accepts only a token whose `nonce` matches that state.
+- Why: without it, an attacker could send a victim a link carrying the attacker's own valid token and sign the victim into the attacker's account (login CSRF).
+- Decision: require `jti` and record each used id in a new `stfd_used_tokens` table (unique `jti`, pruned after expiry). The row is written last, after every other check, and a unique-key clash refuses the sign-in.
+- Why: a token could previously sign in repeatedly until it expired. A database table works across all gunicorn workers and needs no extra service.
+- Decision: cap token age at 120 seconds from `iat` and the `exp - iat` window at 300 seconds, whatever STFD sets; check `iss` against `STFD_ISSUER` when configured.
+- Decision: ask STFD for `response_mode=fragment`, so the token arrives in the URL fragment, which browsers never send to the server or proxy; the SPA clears it from the address bar before posting it.
+- Why these values: they match the STFD Python kit (`shut-the-front-door` `stfd-kit/python-jwt`, commit `9764a80`). Jigsaurium keeps its own implementation, not the kit package, because sign-in here provisions users, maps roles and writes audit events through its own database. Each STFD application already has its own key, so the shared-key concern in #72 needs no change here.

@@ -65,6 +65,8 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `STFD_ROLE_UNI_ADMINISTRATOR`: STFD role UNI that maps to local `administrator`.
 - `STFD_ROLE_UNI_MEMBER`: STFD role UNI that maps to local `member`.
 - `STFD_ROLE_UNI_BORROWER`: STFD role UNI that maps to local `borrower`.
+- `STFD_ISSUER`: expected `iss` claim on STFD tokens: the STFD base URL (for example `https://<host>/stfd`). When set, tokens without that issuer are refused. Blank skips the check and logs a startup warning; set it in test and prod.
+- STFD sign-in requires an STFD release that issues `jti` and `nonce` and supports `state` and `response_mode=fragment`. The sign-in checks (login CSRF state, replay, token age) are described in `Documentation/api-contract.md`.
 - `AI_ENABLED`: enable/disable AI create-from-image endpoint.
 - `AI_API_KEY`: provider API key for vision metadata extraction.
 - `AI_ENDPOINT_URL`: AI provider chat/completions-compatible endpoint URL.
