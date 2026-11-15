@@ -127,9 +127,13 @@ def _build_stfd_token(
     jti=None,
     issued_seconds_ago=0,
     lifetime_seconds=60,
+    step_up_role_unis=(),
+    elevated=False,
+    mfa_required=False,
     extra_claims=None,
     omit_claims=(),
 ):
+    """An STFD assertion as STFD issues it. `elevated` means the user has a fresh 2FA hop-up."""
     issued_at = int(datetime.now(timezone.utc).timestamp()) - issued_seconds_ago
     payload = {
         "sub": sub,
@@ -137,28 +141,37 @@ def _build_stfd_token(
         "friendly_name": "STFD Synced User",
         "app": app_uni,
         "roles": role_unis,
+        "step_up_roles": list(step_up_role_unis),
+        "2fa_verified": bool(elevated),
+        "amr": ["pwd", "otp"] if elevated else ["pwd"],
+        "auth_time": issued_at,
+        "mfa_required": bool(mfa_required),
+        "mfa_idle": 1800,
         "iat": issued_at,
         "exp": issued_at + lifetime_seconds,
         "jti": jti or uuid.uuid4().hex,
         "nonce": nonce,
     }
+    if elevated:
+        payload["mfa_time"] = issued_at
+        payload["mfa_exp"] = issued_at + 1800
     payload.update(extra_claims or {})
     for claim in omit_claims:
         payload.pop(claim, None)
     return jwt.encode(payload, "test-shared-key-0123456789abcdef0123456789abcdef", algorithm="HS256")
 
 
-def _start_stfd_sign_in(client):
+def _start_stfd_sign_in(client, query_string=""):
     """Begin a sign-in as the browser does and return the state STFD would sign into the token."""
-    response = client.get("/api/v1/auth/stfd/start")
+    response = client.get(f"/api/v1/auth/stfd/start{query_string}")
     assert response.status_code == 302
     query = parse_qs(urlsplit(response.headers["Location"]).query)
     return query["state"][0]
 
 
-def _stfd_sign_in(client, **token_claims):
+def _stfd_sign_in(client, start_query="", **token_claims):
     """Start a sign-in, then come back from STFD with a matching token. Returns (response, token, state)."""
-    state = _start_stfd_sign_in(client)
+    state = _start_stfd_sign_in(client, start_query)
     token = _build_stfd_token(nonce=state, **token_claims)
     response = client.post("/api/v1/auth/login", json={"token": token, "state": state})
     return response, token, state
@@ -2741,6 +2754,8 @@ def test_stfd_pending_state_expires(app, client, seeded_identity_data):
         pytest.param({"omit_claims": ("jti",)}, id="missing-jti"),
         pytest.param({"jti": "short"}, id="malformed-jti"),
         pytest.param({"omit_claims": ("nonce",)}, id="missing-nonce"),
+        pytest.param({"omit_claims": ("step_up_roles",)}, id="missing-step-up-roles"),
+        pytest.param({"extra_claims": {"step_up_roles": "role-uni-admin"}}, id="step-up-roles-not-a-list"),
     ],
 )
 def test_stfd_token_checks_refuse_bad_tokens(app, client, seeded_identity_data, token_claims):
@@ -2766,3 +2781,202 @@ def test_stfd_issuer_is_checked_when_configured(app, client, seeded_identity_dat
         client, extra_claims={"iss": "https://stfd.example.test/stfd"}, **STFD_TEST_IDENTITY
     )
     assert right.status_code == 200
+
+
+# 2FA hop-up: STFD gates the administrator role behind a fresh TOTP check.
+STFD_GATED_ADMIN = {
+    "sub": "stfd-user-uni-200",
+    "email": "stfd-gated-admin@example.com",
+    "step_up_role_unis": ["role-uni-admin"],
+}
+
+
+def _assert_step_up_required(response, role="administrator"):
+    assert response.status_code == 403
+    error = response.get_json()["error"]
+    assert error["code"] == "step_up_required"
+    assert error["details"] == [{"field": "role", "issue": role}]
+
+
+def _set_stfd_mfa_exp(client, value):
+    from app.api.v1.routes import STFD_MFA_EXP_SESSION_KEY
+
+    with client.session_transaction() as flask_session:
+        flask_session[STFD_MFA_EXP_SESSION_KEY] = value
+
+
+@pytest.mark.functional
+def test_stfd_gated_admin_keeps_role_but_must_step_up_to_use_it(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+
+    response, _token, _state = _stfd_sign_in(client, role_unis=["role-uni-member"], **STFD_GATED_ADMIN)
+
+    assert response.status_code == 200
+    user_payload = response.get_json()["data"]["user"]
+    assert user_payload["roles"] == ["member"]
+    assert user_payload["step_up_roles"] == ["administrator"]
+    # The stored roles keep administrator, so signing in without a hop-up does not demote anyone.
+    with app.app_context():
+        db_session = get_session()
+        user = db_session.query(User).filter_by(email="stfd-gated-admin@example.com").one()
+        stored_roles = sorted(
+            name
+            for (name,) in db_session.query(Role.name)
+            .join(UserRole, UserRole.role_id == Role.id)
+            .filter(UserRole.user_id == user.id)
+        )
+    assert stored_roles == ["administrator", "member"]
+
+    _assert_step_up_required(client.get("/api/v1/roles"))
+    me = client.get("/api/v1/auth/me").get_json()["data"]["user"]
+    assert me["roles"] == ["member"]
+    assert me["step_up_roles"] == ["administrator"]
+
+
+@pytest.mark.functional
+def test_stfd_start_asks_stfd_for_step_up(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+
+    response = client.get("/api/v1/auth/stfd/start?step_up=1&want_role=administrator")
+
+    assert response.status_code == 302
+    query = parse_qs(urlsplit(response.headers["Location"]).query)
+    assert query["step_up"] == ["1"]
+    # A plain sign-in does not ask for one.
+    plain = parse_qs(urlsplit(client.get("/api/v1/auth/stfd/start").headers["Location"]).query)
+    assert "step_up" not in plain
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    "query_string",
+    ["?step_up=1&want_role=superuser", "?want_role=administrator"],
+    ids=["unknown-role", "want-role-without-step-up"],
+)
+def test_stfd_start_rejects_bad_want_role(app, client, seeded_identity_data, query_string):
+    from app.api.v1.routes import STFD_PENDING_STATE_SESSION_KEY
+
+    _configure_stfd_for_tests(app)
+
+    response = client.get(f"/api/v1/auth/stfd/start{query_string}")
+
+    assert response.status_code == 422
+    assert response.get_json()["error"]["code"] == "validation_error"
+    with client.session_transaction() as flask_session:
+        assert STFD_PENDING_STATE_SESSION_KEY not in flask_session
+
+
+@pytest.mark.functional
+def test_stfd_step_up_grants_the_gated_role(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+    first, _token, _state = _stfd_sign_in(client, role_unis=["role-uni-member"], **STFD_GATED_ADMIN)
+    assert first.status_code == 200
+
+    stepped_up, _token, _state = _stfd_sign_in(
+        client,
+        start_query="?step_up=1&want_role=administrator",
+        role_unis=["role-uni-member", "role-uni-admin"],
+        elevated=True,
+        **STFD_GATED_ADMIN,
+    )
+
+    assert stepped_up.status_code == 200
+    user_payload = stepped_up.get_json()["data"]["user"]
+    assert user_payload["roles"] == ["administrator", "member"]
+    assert user_payload["step_up_roles"] == []
+    assert client.get("/api/v1/roles").status_code == 200
+
+
+@pytest.mark.functional
+def test_stfd_step_up_that_does_not_deliver_fails_instead_of_looping(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+
+    no_2fa, _token, _state = _stfd_sign_in(
+        client,
+        start_query="?step_up=1&want_role=administrator",
+        role_unis=["role-uni-member", "role-uni-admin"],
+        **STFD_GATED_ADMIN,
+    )
+    _assert_stfd_sign_in_refused(no_2fa)
+    assert "not completed" in no_2fa.get_json()["error"]["message"]
+
+    no_role, _token, _state = _stfd_sign_in(
+        client,
+        start_query="?step_up=1&want_role=administrator",
+        role_unis=["role-uni-member"],
+        elevated=True,
+        **STFD_GATED_ADMIN,
+    )
+    assert no_role.status_code == 403
+    assert no_role.get_json()["error"]["code"] == "forbidden"
+
+
+@pytest.mark.functional
+def test_stfd_gated_role_without_live_hop_up_is_not_granted(app, client, seeded_identity_data):
+    # Defence in depth: a gated role in `roles` without a hop-up expiry is not trusted.
+    _configure_stfd_for_tests(app)
+
+    response, _token, _state = _stfd_sign_in(
+        client, role_unis=["role-uni-member", "role-uni-admin"], **STFD_GATED_ADMIN
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["user"]["roles"] == ["member"]
+    _assert_step_up_required(client.get("/api/v1/roles"))
+
+
+@pytest.mark.functional
+def test_stfd_hop_up_slides_with_activity_and_lapses_to_member(app, client, seeded_identity_data):
+    from app.api.v1.routes import STFD_MFA_EXP_SESSION_KEY
+
+    _configure_stfd_for_tests(app)
+    response, _token, _state = _stfd_sign_in(
+        client, role_unis=["role-uni-member", "role-uni-admin"], elevated=True, **STFD_GATED_ADMIN
+    )
+    assert response.status_code == 200
+
+    # Activity while the hop-up is live pushes it forward by mfa_idle.
+    now = int(datetime.now(timezone.utc).timestamp())
+    _set_stfd_mfa_exp(client, now + 10)
+    assert client.get("/api/v1/roles").status_code == 200
+    with client.session_transaction() as flask_session:
+        assert flask_session[STFD_MFA_EXP_SESSION_KEY] >= now + 1790
+
+    # Once it has lapsed the gated role is dropped, but the user stays signed in as a member.
+    _set_stfd_mfa_exp(client, now - 1)
+    _assert_step_up_required(client.get("/api/v1/roles"))
+    me = client.get("/api/v1/auth/me")
+    assert me.status_code == 200
+    assert me.get_json()["data"]["user"]["roles"] == ["member"]
+    assert me.get_json()["data"]["user"]["step_up_roles"] == ["administrator"]
+
+
+@pytest.mark.functional
+def test_stfd_lapsed_hop_up_ends_sign_in_when_app_requires_2fa(app, client, seeded_identity_data):
+    _configure_stfd_for_tests(app)
+    response, _token, _state = _stfd_sign_in(
+        client, role_unis=["role-uni-member"], elevated=True, mfa_required=True, **STFD_GATED_ADMIN
+    )
+    assert response.status_code == 200
+    session_identifier = response.get_json()["data"]["session_identifier"]
+
+    _set_stfd_mfa_exp(client, int(datetime.now(timezone.utc).timestamp()) - 1)
+
+    _assert_authentication_required(client.get("/api/v1/auth/me"))
+    with app.app_context():
+        record = get_session().query(UserSession).filter_by(session_identifier=session_identifier).one()
+        assert record.terminated_at is not None
+        assert record.termination_reason == "mfa_expired"
+
+
+@pytest.mark.functional
+def test_stfd_session_from_before_hop_up_support_must_sign_in_again(app, client, seeded_identity_data):
+    from app.api.v1.routes import STFD_STEP_UP_ROLES_SESSION_KEY
+
+    _configure_stfd_for_tests(app)
+    response, _token, _state = _stfd_sign_in(client, **STFD_TEST_IDENTITY)
+    assert response.status_code == 200
+    with client.session_transaction() as flask_session:
+        flask_session.pop(STFD_STEP_UP_ROLES_SESSION_KEY)
+
+    _assert_authentication_required(client.get("/api/v1/auth/me"))

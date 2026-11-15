@@ -562,8 +562,28 @@
     return "";
   }
 
+  // STFD returns the sign-in state next to the token; the server needs both.
+  function extractStfdStateFromUrl(url) {
+    const sources = [url.searchParams];
+    const rawHash = String(url.hash || "").replace(/^#/, "").trim();
+    if (rawHash) {
+      sources.push(new URLSearchParams(rawHash));
+      const questionMarkIndex = rawHash.indexOf("?");
+      if (questionMarkIndex >= 0 && questionMarkIndex + 1 < rawHash.length) {
+        sources.push(new URLSearchParams(rawHash.slice(questionMarkIndex + 1)));
+      }
+    }
+    for (const params of sources) {
+      const value = String(params.get("state") || "").trim();
+      if (value) {
+        return value;
+      }
+    }
+    return "";
+  }
+
   function removeStfdTokenFromUrl(url) {
-    const parameterNames = ["token", "jwt", "assertion"];
+    const parameterNames = ["token", "jwt", "assertion", "state"];
     parameterNames.forEach((parameterName) => {
       url.searchParams.delete(parameterName);
     });
@@ -605,6 +625,10 @@
     if (!token) {
       return null;
     }
+    const stfdState = extractStfdStateFromUrl(url);
+    // Clear the token from the address bar and history before anything else.
+    removeStfdTokenFromUrl(url);
+    window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
 
     const response = await fetch("/api/v1/auth/login", {
       method: "POST",
@@ -613,11 +637,9 @@
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ token, state: stfdState }),
     });
     const payload = await parseJsonSafe(response);
-    removeStfdTokenFromUrl(url);
-    window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
     if (!response.ok) {
       const message = payload?.error?.message || "Sign in failed.";
       throw new Error(message);

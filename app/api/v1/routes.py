@@ -175,6 +175,15 @@ STFD_PENDING_STATE_SESSION_KEY = "stfd_pending_state"
 STFD_RESPONSE_MODE = "fragment"
 # `state`, `nonce` and `jti` values STFD issues and accepts: 16-128 URL-safe characters.
 STFD_OPAQUE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+# 2FA hop-up (STFD per-app and per-role policies). STFD leaves 2FA-gated roles out of `roles`
+# until the user has a fresh hop-up and lists every gated role they hold in `step_up_roles`.
+# The elevation is an idle timeout: `mfa_exp` slides forward by `mfa_idle` on activity.
+STFD_STEP_UP_ROLES_SESSION_KEY = "stfd_step_up_roles"
+STFD_MFA_EXP_SESSION_KEY = "stfd_mfa_exp"
+STFD_MFA_IDLE_SESSION_KEY = "stfd_mfa_idle"
+STFD_MFA_REQUIRED_SESSION_KEY = "stfd_mfa_required"
+STFD_DEFAULT_MFA_IDLE_SECONDS = 1800
+STFD_MIN_MFA_IDLE_SECONDS = 60
 # Image metadata left out of the public thumbnail list for callers who are not signed in.
 GUEST_HIDDEN_IMAGE_FIELDS = frozenset(
     {"uploaded_by_user_id", "filename", "user_comment", "captured_at", "captured_at_source"}
@@ -184,6 +193,7 @@ SESSION_TERMINATION_REASON_LOGOUT = "logout"
 SESSION_TERMINATION_REASON_EXPIRED = "expired"
 SESSION_TERMINATION_REASON_ADMIN_TERMINATED = "admin_terminated"
 SESSION_TERMINATION_REASON_PASSWORD_CHANGED = "password_changed"
+SESSION_TERMINATION_REASON_MFA_EXPIRED = "mfa_expired"
 SESSION_ACTIVITY_TOUCH_INTERVAL_SECONDS = 30
 DATABASE_BACKUP_STATUS_QUEUED = "queued"
 DATABASE_BACKUP_STATUS_RUNNING = "running"
@@ -1007,6 +1017,13 @@ def _error_response(code, message, status_code, details=None):
     return payload, status_code
 
 
+def _serialize_current_user(user, roles):
+    """The signed-in user, plus `step_up_roles`: roles they hold that need a fresh STFD 2FA hop-up."""
+    payload = _serialize_user(user, roles)
+    payload["step_up_roles"] = sorted(getattr(g, "current_user_step_up_roles", None) or [])
+    return payload
+
+
 def _parse_json_object():
     payload = request.get_json(silent=True)
     if payload is None:
@@ -1794,17 +1811,21 @@ def _normalize_stfd_display_name(raw_display_name):
     return display_name
 
 
-def _build_stfd_assert_url(stfd_config, state):
+def _build_stfd_assert_url(stfd_config, state, step_up=False):
     app_uni = urllib.parse.quote(stfd_config["app_uni"], safe="")
     assert_base_url = stfd_config["assert_base_url"].rstrip("/")
-    query = urllib.parse.urlencode(
-        {"redirect_uri": stfd_config["redirect_uri"], "state": state, "response_mode": STFD_RESPONSE_MODE}
-    )
+    params = {"redirect_uri": stfd_config["redirect_uri"], "state": state, "response_mode": STFD_RESPONSE_MODE}
+    if step_up:
+        params["step_up"] = "1"
+    query = urllib.parse.urlencode(params)
     return f"{assert_base_url}/{app_uni}?{query}"
 
 
 def _take_stfd_pending_state():
-    """Remove and return the state this browser's sign-in started with, if it is still fresh (one use only)."""
+    """Remove and return the sign-in this browser started, if it is still fresh (one use only).
+
+    Returns a dict with `value` (the state), `step_up` and `want_role` (a role UNI or None), or None.
+    """
     pending = session.pop(STFD_PENDING_STATE_SESSION_KEY, None)
     if not isinstance(pending, dict):
         return None
@@ -1814,7 +1835,52 @@ def _take_stfd_pending_state():
         return None
     if int(time.time()) - issued_at > STFD_PENDING_STATE_TTL_SECONDS:
         return None
-    return value
+    want_role = pending.get("want_role")
+    return {
+        "value": value,
+        "step_up": pending.get("step_up") is True,
+        "want_role": want_role if isinstance(want_role, str) and want_role else None,
+    }
+
+
+def _stfd_elevation_is_live(now=None):
+    mfa_exp = session.get(STFD_MFA_EXP_SESSION_KEY)
+    return isinstance(mfa_exp, int) and mfa_exp >= int(now if now is not None else time.time())
+
+
+def _apply_stfd_elevation(role_names):
+    """Work out the roles an STFD session may use on this request (the kit's `refresh_elevation`).
+
+    The database keeps every role the user holds in STFD. 2FA-gated roles count only while the
+    hop-up is live; activity slides it forward by `mfa_idle`. Once it lapses the gated roles are
+    dropped, or the whole sign-in ends when the application requires 2FA.
+
+    Returns `(effective_role_names, inactive_step_up_role_names)`, or `None` if the sign-in must end.
+    """
+    step_up_roles = session.get(STFD_STEP_UP_ROLES_SESSION_KEY)
+    if not isinstance(step_up_roles, list):
+        # Signed in before STFD 2FA policies were supported: make the user sign in again.
+        return None
+
+    now = int(time.time())
+    mfa_exp = session.get(STFD_MFA_EXP_SESSION_KEY)
+    if _stfd_elevation_is_live(now):
+        idle = session.get(STFD_MFA_IDLE_SESSION_KEY)
+        if not isinstance(idle, int):
+            idle = STFD_DEFAULT_MFA_IDLE_SECONDS
+        session[STFD_MFA_EXP_SESSION_KEY] = now + max(STFD_MIN_MFA_IDLE_SECONDS, idle)
+        return sorted(role_names), []
+
+    if isinstance(mfa_exp, int):
+        # The hop-up has lapsed.
+        if session.get(STFD_MFA_REQUIRED_SESSION_KEY) is True:
+            return None
+        session[STFD_MFA_EXP_SESSION_KEY] = None
+
+    gated = set(step_up_roles)
+    effective = sorted(role_name for role_name in role_names if role_name not in gated)
+    inactive = sorted(role_name for role_name in role_names if role_name in gated)
+    return effective, inactive
 
 
 def _consume_stfd_token_id(db_session, jti, keep_until_timestamp):
@@ -1837,7 +1903,8 @@ def _stfd_sign_in_failed(message):
 
 def _auth_login_via_stfd_token(token, posted_state):
     # Taken first, so a pending sign-in is spent by any attempt, successful or not.
-    expected_state = _take_stfd_pending_state()
+    pending = _take_stfd_pending_state()
+    expected_state = pending["value"] if pending is not None else None
 
     stfd_config, config_error = _validate_stfd_runtime_config()
     if config_error is not None:
@@ -1857,7 +1924,7 @@ def _auth_login_via_stfd_token(token, posted_state):
         db_session.rollback()
         return sync_error
 
-    required_claims = ["sub", "email", "app", "roles", "exp", "iat", "jti", "nonce"]
+    required_claims = ["sub", "email", "app", "roles", "exp", "iat", "jti", "nonce", "step_up_roles"]
     decode_kwargs = {}
     if stfd_config["issuer"]:
         required_claims.append("iss")
@@ -1919,7 +1986,38 @@ def _auth_login_via_stfd_token(token, posted_state):
             return _error_response("authentication_failed", "STFD token roles payload is invalid.", 401)
         token_role_unis.append(normalized_role_uni)
 
-    unique_role_unis = sorted(set(token_role_unis))
+    # Every 2FA-gated role the user holds here, granted in `roles` only while they have a fresh hop-up.
+    step_up_role_unis_raw = decoded.get("step_up_roles")
+    if not isinstance(step_up_role_unis_raw, list):
+        return _error_response("authentication_failed", "STFD token step_up_roles payload is invalid.", 401)
+    step_up_role_unis = set()
+    for raw_role_uni in step_up_role_unis_raw:
+        normalized_role_uni = _normalize_stfd_uni(raw_role_uni) if isinstance(raw_role_uni, str) else ""
+        if not normalized_role_uni:
+            return _error_response("authentication_failed", "STFD token step_up_roles payload is invalid.", 401)
+        step_up_role_unis.add(normalized_role_uni)
+
+    mfa_verified = decoded.get("2fa_verified") is True
+    raw_mfa_exp = decoded.get("mfa_exp")
+    mfa_exp = raw_mfa_exp if mfa_verified and isinstance(raw_mfa_exp, int) else None
+    raw_mfa_idle = decoded.get("mfa_idle")
+    mfa_idle = max(
+        STFD_MIN_MFA_IDLE_SECONDS,
+        raw_mfa_idle if isinstance(raw_mfa_idle, int) else STFD_DEFAULT_MFA_IDLE_SECONDS,
+    )
+    mfa_required = decoded.get("mfa_required") is True
+
+    # A step-up that did not deliver what it was for fails here instead of sending the user
+    # back to the page that asked for it (no redirect loops).
+    if pending.get("step_up"):
+        want_role = pending.get("want_role")
+        if want_role and want_role not in token_role_unis:
+            return _error_response("forbidden", "Two-factor verification did not grant the required role.", 403)
+        if not mfa_verified:
+            return _stfd_sign_in_failed("Two-factor verification was not completed.")
+
+    granted_role_unis = set(token_role_unis)
+    unique_role_unis = sorted(granted_role_unis | step_up_role_unis)
     roles = db_session.execute(select(Role).where(Role.uni.in_(unique_role_unis))).scalars().all()
     roles_by_uni = {str(role.uni): role for role in roles if role.uni}
     unknown_role_unis = sorted([role_uni for role_uni in unique_role_unis if role_uni not in roles_by_uni])
@@ -1931,8 +2029,19 @@ def _auth_login_via_stfd_token(token, posted_state):
             [{"field": "roles", "issue": f"unknown role UNI(s): {', '.join(unknown_role_unis)}"}],
         )
 
+    # The database records every role the user holds in STFD, gated ones included, so an admin
+    # who has not done a hop-up yet keeps the role; the session decides what is usable now.
     target_roles = [roles_by_uni[role_uni] for role_uni in unique_role_unis]
     target_role_names = sorted([role.name for role in target_roles])
+    step_up_role_names = sorted(roles_by_uni[role_uni].name for role_uni in step_up_role_unis)
+    active_role_names = sorted(
+        role.name
+        for role in target_roles
+        if role.uni in granted_role_unis and (mfa_exp is not None or role.uni not in step_up_role_unis)
+    )
+    inactive_step_up_role_names = sorted(set(target_role_names) - set(active_role_names))
+    if not active_role_names:
+        return _error_response("forbidden", "Two-factor verification is needed to use this application.", 403)
 
     user = db_session.execute(select(User).where(User.auth_subject == auth_subject)).scalar_one_or_none()
     was_created = False
@@ -1992,9 +2101,14 @@ def _auth_login_via_stfd_token(token, posted_state):
     session["csrf_token"] = csrf_token
     session["auth_provider"] = "stfd"
     session[SESSION_IDENTIFIER_KEY] = user_session.session_identifier
+    session[STFD_STEP_UP_ROLES_SESSION_KEY] = step_up_role_names
+    session[STFD_MFA_EXP_SESSION_KEY] = mfa_exp
+    session[STFD_MFA_IDLE_SESSION_KEY] = mfa_idle
+    session[STFD_MFA_REQUIRED_SESSION_KEY] = mfa_required
     session.permanent = True
     g.current_user = user
-    g.current_user_roles = target_role_names
+    g.current_user_roles = active_role_names
+    g.current_user_step_up_roles = inactive_step_up_role_names
     g.current_user_auth_provider = "stfd"
 
     if was_created:
@@ -2031,6 +2145,9 @@ def _auth_login_via_stfd_token(token, posted_state):
             "auth_provider": "stfd",
             "auth_subject": auth_subject,
             "roles": target_role_names,
+            "active_roles": active_role_names,
+            "two_factor_verified": mfa_verified,
+            "step_up": bool(pending.get("step_up")),
             "session_record_id": user_session.id,
         },
         actor_user_id=user.id,
@@ -2039,7 +2156,7 @@ def _auth_login_via_stfd_token(token, posted_state):
 
     return _success_response(
         {
-            "user": _serialize_user(user, target_role_names),
+            "user": _serialize_current_user(user, active_role_names),
             "csrf_token": csrf_token,
             "auth_provider": "stfd",
             "session_identifier": user_session.session_identifier,
@@ -2113,6 +2230,25 @@ def _load_current_user():
         g.current_user_auth_provider = auth_provider
         return None
 
+    role_names = _get_role_names_for_user_id(user.id)
+    inactive_step_up_role_names = []
+    if auth_provider == "stfd":
+        elevation = _apply_stfd_elevation(role_names)
+        if elevation is None:
+            _terminate_user_session_record(
+                db_session,
+                user_session,
+                reason=SESSION_TERMINATION_REASON_MFA_EXPIRED,
+                terminated_by_user_id=None,
+            )
+            db_session.commit()
+            session.clear()
+            g.current_user = None
+            g.current_user_roles = []
+            g.current_user_auth_provider = auth_provider
+            return None
+        role_names, inactive_step_up_role_names = elevation
+
     should_touch_last_activity = (
         last_activity_at is None
         or (now - last_activity_at).total_seconds() >= SESSION_ACTIVITY_TOUCH_INTERVAL_SECONDS
@@ -2136,10 +2272,9 @@ def _load_current_user():
                 },
             )
 
-    role_names = _get_role_names_for_user_id(user.id)
-
     g.current_user = user
     g.current_user_roles = role_names
+    g.current_user_step_up_roles = inactive_step_up_role_names
     g.current_user_auth_provider = auth_provider
     return user
 
@@ -2384,6 +2519,14 @@ def require_role(required_role):
         @require_auth
         def wrapper(*args, **kwargs):
             if required_role not in g.current_user_roles:
+                if required_role in getattr(g, "current_user_step_up_roles", []):
+                    # The user holds the role but STFD gates it behind a fresh 2FA hop-up.
+                    return _error_response(
+                        "step_up_required",
+                        "This needs two-factor verification. Verify with STFD and try again.",
+                        403,
+                        [{"field": "role", "issue": required_role}],
+                    )
                 return _error_response(
                     "forbidden",
                     "You do not have permission to access this resource.",
@@ -5077,6 +5220,10 @@ def stfd_start_sign_in():
 
     STFD signs the state into the token as `nonce` and returns token and state in the URL
     fragment, so the token stays out of proxy logs. Only this browser can then complete the sign-in.
+
+    `?step_up=1&want_role=<role name>` asks STFD for a fresh 2FA hop-up first (STFD enrols the
+    user in TOTP if needed). The sign-in then fails, rather than looping, if it comes back
+    without 2FA or without the wanted role.
     """
     if not _is_stfd_enabled():
         return _error_response("not_found", "STFD sign-in is not enabled.", 404)
@@ -5085,9 +5232,27 @@ def stfd_start_sign_in():
     if config_error is not None:
         return config_error
 
+    step_up = request.args.get("step_up") == "1"
+    want_role_uni = None
+    raw_want_role = str(request.args.get("want_role") or "").strip().lower()
+    if raw_want_role:
+        want_role_uni = stfd_config["role_uni_by_name"].get(raw_want_role)
+        if not step_up or not want_role_uni:
+            return _error_response(
+                "validation_error",
+                "Invalid request parameters.",
+                422,
+                [{"field": "want_role", "issue": "must be a known role name, used with step_up=1"}],
+            )
+
     state = token_urlsafe(32)
-    session[STFD_PENDING_STATE_SESSION_KEY] = {"value": state, "issued_at": int(time.time())}
-    response = redirect(_build_stfd_assert_url(stfd_config, state), code=302)
+    session[STFD_PENDING_STATE_SESSION_KEY] = {
+        "value": state,
+        "issued_at": int(time.time()),
+        "step_up": step_up,
+        "want_role": want_role_uni,
+    }
+    response = redirect(_build_stfd_assert_url(stfd_config, state, step_up=step_up), code=302)
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -5171,7 +5336,7 @@ def auth_login():
 
     return _success_response(
         {
-            "user": _serialize_user(user, role_names),
+            "user": _serialize_current_user(user, role_names),
             "csrf_token": csrf_token,
             "auth_provider": "local",
             "session_identifier": user_session.session_identifier,
@@ -5189,7 +5354,7 @@ def auth_me():
 
     return _success_response(
         {
-            "user": _serialize_user(g.current_user, g.current_user_roles),
+            "user": _serialize_current_user(g.current_user, g.current_user_roles),
             "csrf_token": csrf_token,
             "auth_provider": getattr(g, "current_user_auth_provider", "local"),
             "session_identifier": str(session.get(SESSION_IDENTIFIER_KEY) or "") or None,
@@ -5281,7 +5446,7 @@ def update_auth_me():
     csrf_token = session.get("csrf_token")
     return _success_response(
         {
-            "user": _serialize_user(g.current_user, g.current_user_roles),
+            "user": _serialize_current_user(g.current_user, g.current_user_roles),
             "csrf_token": csrf_token,
             "auth_provider": getattr(g, "current_user_auth_provider", "local"),
             "session_identifier": str(session.get(SESSION_IDENTIFIER_KEY) or "") or None,
