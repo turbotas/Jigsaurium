@@ -5,7 +5,8 @@
 //
 // - Font: Lexend (SIL Open Font License 1.1), self-hosted from app/static/fonts/lexend.
 //   Jigsaurium is not a GOV.UK service, so it does not use the GDS Transport font.
-// - Assets: GOV.UK's own images are served from the vendored copy under /static.
+// - Assets: GOV.UK's images (crown crest, GOV.UK icons) are GOV.UK branding and are not shipped.
+//   The only CSS reference left is the footer copyright logo, a component Jigsaurium does not use.
 @use "govuk-frontend/dist/govuk" with (
   $govuk-font-family: ("Lexend", arial, sans-serif),
   $govuk-include-default-font-face: false,

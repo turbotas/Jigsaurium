@@ -24,7 +24,8 @@ Use GOV.UK Design System components and interaction patterns by default.
 - Pin a `govuk-frontend` version (and the `sass` and `@fontsource/lexend` dev dependencies used to build it).
 - Keep vendor and custom code separated.
 - `scripts/vendor_govuk_assets.py` builds `app/static/vendor/govuk` from the pinned package:
-  - the JavaScript and images are copied from `node_modules/govuk-frontend/dist/govuk` (GDS Transport font files are skipped);
+  - the JavaScript is copied from `node_modules/govuk-frontend/dist/govuk`; GOV.UK's `assets` folder (GDS Transport font, crown crest and GOV.UK icons) is not shipped, because it is GOV.UK branding;
+  - GOV.UK Frontend's MIT licence stays beside the copied files as `app/static/vendor/govuk/LICENSE.txt` (the npm package has no licence file, so it comes from the `alphagov/govuk-frontend` repository at the pinned tag; refresh it when changing major version);
   - `govuk-frontend.min.css` is compiled from GOV.UK Frontend's Sass through `app/static/scss/govuk-frontend.scss`, which sets the supported options `$govuk-font-family` (Lexend), `$govuk-include-default-font-face: false` and `$govuk-assets-path`;
   - the Lexend font files are copied from `@fontsource/lexend` into `app/static/fonts/lexend`.
 - Never edit the compiled or copied files by hand; change the Sass settings file and re-run the script.
