@@ -74,6 +74,7 @@ Note: lending flows already implemented (admin checkout, loan listing) remain in
   - Bulk upload one or more images (including zip archives containing image files).
   - Store uploaded images as library assets with an initial tag (default `untagged`).
   - Optionally associate uploads to a jigsaw during import.
+  - Single-image upload to an existing jigsaw (Collection → Images) picks the jigsaw from a live-search list (title, artist, manufacturer, tags, piece count, with thumbnails), offers only the standard image tags (`untagged`, `Box`, `Box front`, `Box side`, `Box back`, `Reference`, `Completed`, `In progress`), and accepts the image by drag and drop, file chooser, or direct camera capture on mobile, with a preview before upload. The API still accepts other tag values from other clients.
   - Provide a mobile-friendly guided capture flow with slots for `Box front`, `Box side`, `Box back`, `Reference`, and `Completed` images.
   - For each guided-capture slot, provide both `Choose file from gallery` and `Capture with camera` actions.
   - Require at least one captured image per guided-capture submission.

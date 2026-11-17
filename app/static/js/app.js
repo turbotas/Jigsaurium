@@ -133,6 +133,9 @@
     diaryViewMode: DIARY_VIEW_MODE_LIST,
     diaryCalendar: createInitialDiaryCalendarState(),
     bulkUploadFiles: [],
+    jigsawImageUploadFile: null,
+    jigsawImageUploadPreviewUrl: "",
+    jigsawImageSearchQuery: "",
     bulkCreateJobId: null,
     bulkCreateJobPollTimer: null,
     imageEmbeddingBackfillJobId: null,
@@ -289,6 +292,20 @@
     jigsawImageJigsawId: document.getElementById("jigsaw-image-jigsaw-id"),
     jigsawImageTag: document.getElementById("jigsaw-image-tag"),
     jigsawImageFile: document.getElementById("jigsaw-image-file"),
+    jigsawImageCamera: document.getElementById("jigsaw-image-camera"),
+    jigsawImageBrowseButton: document.getElementById("jigsaw-image-browse-button"),
+    jigsawImageCameraButton: document.getElementById("jigsaw-image-camera-button"),
+    jigsawImageDropzone: document.getElementById("jigsaw-image-dropzone"),
+    jigsawImageFilePreview: document.getElementById("jigsaw-image-file-preview"),
+    jigsawImageFilePreviewImg: document.getElementById("jigsaw-image-file-preview-img"),
+    jigsawImageFileName: document.getElementById("jigsaw-image-file-name"),
+    jigsawImageFileRemove: document.getElementById("jigsaw-image-file-remove"),
+    jigsawImageSearch: document.getElementById("jigsaw-image-search"),
+    jigsawImagePickerWrap: document.getElementById("jigsaw-image-picker-wrap"),
+    jigsawImagePickerList: document.getElementById("jigsaw-image-picker-list"),
+    jigsawImageSelected: document.getElementById("jigsaw-image-selected"),
+    jigsawImageSelectedTitle: document.getElementById("jigsaw-image-selected-title"),
+    jigsawImageChange: document.getElementById("jigsaw-image-change"),
     jigsawImagesTableBody: document.getElementById("jigsaw-images-table-body"),
     imageLibraryUploadForm: document.getElementById("image-library-upload-form"),
     imageLibraryJigsawId: document.getElementById("image-library-jigsaw-id"),
@@ -2261,29 +2278,231 @@
     }
   }
 
+  const JIGSAW_IMAGE_PICKER_MAX_RESULTS = 50;
+
   function populateJigsawImageOptions() {
     if (!elements.jigsawImageJigsawId) {
       return;
     }
 
-    const currentJigsawId = elements.jigsawImageJigsawId.value;
-    elements.jigsawImageJigsawId.innerHTML = "";
+    const currentJigsawId = String(elements.jigsawImageJigsawId.value || "");
+    const jigsaws = Array.isArray(state.jigsaws) ? state.jigsaws : [];
+    if (currentJigsawId && !jigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
+      elements.jigsawImageJigsawId.value = "";
+    }
 
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "Choose jigsaw";
-    elements.jigsawImageJigsawId.appendChild(placeholder);
+    renderJigsawImagePicker();
+  }
 
-    const sortedJigsaws = [...state.jigsaws].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
-    sortedJigsaws.forEach((jigsaw) => {
-      const option = document.createElement("option");
-      option.value = String(jigsaw.id);
-      option.textContent = `${jigsaw.title} (id ${jigsaw.id})`;
-      elements.jigsawImageJigsawId.appendChild(option);
+  function formatJigsawPickerLabel(jigsaw) {
+    const title = String(jigsaw?.title || `Jigsaw #${jigsaw?.id}`);
+    const pieces = jigsaw?.piece_count ? `, ${jigsaw.piece_count} pieces` : "";
+    return `${title} (id ${jigsaw?.id}${pieces})`;
+  }
+
+  function renderJigsawImagePicker() {
+    if (!elements.jigsawImagePickerList || !elements.jigsawImageJigsawId) {
+      return;
+    }
+
+    const selectedJigsawId = Number(elements.jigsawImageJigsawId.value || "0");
+    const jigsaws = Array.isArray(state.jigsaws) ? state.jigsaws : [];
+    const selectedJigsaw = selectedJigsawId
+      ? jigsaws.find((jigsaw) => Number(jigsaw.id) === selectedJigsawId)
+      : null;
+
+    if (elements.jigsawImageSelected) {
+      elements.jigsawImageSelected.hidden = !selectedJigsaw;
+    }
+    if (elements.jigsawImageSelectedTitle) {
+      elements.jigsawImageSelectedTitle.textContent = selectedJigsaw ? formatJigsawPickerLabel(selectedJigsaw) : "";
+    }
+    if (elements.jigsawImagePickerWrap) {
+      elements.jigsawImagePickerWrap.hidden = Boolean(selectedJigsaw);
+    }
+
+    elements.jigsawImagePickerList.replaceChildren();
+
+    const searchQuery = String(state.jigsawImageSearchQuery || "").trim().toLowerCase();
+    const preferredImagesByJigsawId = buildPreferredJigsawImageByJigsawId(state.jigsawThumbnailImages);
+    const filteredJigsaws = jigsaws
+      .filter((jigsaw) => jigsawMatchesSearchQuery(jigsaw, searchQuery))
+      .sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
+
+    if (filteredJigsaws.length === 0) {
+      const emptyMessage = document.createElement("p");
+      emptyMessage.className = "govuk-body-s app-diary-jigsaw-picker__empty";
+      emptyMessage.textContent = jigsaws.length === 0 ? "No jigsaws in the collection yet." : "No matching jigsaws found.";
+      elements.jigsawImagePickerList.appendChild(emptyMessage);
+      return;
+    }
+
+    filteredJigsaws.slice(0, JIGSAW_IMAGE_PICKER_MAX_RESULTS).forEach((jigsaw) => {
+      const jigsawId = Number(jigsaw.id || 0);
+      const itemButton = document.createElement("button");
+      itemButton.type = "button";
+      itemButton.className = "app-diary-jigsaw-picker__item";
+      itemButton.dataset.jigsawImagePick = String(jigsawId);
+      itemButton.setAttribute("aria-pressed", selectedJigsawId === jigsawId ? "true" : "false");
+
+      const preferredImage = preferredImagesByJigsawId.get(jigsawId);
+      const thumbWrap = document.createElement("div");
+      thumbWrap.appendChild(
+        buildThumbnailWidget(preferredImage?.thumbnail_url || preferredImage?.content_url, {
+          altText: `Thumbnail for ${jigsaw.title || "jigsaw"}`,
+          previewUrl: preferredImage?.preview_url || preferredImage?.content_url,
+          openUrl: "",
+          fallbackText: "No image",
+          widthPx: 100,
+        }),
+      );
+
+      const details = document.createElement("div");
+      const title = document.createElement("p");
+      title.className = "app-diary-jigsaw-picker__title";
+      title.textContent = String(jigsaw.title || `Jigsaw #${jigsawId}`);
+      details.appendChild(title);
+
+      const meta = document.createElement("p");
+      meta.className = "app-diary-jigsaw-picker__meta";
+      meta.textContent = [jigsaw.manufacturer, jigsaw.piece_count ? `${jigsaw.piece_count} pieces` : null, `id ${jigsawId}`]
+        .filter(Boolean)
+        .join(" · ");
+      details.appendChild(meta);
+
+      itemButton.appendChild(thumbWrap);
+      itemButton.appendChild(details);
+      elements.jigsawImagePickerList.appendChild(itemButton);
     });
 
-    if (currentJigsawId && sortedJigsaws.some((jigsaw) => String(jigsaw.id) === currentJigsawId)) {
-      elements.jigsawImageJigsawId.value = currentJigsawId;
+    if (filteredJigsaws.length > JIGSAW_IMAGE_PICKER_MAX_RESULTS) {
+      const moreMessage = document.createElement("p");
+      moreMessage.className = "govuk-body-s app-diary-jigsaw-picker__empty";
+      moreMessage.textContent = `Showing ${JIGSAW_IMAGE_PICKER_MAX_RESULTS} of ${filteredJigsaws.length} matches. Keep typing to narrow the list.`;
+      elements.jigsawImagePickerList.appendChild(moreMessage);
+    }
+  }
+
+  function selectJigsawForImageUpload(jigsawId) {
+    if (!elements.jigsawImageJigsawId) {
+      return;
+    }
+    const nextValue = jigsawId ? String(jigsawId) : "";
+    const changed = elements.jigsawImageJigsawId.value !== nextValue;
+    elements.jigsawImageJigsawId.value = nextValue;
+    renderJigsawImagePicker();
+    if (changed) {
+      handleJigsawImageSelectionChange();
+    }
+  }
+
+  function handleJigsawImageSearchInput(event) {
+    state.jigsawImageSearchQuery = String(event.currentTarget?.value || "");
+    renderJigsawImagePicker();
+  }
+
+  function handleJigsawImageSearchKeyDown(event) {
+    const firstMatch = elements.jigsawImagePickerList?.querySelector("[data-jigsaw-image-pick]");
+    if (event.key === "Enter") {
+      // Enter picks the first match rather than submitting the upload form.
+      event.preventDefault();
+      if (firstMatch instanceof HTMLButtonElement) {
+        selectJigsawForImageUpload(Number(firstMatch.dataset.jigsawImagePick || "0"));
+        elements.jigsawImageTag?.focus();
+      }
+    } else if (event.key === "ArrowDown" && firstMatch instanceof HTMLButtonElement) {
+      event.preventDefault();
+      firstMatch.focus();
+    }
+  }
+
+  function handleJigsawImagePickerClick(event) {
+    if (event.target?.closest("a")) {
+      // The thumbnail widget renders a link; inside the picker the whole card selects instead.
+      event.preventDefault();
+    }
+    const button = event.target?.closest("[data-jigsaw-image-pick]");
+    if (!(button instanceof HTMLButtonElement)) {
+      return;
+    }
+    selectJigsawForImageUpload(Number(button.dataset.jigsawImagePick || "0"));
+    elements.jigsawImageTag?.focus();
+  }
+
+  function handleJigsawImageChangeClick() {
+    selectJigsawForImageUpload(0);
+    elements.jigsawImageSearch?.focus();
+  }
+
+  function setJigsawImageUploadFile(file) {
+    if (state.jigsawImageUploadPreviewUrl) {
+      URL.revokeObjectURL(state.jigsawImageUploadPreviewUrl);
+      state.jigsawImageUploadPreviewUrl = "";
+    }
+    state.jigsawImageUploadFile = file || null;
+
+    if (elements.jigsawImageFile) {
+      elements.jigsawImageFile.value = "";
+    }
+    if (elements.jigsawImageCamera) {
+      elements.jigsawImageCamera.value = "";
+    }
+    if (elements.jigsawImageFilePreview) {
+      elements.jigsawImageFilePreview.hidden = !file;
+    }
+    if (elements.jigsawImageFileName) {
+      elements.jigsawImageFileName.textContent = file ? String(file.name || "Selected image") : "";
+    }
+    if (elements.jigsawImageFilePreviewImg) {
+      if (file && String(file.type || "").startsWith("image/")) {
+        state.jigsawImageUploadPreviewUrl = URL.createObjectURL(file);
+        elements.jigsawImageFilePreviewImg.src = state.jigsawImageUploadPreviewUrl;
+        elements.jigsawImageFilePreviewImg.hidden = false;
+      } else {
+        elements.jigsawImageFilePreviewImg.removeAttribute("src");
+        elements.jigsawImageFilePreviewImg.hidden = true;
+      }
+    }
+  }
+
+  function handleJigsawImageFileInputChange(event) {
+    const file = event.currentTarget?.files?.[0];
+    if (file) {
+      setJigsawImageUploadFile(file);
+    }
+  }
+
+  function handleJigsawImageDropzoneDragOver(event) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    elements.jigsawImageDropzone?.classList.add("is-dragover");
+  }
+
+  function handleJigsawImageDropzoneDragLeave(event) {
+    event.preventDefault();
+    elements.jigsawImageDropzone?.classList.remove("is-dragover");
+  }
+
+  function handleJigsawImageDropzoneDrop(event) {
+    event.preventDefault();
+    elements.jigsawImageDropzone?.classList.remove("is-dragover");
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (files.length === 0) {
+      return;
+    }
+    if (files.length > 1) {
+      showFeedback("Only the first dropped file was kept. Use the image library bulk upload for several files.");
+    }
+    setJigsawImageUploadFile(files[0]);
+  }
+
+  function handleJigsawImageDropzoneKeyDown(event) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      elements.jigsawImageFile?.click();
     }
   }
 
@@ -7411,6 +7630,7 @@
       }
       renderJigsaws(state.jigsaws);
       renderDiaryJigsawPicker();
+      renderJigsawImagePicker();
     } catch (_error) {
       state.jigsawThumbnailImages = [];
       if (elements.imageBrowserNameAssignModal && !elements.imageBrowserNameAssignModal.hidden) {
@@ -7418,6 +7638,7 @@
       }
       renderJigsaws(state.jigsaws);
       renderDiaryJigsawPicker();
+      renderJigsawImagePicker();
     }
   }
 
@@ -8973,8 +9194,15 @@
 
     if (!jigsawId) {
       showFeedback("Select a jigsaw before uploading an image.", true);
+      elements.jigsawImageSearch?.focus();
       return;
     }
+
+    if (!state.jigsawImageUploadFile) {
+      showFeedback("Choose a file, drop one in, or take a photo before uploading.", true);
+      return;
+    }
+    formData.set("image", state.jigsawImageUploadFile, state.jigsawImageUploadFile.name || "image");
 
     try {
       await apiRequest(`/api/v1/jigsaws/${jigsawId}/images`, {
@@ -8982,12 +9210,7 @@
         body: formData,
       });
       showFeedback("Jigsaw image uploaded.");
-      if (elements.jigsawImageTag) {
-        elements.jigsawImageTag.value = "";
-      }
-      if (elements.jigsawImageFile) {
-        elements.jigsawImageFile.value = "";
-      }
+      setJigsawImageUploadFile(null);
       await Promise.all([loadJigsawImagesForSelected(), loadAuditEvents()]);
     } catch (error) {
       showFeedback(error.message, true);
@@ -10832,8 +11055,44 @@
       elements.jigsawImageForm.addEventListener("submit", handleCreateJigsawImage);
     }
 
-    if (elements.jigsawImageJigsawId) {
-      elements.jigsawImageJigsawId.addEventListener("change", handleJigsawImageSelectionChange);
+    if (elements.jigsawImageSearch) {
+      elements.jigsawImageSearch.addEventListener("input", handleJigsawImageSearchInput);
+      elements.jigsawImageSearch.addEventListener("keydown", handleJigsawImageSearchKeyDown);
+    }
+
+    if (elements.jigsawImagePickerList) {
+      elements.jigsawImagePickerList.addEventListener("click", handleJigsawImagePickerClick);
+    }
+
+    if (elements.jigsawImageChange) {
+      elements.jigsawImageChange.addEventListener("click", handleJigsawImageChangeClick);
+    }
+
+    if (elements.jigsawImageBrowseButton) {
+      elements.jigsawImageBrowseButton.addEventListener("click", () => elements.jigsawImageFile?.click());
+    }
+
+    if (elements.jigsawImageCameraButton) {
+      elements.jigsawImageCameraButton.addEventListener("click", () => elements.jigsawImageCamera?.click());
+    }
+
+    if (elements.jigsawImageFile) {
+      elements.jigsawImageFile.addEventListener("change", handleJigsawImageFileInputChange);
+    }
+
+    if (elements.jigsawImageCamera) {
+      elements.jigsawImageCamera.addEventListener("change", handleJigsawImageFileInputChange);
+    }
+
+    if (elements.jigsawImageFileRemove) {
+      elements.jigsawImageFileRemove.addEventListener("click", () => setJigsawImageUploadFile(null));
+    }
+
+    if (elements.jigsawImageDropzone) {
+      elements.jigsawImageDropzone.addEventListener("dragover", handleJigsawImageDropzoneDragOver);
+      elements.jigsawImageDropzone.addEventListener("dragleave", handleJigsawImageDropzoneDragLeave);
+      elements.jigsawImageDropzone.addEventListener("drop", handleJigsawImageDropzoneDrop);
+      elements.jigsawImageDropzone.addEventListener("keydown", handleJigsawImageDropzoneKeyDown);
     }
 
     if (elements.imageLibraryUploadForm) {

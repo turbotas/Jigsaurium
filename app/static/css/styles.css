@@ -840,6 +840,22 @@
   background: #eef4fa;
 }
 
+.app-upload-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.app-upload-preview__image {
+  max-width: 120px;
+  max-height: 120px;
+  border: 1px solid #b1b4b6;
+  border-radius: 4px;
+  object-fit: contain;
+  background: #fff;
+}
+
 .app-file-list {
   max-height: 180px;
   overflow-y: auto;
