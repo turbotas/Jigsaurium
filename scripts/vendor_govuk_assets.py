@@ -12,9 +12,12 @@ FILES_TO_COPY = [
     "govuk-frontend.min.js",
     "govuk-frontend.min.js.map",
 ]
-DIRECTORIES_TO_COPY = ["assets"]
-# GDS Transport is for GOV.UK services only; Jigsaurium uses Lexend instead (see the Sass entry point).
-ASSET_PATTERNS_TO_SKIP = ["fonts"]
+# GOV.UK's `assets` folder is not shipped: its GDS Transport font and its images (crown crest,
+# GOV.UK icons) are GOV.UK branding, and Jigsaurium uses Lexend and its own icons instead.
+STALE_DIRECTORIES = ["assets"]
+# GOV.UK Frontend's MIT licence must travel with the copied code. The npm package has no licence
+# file, so this is the text from alphagov/govuk-frontend at the pinned tag; it is kept as it is.
+LICENCE_FILE_NAME = "LICENSE.txt"
 
 # The CSS is compiled from GOV.UK Frontend's Sass with Jigsaurium's settings, not copied prebuilt.
 SASS_ENTRY_POINT = Path("app/static/scss/govuk-frontend.scss")
@@ -94,11 +97,14 @@ def vendor_assets(repo_root: Path, version: str) -> None:
     for file_name in FILES_TO_COPY:
         shutil.copy2(source_root / file_name, destination_root / file_name)
 
-    for directory_name in DIRECTORIES_TO_COPY:
-        source_dir = source_root / directory_name
-        destination_dir = destination_root / directory_name
-        shutil.rmtree(destination_dir, ignore_errors=True)
-        shutil.copytree(source_dir, destination_dir, ignore=shutil.ignore_patterns(*ASSET_PATTERNS_TO_SKIP))
+    for directory_name in STALE_DIRECTORIES:
+        shutil.rmtree(destination_root / directory_name, ignore_errors=True)
+
+    if not (destination_root / LICENCE_FILE_NAME).is_file():
+        raise SystemExit(
+            f"Missing {destination_root / LICENCE_FILE_NAME}. Copy LICENSE.txt from "
+            f"https://github.com/alphagov/govuk-frontend at tag v{version} before vendoring."
+        )
 
     for file_name in STALE_FILES:
         (destination_root / file_name).unlink(missing_ok=True)

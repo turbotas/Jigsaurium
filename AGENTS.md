@@ -45,6 +45,7 @@ Before making changes, read:
 ## Security and Ops Guardrails
 
 - Do not hardcode secrets.
+- Keep `THIRD_PARTY_NOTICES.md` (the licence index) current: adding or replacing a dependency, font, image or model means listing it there and committing any licence text it requires beside the shipped files.
 - Use environment variables for runtime configuration, and add every new setting to the templates in `environments/` (`dev.env.example`, `test.env.example`, `prod.env.example`) and to `Documentation/operations-and-security.md`.
 - Keep structured logging fields consistent with `Documentation/operations-and-security.md`.
 - Assume reverse-proxy deployment in all environments, dev included: by default (`REQUIRE_TRUSTED_PROXY=1`) the app refuses connections that do not come from a trusted proxy, and it serves secure cookies and HSTS unless `ALLOW_INSECURE_HTTP=1` (refused in test and prod).

@@ -20,15 +20,18 @@ def test_compiled_govuk_css_uses_lexend_and_no_gds_transport():
 
     assert "GDS Transport" not in css
     assert '"Lexend",arial,sans-serif' in css
-    # Every asset GOV.UK's CSS refers to is served from the vendored copy, not a missing /assets/ path.
-    for url in re.findall(r"url\(\"?([^\")]+)\"?\)", css):
-        assert url.startswith("/static/vendor/govuk/assets/"), url
-        assert (STATIC_ROOT / url.removeprefix("/static/")).is_file(), url
+    # GOV.UK's images are not shipped. The only one its CSS still names is the crown crest of the
+    # footer copyright logo, a component no Jigsaurium template uses.
+    assert set(re.findall(r"url\(\"?([^\")]+)\"?\)", css)) == {"/static/vendor/govuk/assets/images/govuk-crest.svg"}
+    templates = Path(__file__).resolve().parents[1] / "app" / "templates"
+    for template in templates.glob("*.html"):
+        assert "govuk-footer" not in template.read_text(encoding="utf-8"), template.name
 
 
 @pytest.mark.functional
-def test_gds_transport_font_files_are_not_vendored():
-    assert not (STATIC_ROOT / "vendor" / "govuk" / "assets" / "fonts").exists()
+def test_govuk_branding_assets_are_not_vendored():
+    # GDS Transport and the crown crest / GOV.UK icons are GOV.UK branding (issues #85 and #89).
+    assert not (STATIC_ROOT / "vendor" / "govuk" / "assets").exists()
 
 
 @pytest.mark.functional
