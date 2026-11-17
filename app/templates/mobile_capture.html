@@ -14,8 +14,8 @@
         <button id="mobile-capture-logout-button" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Sign out</button>
       </div>
     </div>
-    <p class="govuk-body">Add up to five photos in one flow: Box front, Box side, Box back, Reference, and Completed.</p>
-    <p class="govuk-body">If only Completed is captured, it is saved as an unassigned completed image. If any box or reference photo is captured, a new jigsaw is created and AI is used to fill in fields from box images.</p>
+    <p class="govuk-body">Add up to six photos in one flow: Box front, Box side, Box back, Progress, Completed and Reference.</p>
+    <p class="govuk-body">If only Progress and/or Completed photos are captured, they are saved as unassigned images. If any box or reference photo is captured, a new jigsaw is created with all the photos, and AI is used to fill in fields from box images.</p>
 
     <div id="mobile-intake-status" class="govuk-notification-banner govuk-notification-banner--success" aria-live="polite" hidden>
       <div class="govuk-notification-banner__header">
@@ -142,6 +142,34 @@
             <input id="mobile-intake-box-back-gallery" class="app-mobile-intake-file-input" type="file" accept="image/*" data-slot-file="box_back" data-slot-source="gallery">
             <input id="mobile-intake-box-back-camera" class="app-mobile-intake-file-input" type="file" accept="image/*" capture="environment" data-slot-file="box_back" data-slot-source="camera">
             <div class="app-mobile-intake-preview" data-slot-preview="box_back">No photo selected.</div>
+          </div>
+
+          <div class="app-mobile-intake-slot" data-slot-key="in_progress">
+            <h3 class="govuk-heading-s govuk-!-margin-bottom-1">Progress</h3>
+            <p class="govuk-hint govuk-!-margin-bottom-1">A photo of the puzzle part-done.</p>
+            <div class="app-mobile-intake-actions">
+              <button
+                type="button"
+                class="govuk-button govuk-button--secondary govuk-!-margin-bottom-1"
+                data-module="govuk-button"
+                data-slot-key="in_progress"
+                data-slot-action="gallery"
+              >
+                Choose file from gallery
+              </button>
+              <button
+                type="button"
+                class="govuk-button govuk-button--secondary govuk-!-margin-bottom-1"
+                data-module="govuk-button"
+                data-slot-key="in_progress"
+                data-slot-action="camera"
+              >
+                Capture with camera
+              </button>
+            </div>
+            <input id="mobile-intake-in-progress-gallery" class="app-mobile-intake-file-input" type="file" accept="image/*" data-slot-file="in_progress" data-slot-source="gallery">
+            <input id="mobile-intake-in-progress-camera" class="app-mobile-intake-file-input" type="file" accept="image/*" capture="environment" data-slot-file="in_progress" data-slot-source="camera">
+            <div class="app-mobile-intake-preview" data-slot-preview="in_progress">No photo selected.</div>
           </div>
 
           <div class="app-mobile-intake-slot" data-slot-key="completed">
