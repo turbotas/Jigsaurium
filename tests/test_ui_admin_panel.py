@@ -290,8 +290,32 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#collection-tab-images")
         page.wait_for_selector("#collection-images-panel:not([hidden])")
 
-        page.select_option("#jigsaw-image-jigsaw-id", jigsaw_option_value)
-        page.fill("#jigsaw-image-tag", "completed puzzle")
+        # The jigsaw is chosen from a live-search picker rather than a dropdown.
+        page.click("#jigsaw-image-form button[type='submit']")
+        page.wait_for_selector("text=Select a jigsaw before uploading an image.")
+        page.fill("#jigsaw-image-search", "definitely-not-present")
+        page.wait_for_selector("#jigsaw-image-picker-list >> text=No matching jigsaws found.")
+        page.fill("#jigsaw-image-search", "ui smoke")
+        page.click(f"#jigsaw-image-picker-list [data-jigsaw-image-pick='{jigsaw_option_value}']")
+        page.wait_for_selector("#jigsaw-image-selected:not([hidden])")
+        assert page.locator("#jigsaw-image-picker-wrap").is_hidden()
+        assert page.input_value("#jigsaw-image-jigsaw-id") == jigsaw_option_value
+
+        # "Change" reopens the picker; choosing again restores the selection.
+        page.click("#jigsaw-image-change")
+        page.wait_for_selector("#jigsaw-image-picker-wrap:not([hidden])")
+        assert page.input_value("#jigsaw-image-jigsaw-id") == ""
+        page.click(f"#jigsaw-image-picker-list [data-jigsaw-image-pick='{jigsaw_option_value}']")
+        page.wait_for_selector("#jigsaw-image-selected:not([hidden])")
+
+        # Tags are a constrained list of the standard image tags.
+        tag_options = page.locator("#jigsaw-image-tag option").all_inner_texts()
+        assert tag_options == ["untagged", "Box", "Box front", "Box side", "Box back", "Reference", "Completed", "In progress"]
+
+        page.click("#jigsaw-image-form button[type='submit']")
+        page.wait_for_selector("text=Choose a file, drop one in, or take a photo before uploading.")
+
+        page.select_option("#jigsaw-image-tag", "Completed")
         page.set_input_files(
             "#jigsaw-image-file",
             {
@@ -303,7 +327,7 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
         page.click("#jigsaw-image-form button[type='submit']")
         page.wait_for_selector("text=Invalid request payload. image: must be a supported raster image type")
 
-        page.fill("#jigsaw-image-tag", "")
+        page.select_option("#jigsaw-image-tag", "untagged")
         page.set_input_files(
             "#jigsaw-image-file",
             {
@@ -312,9 +336,26 @@ def test_admin_ui_login_and_create_jigsaw(ui_server):
                 "buffer": png_bytes(b"\x89PNG\r\n\x1a\n") + (b"x" * 120_000),
             },
         )
+        page.wait_for_selector("#jigsaw-image-file-preview:not([hidden])")
+        assert page.inner_text("#jigsaw-image-file-name") == "completed.png"
         page.click("#jigsaw-image-form button[type='submit']")
         page.wait_for_selector("text=Jigsaw image uploaded.")
         page.wait_for_selector("#jigsaw-images-table-body tr")
+        assert page.locator("#jigsaw-image-file-preview").is_hidden()
+
+        # Dropping a file onto the dropzone selects it for upload too.
+        page.evaluate(
+            """() => {
+                const transfer = new DataTransfer();
+                transfer.items.add(new File([new Uint8Array([1, 2, 3])], "dropped.png", { type: "image/png" }));
+                const zone = document.querySelector("#jigsaw-image-dropzone");
+                zone.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true, cancelable: true }));
+            }"""
+        )
+        page.wait_for_selector("#jigsaw-image-file-preview:not([hidden])")
+        assert page.inner_text("#jigsaw-image-file-name") == "dropped.png"
+        page.click("#jigsaw-image-file-remove")
+        assert page.locator("#jigsaw-image-file-preview").is_hidden()
         assert page.locator("#jigsaw-images-table-body tr", has_text="untagged").count() >= 1
         assert page.locator("#jigsaw-images-table-body tr [data-image-edit]").count() >= 1
         assert page.locator("#jigsaw-images-table-body tr a", has_text="Open original").count() >= 1

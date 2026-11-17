@@ -465,28 +465,59 @@
       <h3 id="jigsaw-images-heading" class="govuk-heading-m">Jigsaw images</h3>
       <p class="govuk-body">Store tagged images in the database (for example Completed, Reference, Box front, Box side).</p>
       <form id="jigsaw-image-form" class="govuk-!-margin-bottom-4">
-        <div class="govuk-grid-row">
-          <div class="govuk-grid-column-one-third">
-            <div class="govuk-form-group">
-              <label class="govuk-label" for="jigsaw-image-jigsaw-id">Jigsaw</label>
-              <select id="jigsaw-image-jigsaw-id" name="jigsaw_id" class="govuk-select" required>
-                <option value="">Choose jigsaw</option>
-              </select>
-            </div>
+        <input id="jigsaw-image-jigsaw-id" name="jigsaw_id" type="hidden" value="">
+
+        <div id="jigsaw-image-selected" class="govuk-inset-text" hidden>
+          <p class="govuk-body govuk-!-margin-bottom-0">
+            Jigsaw: <strong id="jigsaw-image-selected-title"></strong>
+            <button id="jigsaw-image-change" type="button" class="app-inline-link-button govuk-!-margin-left-2">Change<span class="govuk-visually-hidden"> jigsaw</span></button>
+          </p>
+        </div>
+
+        <div id="jigsaw-image-picker-wrap">
+          <div class="govuk-form-group govuk-!-margin-bottom-2">
+            <label class="govuk-label" for="jigsaw-image-search">Find jigsaw</label>
+            <div id="jigsaw-image-search-hint" class="govuk-hint">Type to filter by title, artist, manufacturer, tags or piece count, then choose a jigsaw.</div>
+            <input id="jigsaw-image-search" class="govuk-input" type="search" autocomplete="off" spellcheck="false" aria-describedby="jigsaw-image-search-hint" aria-controls="jigsaw-image-picker-list">
           </div>
-          <div class="govuk-grid-column-one-third">
-            <div class="govuk-form-group">
-              <label class="govuk-label" for="jigsaw-image-tag">Image tag</label>
-              <input id="jigsaw-image-tag" name="tag" class="govuk-input" type="text" maxlength="64" placeholder="completed puzzle">
+          <div id="jigsaw-image-picker-list" class="app-diary-jigsaw-picker govuk-!-margin-bottom-4" aria-live="polite"></div>
+        </div>
+
+        <div class="govuk-form-group">
+          <label class="govuk-label" for="jigsaw-image-tag">Image tag</label>
+          <select id="jigsaw-image-tag" name="tag" class="govuk-select">
+            <option value="untagged" selected>untagged</option>
+            <option value="Box">Box</option>
+            <option value="Box front">Box front</option>
+            <option value="Box side">Box side</option>
+            <option value="Box back">Box back</option>
+            <option value="Reference">Reference</option>
+            <option value="Completed">Completed</option>
+            <option value="In progress">In progress</option>
+          </select>
+        </div>
+
+        <div class="govuk-form-group">
+          <span class="govuk-label">Image file</span>
+          <div id="jigsaw-image-dropzone" class="app-dropzone" role="button" tabindex="0" aria-describedby="jigsaw-image-dropzone-hint">
+            <p class="govuk-body govuk-!-margin-bottom-2"><strong>Drag and drop an image here</strong></p>
+            <p id="jigsaw-image-dropzone-hint" class="govuk-hint govuk-!-margin-bottom-2">Or choose a file, or take a photo on your phone.</p>
+            <div class="govuk-button-group govuk-!-margin-bottom-0">
+              <button id="jigsaw-image-browse-button" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Choose file</button>
+              <button id="jigsaw-image-camera-button" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Take photo</button>
             </div>
+            <input id="jigsaw-image-file" class="govuk-file-upload" type="file" accept="image/*" hidden>
+            <input id="jigsaw-image-camera" class="govuk-file-upload" type="file" accept="image/*" capture="environment" hidden>
           </div>
-          <div class="govuk-grid-column-one-third">
-            <div class="govuk-form-group">
-              <label class="govuk-label" for="jigsaw-image-file">Image file</label>
-              <input id="jigsaw-image-file" name="image" class="govuk-file-upload" type="file" accept="image/*" required>
-            </div>
+          <div id="jigsaw-image-file-preview" class="app-upload-preview govuk-!-margin-top-3" hidden>
+            <img id="jigsaw-image-file-preview-img" class="app-upload-preview__image" alt="Preview of the selected image">
+            <p class="govuk-body govuk-!-margin-bottom-0">
+              <span id="jigsaw-image-file-name"></span>
+              <button id="jigsaw-image-file-remove" type="button" class="app-inline-link-button govuk-!-margin-left-2">Remove<span class="govuk-visually-hidden"> selected image</span></button>
+            </p>
           </div>
         </div>
+
         <button type="submit" class="govuk-button" data-module="govuk-button">Upload image</button>
       </form>
 
