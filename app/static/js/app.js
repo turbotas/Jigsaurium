@@ -473,6 +473,10 @@
     if (!elements.feedback || !elements.feedbackText) {
       return;
     }
+    if (stfdStepUpRedirecting) {
+      // The page is leaving for STFD: keep the one "Redirecting" status instead of flickering.
+      return;
+    }
 
     elements.feedback.hidden = false;
     elements.feedback.classList.toggle("is-error", isError);
@@ -481,6 +485,9 @@
 
   function clearFeedback() {
     if (!elements.feedback || !elements.feedbackText) {
+      return;
+    }
+    if (stfdStepUpRedirecting) {
       return;
     }
 
@@ -665,8 +672,9 @@
           syncHeaderAuthControls();
         }
         // Reads can resume after the hop-up; for changes, let the user choose so nothing is lost.
-        if (method === "GET" && beginStfdStepUp(role)) {
-          throw new Error("Two-factor verification is needed. Redirecting to STFD...");
+        // Never straight after a hop-up came back, so a hop-up that did not help cannot loop.
+        if (method === "GET" && !stfdReturnedFromStepUp && beginStfdStepUp(role)) {
+          throw new Error(STFD_STEP_UP_REDIRECT_MESSAGE);
         }
         const stepUpError = new Error("This needs two-factor verification. Select Verify with 2FA, then try again.");
         stepUpError.status = response.status;
@@ -684,12 +692,22 @@
 
   // STFD 2FA hop-up: roles the signed-in user holds but may use only after a fresh hop-up.
   const STFD_RETURN_HASH_STORAGE_KEY = "jigsaurium.stfdReturnHash";
+  const STFD_STEP_UP_STARTED_STORAGE_KEY = "jigsaurium.stfdStepUpStarted";
+  const STFD_STEP_UP_REDIRECT_MESSAGE = "Two-factor verification is needed. Redirecting to STFD...";
+  // Set once a hop-up redirect has started, so parallel reads that also need it do not start
+  // more (each would overwrite the pending sign-in state) or flash their own messages.
+  let stfdStepUpRedirecting = false;
+  // Set when this page load is the return from a hop-up, so it never sends the user straight back.
+  let stfdReturnedFromStepUp = false;
 
   function getStfdStepUpRoles() {
     return Array.isArray(state.user?.step_up_roles) ? state.user.step_up_roles.filter((role) => typeof role === "string") : [];
   }
 
   function beginStfdStepUp(role) {
+    if (stfdStepUpRedirecting) {
+      return true;
+    }
     if (!state.stfdAuthEnabled || !state.stfdLoginUrl) {
       return false;
     }
@@ -700,12 +718,25 @@
     }
     try {
       window.sessionStorage.setItem(STFD_RETURN_HASH_STORAGE_KEY, window.location.hash || "");
+      window.sessionStorage.setItem(STFD_STEP_UP_STARTED_STORAGE_KEY, "1");
     } catch (_error) {
       // Storage can be unavailable; the user just lands on the default view afterwards.
     }
+    showFeedback(STFD_STEP_UP_REDIRECT_MESSAGE);
+    stfdStepUpRedirecting = true;
     const separator = state.stfdLoginUrl.includes("?") ? "&" : "?";
     window.location.assign(`${state.stfdLoginUrl}${separator}${params.toString()}`);
     return true;
+  }
+
+  function takeStfdStepUpStarted() {
+    try {
+      const value = window.sessionStorage.getItem(STFD_STEP_UP_STARTED_STORAGE_KEY);
+      window.sessionStorage.removeItem(STFD_STEP_UP_STARTED_STORAGE_KEY);
+      return value === "1";
+    } catch (_error) {
+      return false;
+    }
   }
 
   function takeStfdReturnHash() {
@@ -7510,9 +7541,12 @@
   async function consumeStfdTokenFromUrl() {
     const url = new URL(window.location.href);
     const { token, state: stfdState } = extractStfdTokenFromUrl(url);
+    // Read on every load so a hop-up abandoned at STFD does not mark a later sign-in.
+    const stepUpStarted = takeStfdStepUpStarted();
     if (!token) {
       return false;
     }
+    stfdReturnedFromStepUp = stepUpStarted;
 
     // Clear the token from the address bar and history before anything else.
     removeStfdTokenFromUrl(url);
@@ -11670,6 +11704,12 @@
     renderBulkUploadFiles();
     syncBulkCreateFromUploadVisibility();
     const isAuthenticated = consumedToken ? true : await refreshSession();
+
+    // A fresh STFD sign-in that holds back 2FA-gated roles (for example administrator) goes
+    // straight to the hop-up, instead of loading data that would fail and redirect anyway.
+    if (consumedToken && !stfdReturnedFromStepUp && getStfdStepUpRoles().length > 0 && beginStfdStepUp("")) {
+      return;
+    }
 
     if (isStandaloneImageEditorMode()) {
       if (isAuthenticated) {
