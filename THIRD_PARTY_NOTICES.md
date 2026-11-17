@@ -28,7 +28,13 @@ This project includes third-party software under their respective licenses.
 
 ### Node / frontend tooling
 
-- govuk-frontend (vendored assets under `app/static/vendor/govuk`) — MIT
+- govuk-frontend (vendored assets under `app/static/vendor/govuk`; CSS compiled from its Sass) — MIT
+- sass (build-time compiler for the GOV.UK Frontend CSS; not shipped) — MIT
+- @fontsource/lexend (packaging of the Lexend font files) — OFL-1.1
+
+## Fonts
+
+- Lexend — SIL Open Font License 1.1. Copyright 2018 The Lexend Project Authors (https://github.com/googlefonts/lexend), with Reserved Font Name "RevReading Lexend". Served from `app/static/fonts/lexend`; the licence text ships beside the font files as [`app/static/fonts/lexend/OFL.txt`](app/static/fonts/lexend/OFL.txt).
 
 ## Compatibility review summary
 

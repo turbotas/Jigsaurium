@@ -395,3 +395,11 @@
 - Why: role changes stay a matter of STFD membership, not of whether the user did a hop-up today, and admin user lists and audit events keep showing who holds which role.
 - Decision: a hop-up that comes back without 2FA or without the wanted role fails instead of redirecting again, as in the kit, so it cannot loop. A gated role that arrives without `mfa_exp` is not counted.
 - Consequences: STFD sessions created before this change hold no hop-up state, so those users are asked to sign in again once. Jigsaurium still keeps its own implementation rather than the kit package, for the reasons in "STFD Sign-In Hardening" above. The kit's `require_2fa()` for individual sensitive actions is not used yet: gating is per role, set in STFD.
+
+## 2026-11-17 - Lexend Typeface via GOV.UK Frontend Sass (Issue #85)
+
+- Decision: replace GDS Transport with Lexend (SIL Open Font License 1.1), self-hosted from `app/static/fonts/lexend` with its licence text.
+- Why: GDS Transport is for GOV.UK services only, and Jigsaurium wants to look distinct from government sites. The prebuilt GOV.UK CSS also loaded it from `/assets/fonts/`, which this app never served, so users actually saw Arial. Lexend was picked from a side-by-side trial of Atkinson Hyperlegible Next, Inter, Source Sans 3 and Lexend.
+- Decision: compile `govuk-frontend.min.css` from GOV.UK Frontend's Sass with its documented settings (`$govuk-font-family`, `$govuk-include-default-font-face: false`, `$govuk-assets-path`) instead of copying the prebuilt CSS or overriding font rules in `styles.css`.
+- Why: these settings are GOV.UK Frontend's supported way to change the font, so every update (including the weekly automated refresh, which runs the same script) keeps it without touching vendor source. Overriding the 58 font rules in CSS would break whenever GOV.UK adds a component; reusing the name "GDS Transport" for another font would mislead.
+- Consequences: `sass` and `@fontsource/lexend` are pinned dev dependencies. `sass` is held at 1.99.0, the last release that runs on Node 20.16 (later ones need Node 20.19+). The compiled CSS matches GOV.UK's prebuilt file apart from minifier formatting and the font settings. GOV.UK's crest image path now resolves under `/static/vendor/govuk/assets/`. Attributions in the app are tracked in issue #89.

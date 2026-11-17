@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import mimetypes
 import secrets
 from uuid import uuid4
 import urllib.parse
@@ -241,6 +242,12 @@ def _warm_embeddings_on_startup(app):
             return
         if bool(app.config.get("IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR", True)):
             raise
+
+
+# Self-hosted web fonts (app/static/fonts). Not every platform's MIME table knows them,
+# and Windows serves them as application/octet-stream.
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
 
 
 def create_app(config_class="config.Config"):
