@@ -9,12 +9,28 @@ from pathlib import Path
 
 
 FILES_TO_COPY = [
-    "govuk-frontend.min.css",
-    "govuk-frontend.min.css.map",
     "govuk-frontend.min.js",
     "govuk-frontend.min.js.map",
 ]
 DIRECTORIES_TO_COPY = ["assets"]
+# GDS Transport is for GOV.UK services only; Jigsaurium uses Lexend instead (see the Sass entry point).
+ASSET_PATTERNS_TO_SKIP = ["fonts"]
+
+# The CSS is compiled from GOV.UK Frontend's Sass with Jigsaurium's settings, not copied prebuilt.
+SASS_ENTRY_POINT = Path("app/static/scss/govuk-frontend.scss")
+COMPILED_CSS_NAME = "govuk-frontend.min.css"
+STALE_FILES = ["govuk-frontend.min.css.map"]
+
+# Lexend (SIL Open Font License 1.1) from the pinned @fontsource/lexend package. OFL.txt in the
+# destination is the upstream licence text and is kept as it is.
+LEXEND_SOURCE = Path("node_modules/@fontsource/lexend/files")
+LEXEND_DESTINATION = Path("app/static/fonts/lexend")
+LEXEND_FILES = [
+    f"lexend-{subset}-{weight}-normal.{extension}"
+    for subset in ("latin", "latin-ext")
+    for weight in (400, 700)
+    for extension in ("woff2", "woff")
+]
 
 
 def run_command(command: list[str], repo_root: Path) -> None:
@@ -82,9 +98,45 @@ def vendor_assets(repo_root: Path, version: str) -> None:
         source_dir = source_root / directory_name
         destination_dir = destination_root / directory_name
         shutil.rmtree(destination_dir, ignore_errors=True)
-        shutil.copytree(source_dir, destination_dir)
+        shutil.copytree(source_dir, destination_dir, ignore=shutil.ignore_patterns(*ASSET_PATTERNS_TO_SKIP))
+
+    for file_name in STALE_FILES:
+        (destination_root / file_name).unlink(missing_ok=True)
+
+    compile_govuk_css(repo_root, destination_root / COMPILED_CSS_NAME)
+    copy_lexend_fonts(repo_root)
 
     (destination_root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+
+
+def compile_govuk_css(repo_root: Path, destination: Path) -> None:
+    node_executable = shutil.which("node") or shutil.which("node.exe")
+    sass_cli = repo_root / "node_modules" / "sass" / "sass.js"
+    if not node_executable or not sass_cli.exists():
+        raise SystemExit("Node.js and the pinned 'sass' dev dependency are required. Run 'npm ci' first.")
+    run_command(
+        [
+            node_executable,
+            str(sass_cli),
+            "--load-path=node_modules",
+            "--style=compressed",
+            "--no-source-map",
+            "--quiet-deps",
+            str(SASS_ENTRY_POINT),
+            str(destination.relative_to(repo_root)),
+        ],
+        repo_root,
+    )
+
+
+def copy_lexend_fonts(repo_root: Path) -> None:
+    source_dir = repo_root / LEXEND_SOURCE
+    if not source_dir.exists():
+        raise SystemExit(f"Missing Lexend font files at {source_dir}. Run 'npm ci' first.")
+    destination_dir = repo_root / LEXEND_DESTINATION
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    for file_name in LEXEND_FILES:
+        shutil.copy2(source_dir / file_name, destination_dir / file_name)
 
 
 def parse_args() -> argparse.Namespace:

@@ -100,7 +100,7 @@ To opt in, set `STARTUP_UPDATE_CHECK=1` before launching `run_simple`.
 
 ## GOV.UK Frontend assets
 
-- Vendored assets are stored under `app/static/vendor/govuk`.
+- Vendored assets are stored under `app/static/vendor/govuk`. The CSS is compiled from GOV.UK Frontend's Sass with Jigsaurium's settings (`app/static/scss/govuk-frontend.scss`, which sets the Lexend font), so run `npm ci` first.
 - Local style overrides must stay in `app/static/css/styles.css`.
 - Update vendored GOV.UK assets:
   - Windows: `scripts\update_govuk_assets.bat`

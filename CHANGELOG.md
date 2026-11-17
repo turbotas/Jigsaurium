@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initialized changelog for public release process tracking.
 
+### Changed
+
+- Jigsaurium now uses the Lexend typeface instead of GOV.UK's GDS Transport (issue #85).
+
 ## [v0.1.0] - 2026-11-06
 
 ### Added

@@ -7380,7 +7380,7 @@
       const dayLabel = document.createElement("p");
       dayLabel.className = "app-diary-calendar-day__number";
       dayLabel.classList.add("govuk-body", "govuk-!-margin-bottom-0");
-      dayLabel.style.fontFamily = '"GDS Transport", arial, sans-serif';
+      dayLabel.style.fontFamily = "var(--app-font-family)";
       dayLabel.textContent = String(cellDate.getDate());
       dayCell.appendChild(dayLabel);
 
