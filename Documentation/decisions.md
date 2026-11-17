@@ -410,3 +410,11 @@
 - Why: Node was not pinned anywhere. Developers used whatever their installer left behind (Node 20.16, past end of life), and CI used whatever the runner image shipped, so the GOV.UK CSS build could change without warning. That is what held `sass` at 1.99.0 in the Lexend change above.
 - Decision: move `sass` to 1.107.1 (the release GOV.UK Frontend itself builds with).
 - Consequences: the compiled CSS is unchanged except for GOV.UK's old Internet Explorer hack in the Details component, `@media screen `, which this `sass` writes as `@media screen` followed by U+FFFD instead of the ` ` escape. Modern browsers ignore that block either way. `sass` marks the file with a UTF-8 byte-order mark, so browsers read it correctly. npm 11 holds back the install script of `sass`'s optional file watcher (`@parcel/watcher`), which a one-off compile does not use; leave it unapproved.
+
+## 2026-11-17 - Camera Allowed on the Guided Capture Page Only (Issue #10)
+
+- Decision: send `Permissions-Policy: geolocation=(), camera=(self), microphone=()` on `GET /mobile-capture` only; every other response keeps `camera=()`.
+- Why: `camera=()` makes browsers refuse `getUserMedia` without a prompt, so on desktop "Capture with camera" could never open a webcam; the code then silently opened the file picker. The header was added on 2026-10-19, before the in-page camera, which is why changes to the JavaScript alone never fixed it. Phones were unaffected because their camera button uses the `capture` file input, which hands off to the phone's camera app and is not governed by this policy.
+- Decision: use the in-page webcam preview only where the main pointer is fine (a computer); touch-first devices keep the `capture` file input and their own camera app. When the camera cannot be used, say why (blocked, none found, busy, unsupported, or not HTTPS) instead of falling back silently; open the file picker automatically only when no camera request was made, since a slow permission prompt can use up the click.
+- Consequences: other pages (the Images form's and the diary's "Take photo") still cannot use a webcam on desktop; extending that means allowing the camera on the home page too. A reverse proxy that adds its own `Permissions-Policy` would undo this.
+

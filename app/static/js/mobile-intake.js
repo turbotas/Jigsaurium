@@ -215,7 +215,7 @@
 
     const hint = document.createElement("p");
     hint.className = "govuk-hint govuk-!-margin-bottom-2";
-    hint.textContent = "Use your camera, then tap Capture photo.";
+    hint.textContent = "Frame the photo, then select Capture photo.";
 
     const video = document.createElement("video");
     video.className = "app-mobile-camera-capture__video";
@@ -264,9 +264,42 @@
     cameraCaptureState.cancelButton = cancelButton;
   }
 
+  // Phones and tablets keep their own camera app (the `capture` file input): it is better than an
+  // in-page preview there and needs no camera permission. The live preview is for computers.
+  function prefersNativeCameraCapture() {
+    return typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+  }
+
+  function cameraUnavailableMessage() {
+    if (!window.isSecureContext) {
+      return "The camera needs a secure (HTTPS) connection, so choose a photo file instead.";
+    }
+    return "This browser cannot use a camera here, so choose a photo file instead.";
+  }
+
+  function cameraErrorMessage(error) {
+    switch (error?.name) {
+      case "NotAllowedError":
+      case "SecurityError":
+        return "Camera access is blocked. Allow the camera for this site in your browser settings, or use Choose file from gallery.";
+      case "NotFoundError":
+      case "OverconstrainedError":
+        return "No camera was found. Connect a camera, or use Choose file from gallery.";
+      case "NotSupportedError":
+        return "This browser cannot use a camera here. Use Choose file from gallery instead.";
+      case "NotReadableError":
+      case "AbortError":
+        return "The camera could not be started. It may be in use by another app. Close that app, or use Choose file from gallery.";
+      default:
+        return "The camera could not be opened. Use Choose file from gallery instead.";
+    }
+  }
+
+  // Returns { opened: true } or { opened: false, message, immediate }. `immediate` means nothing was
+  // awaited, so the click still counts as a user gesture and a file picker may be opened from it.
   async function openBrowserCamera(slotKey) {
     if (!browserCameraSupported()) {
-      return false;
+      return { opened: false, message: cameraUnavailableMessage(), immediate: true };
     }
 
     ensureCameraCaptureUi();
@@ -289,10 +322,11 @@
       if (cameraCaptureState.shell) {
         cameraCaptureState.shell.hidden = false;
       }
-      return true;
-    } catch (_error) {
+      return { opened: true };
+    } catch (error) {
       closeCameraCaptureUi();
-      return false;
+      console.warn("Camera could not be opened:", error);
+      return { opened: false, message: cameraErrorMessage(error), immediate: false };
     }
   }
 
@@ -812,9 +846,18 @@
       return;
     }
 
-    if (source === "camera") {
-      const openedWithBrowserCamera = await openBrowserCamera(slotKey);
-      if (openedWithBrowserCamera) {
+    if (source === "camera" && !prefersNativeCameraCapture()) {
+      const result = await openBrowserCamera(slotKey);
+      if (result.opened) {
+        setStatus("");
+        return;
+      }
+      // Say why there is no live camera instead of quietly showing a file picker.
+      setStatus(result.message, true);
+      statusPanel?.scrollIntoView({ block: "nearest" });
+      if (!result.immediate) {
+        // A permission prompt may have taken a while, so the click may no longer allow opening
+        // a file picker; the message points to Choose file from gallery instead.
         return;
       }
     }
