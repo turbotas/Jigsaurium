@@ -1474,3 +1474,73 @@
 .app-jigsaw-detail-table {
   margin-bottom: 0;
 }
+
+/* Activity log (issue #96) */
+.app-audit-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 0 16px;
+  align-items: end;
+}
+
+.app-audit-filters .govuk-form-group {
+  margin-bottom: 16px;
+}
+
+.app-audit-filters .govuk-select,
+.app-audit-filters .govuk-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.app-audit-filters__search {
+  grid-column: span 2;
+}
+
+.app-audit-filters__actions {
+  margin-bottom: 16px;
+}
+
+@media (max-width: 40.0525em) {
+  .app-audit-filters__search {
+    grid-column: auto;
+  }
+}
+
+.app-audit-table .govuk-table__cell {
+  vertical-align: top;
+}
+
+.app-audit-when {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.app-audit-details {
+  min-width: 16rem;
+  overflow-wrap: anywhere;
+}
+
+.app-audit-details > div + div {
+  margin-top: 2px;
+}
+
+.app-audit-change__from {
+  color: #942514;
+  text-decoration: line-through;
+}
+
+.app-audit-change__to {
+  color: #005a30;
+  text-decoration: none;
+}
+
+.app-audit-history-link {
+  font-size: 0.9em;
+  color: #505a5f;
+}
+
+.app-audit-table .govuk-tag {
+  white-space: nowrap;
+  max-width: none;
+}

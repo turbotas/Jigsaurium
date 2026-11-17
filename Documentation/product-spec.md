@@ -31,6 +31,7 @@ Build a personal jigsaw collection application centered on inventory management 
 - Jigsaw data entity and CRUD screens.
 - Inventory statuses and search/filter.
 - Audit events for admin changes.
+- Activity Log view: readable events (colour-coded), the account's name, a link to the changed record and a "history" link for that record, before/after values for edits, the client IP, and filters by event, account, record type, free-text search and date range.
 
 ### Phase 2: Collection Diary (current focus)
 

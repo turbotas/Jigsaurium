@@ -52,6 +52,7 @@
 - `DELETE /api/v1/users/{id}`
 - `GET /api/v1/roles`
 - `GET /api/v1/audit-events`
+- `GET /api/v1/audit-events/facets`
 - `GET /api/v1/security/blocked-ips`
 - `POST /api/v1/security/blocked-ips`
 - `DELETE /api/v1/security/blocked-ips/{id}`
@@ -288,7 +289,16 @@
 
 - Audit endpoint notes:
   - `GET /api/v1/audit-events` requires `audit.read` capability.
-  - Administrators receive unfiltered audit events; non-admin callers are scoped to events where `actor_user_id` matches the caller.
+  - Administrators receive unfiltered audit events; non-admin callers are scoped to events where `actor_user_id` matches the caller. Filters never widen that scope.
+  - Optional filters (combined with AND; invalid values return `422` `validation_error`):
+    - `action` (exact event, for example `jigsaw.updated`), or `category` (every event whose action starts with `<category>.`, for example `jigsaw`);
+    - `actor_user_id` (a user id, or `system` for events with no actor);
+    - `entity_type` and `entity_id` (one record's history when both are given);
+    - `q` (case-insensitive text, up to 200 characters, matched against the event, record type and id, details, client IP, and the account's name and email; `%` and `_` are taken literally);
+    - `from` and `to` (ISO 8601 date-times, inclusive).
+  - Each event also includes `actor` (`{id, display_name, email}`, or `null` for system events or deleted accounts), `client_ip`, and `payload` (the parsed details object, or `null`). The original fields, including `payload_json`, are unchanged.
+  - Edits record before/after values in `payload.changes` as `{field: {"from": old, "to": new}}` for jigsaw edits (`jigsaw.updated`, `jigsaw.status_changed`), user edits (`user.updated`) and image tag changes (`jigsaw.image_tag_updated`). Passwords are recorded only as `{"password": {"changed": true}}`. Events recorded before this change have no `changes`.
+  - `GET /api/v1/audit-events/facets` (also `audit.read`, same scope) returns the values the filters can offer: `actions`, `entity_types`, `actors` (`{id, display_name, email}`) and `has_system_events`.
   - Optional pagination query params:
     - `page` (integer `>= 1`, default `1`)
     - `page_size` (integer `1..200`, default `25`)
