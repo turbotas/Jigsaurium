@@ -485,6 +485,8 @@ def create_app(config_class="config.Config"):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        # Default for every response. A route may set its own (only /mobile-capture does, to allow
+        # the camera for its own origin); setdefault keeps that.
         response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
         response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
         response.headers.setdefault(

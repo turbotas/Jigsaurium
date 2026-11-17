@@ -338,6 +338,27 @@ def test_security_headers_are_present_on_html_and_api_responses(client):
 
 
 @pytest.mark.functional
+@pytest.mark.parametrize("path", ["/", "/image-editor/1", "/api/v1/health", "/static/css/styles.css"])
+def test_camera_is_denied_everywhere_except_the_capture_page(client, path):
+    response = client.get(path)
+
+    assert response.headers["Permissions-Policy"] == "geolocation=(), camera=(), microphone=()"
+
+
+@pytest.mark.functional
+def test_capture_page_allows_its_own_origin_to_use_the_camera(client):
+    # Issue #10: with camera=() the browser refuses getUserMedia without a prompt, so desktop
+    # "Capture with camera" could never open a webcam.
+    response = client.get("/mobile-capture")
+
+    assert response.status_code == 200
+    assert response.headers["Permissions-Policy"] == "geolocation=(), camera=(self), microphone=()"
+    # The other security headers still apply to this page.
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+
+
+@pytest.mark.functional
 def test_home_route_applies_nonce_to_inline_scripts(client):
     response = client.get("/")
 

@@ -1,7 +1,12 @@
-from flask import Blueprint, current_app, redirect, render_template, url_for
+from flask import Blueprint, current_app, make_response, redirect, render_template, url_for
 
 
 main_bp = Blueprint("main", __name__)
+
+# Every other page denies the camera (see the security headers in app/__init__.py). The guided
+# capture page is the one place that may use it, for its own origin only, so desktop browsers
+# can offer a live webcam capture (issue #10).
+MOBILE_CAPTURE_PERMISSIONS_POLICY = "geolocation=(), camera=(self), microphone=()"
 
 
 def _feature_flag_context():
@@ -33,7 +38,9 @@ def image_editor(image_id):
 
 @main_bp.get("/mobile-capture")
 def mobile_capture():
-    return render_template("mobile_capture.html")
+    response = make_response(render_template("mobile_capture.html"))
+    response.headers["Permissions-Policy"] = MOBILE_CAPTURE_PERMISSIONS_POLICY
+    return response
 
 
 @main_bp.get("/favicon.ico")

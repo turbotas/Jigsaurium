@@ -206,6 +206,7 @@ location / {
 - Input validation at API boundary and domain service layers.
 - Least-privilege role enforcement at API/service layer.
 - Security response headers are applied to all responses (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and `Cross-Origin-Resource-Policy`).
+- `Permissions-Policy` is `geolocation=(), camera=(), microphone=()` on every response except the guided capture page (`GET /mobile-capture`), which sends `camera=(self)` so desktop browsers can offer a live webcam capture. Do not add a `Permissions-Policy` header at the reverse proxy: it would override or combine with these, and a proxy-wide `camera=()` silently blocks the capture page's webcam again.
 - Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` (unless `ALLOW_INSECURE_HTTP=1`).
 - In non-dev environments (`APP_ENV=test|prod`), startup fails when `SECRET_KEY` is missing, default/placeholder, or shorter than 32 characters. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Changing it signs everyone out.
 - The container runs gunicorn (`gunicorn.conf.py`: one process, threaded, request timeouts and header limits), never the Flask/Werkzeug development server.
