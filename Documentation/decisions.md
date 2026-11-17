@@ -403,3 +403,10 @@
 - Decision: compile `govuk-frontend.min.css` from GOV.UK Frontend's Sass with its documented settings (`$govuk-font-family`, `$govuk-include-default-font-face: false`, `$govuk-assets-path`) instead of copying the prebuilt CSS or overriding font rules in `styles.css`.
 - Why: these settings are GOV.UK Frontend's supported way to change the font, so every update (including the weekly automated refresh, which runs the same script) keeps it without touching vendor source. Overriding the 58 font rules in CSS would break whenever GOV.UK adds a component; reusing the name "GDS Transport" for another font would mislead.
 - Consequences: `sass` and `@fontsource/lexend` are pinned dev dependencies. `sass` is held at 1.99.0, the last release that runs on Node 20.16 (later ones need Node 20.19+). The compiled CSS matches GOV.UK's prebuilt file apart from minifier formatting and the font settings. GOV.UK's crest image path now resolves under `/static/vendor/govuk/assets/`. Attributions in the app are tracked in issue #89.
+
+## 2026-11-17 - Pin Node.js 26 LTS
+
+- Decision: pin Node.js to the current LTS major (26) in `.nvmrc`, require it with `engines` in `package.json`, and install it in the weekly refresh workflow with `actions/setup-node` reading `.nvmrc`.
+- Why: Node was not pinned anywhere. Developers used whatever their installer left behind (Node 20.16, past end of life), and CI used whatever the runner image shipped, so the GOV.UK CSS build could change without warning. That is what held `sass` at 1.99.0 in the Lexend change above.
+- Decision: move `sass` to 1.107.1 (the release GOV.UK Frontend itself builds with).
+- Consequences: the compiled CSS is unchanged except for GOV.UK's old Internet Explorer hack in the Details component, `@media screen `, which this `sass` writes as `@media screen` followed by U+FFFD instead of the ` ` escape. Modern browsers ignore that block either way. `sass` marks the file with a UTF-8 byte-order mark, so browsers read it correctly. npm 11 holds back the install script of `sass`'s optional file watcher (`@parcel/watcher`), which a one-off compile does not use; leave it unapproved.
