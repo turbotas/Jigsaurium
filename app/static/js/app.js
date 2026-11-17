@@ -157,7 +157,13 @@
     },
     imageBrowser: {
       isOpen: false,
+      // The open image is remembered by id; `index` is only its position in the current filtered
+      // list, which background refreshes can reorder (issue #7).
       index: 0,
+      currentImageId: null,
+      // The image whose pixels are in the editor, and a counter that lets a newer load win.
+      loadedImageId: null,
+      loadSequence: 0,
       filterShowAll: false,
       filterModes: {
         unassigned: BROWSER_FILTER_MODE_INCLUDE,
@@ -4867,11 +4873,32 @@
     const filtered = getImageBrowserFilteredImages();
     if (filtered.length === 0) {
       state.imageBrowser.index = 0;
+      state.imageBrowser.currentImageId = null;
       return null;
     }
-    const index = Math.max(0, Math.min(state.imageBrowser.index, filtered.length - 1));
-    state.imageBrowser.index = index;
-    return filtered[index] || null;
+    const currentImageId = Number(state.imageBrowser.currentImageId || 0);
+    if (currentImageId) {
+      const foundIndex = filtered.findIndex((image) => Number(image.id) === currentImageId);
+      if (foundIndex >= 0) {
+        state.imageBrowser.index = foundIndex;
+        return filtered[foundIndex];
+      }
+    }
+    // The remembered image is gone (deleted or filtered out): take the one now in its place.
+    return selectImageBrowserIndex(state.imageBrowser.index, filtered);
+  }
+
+  // The one way to move the browser by position; it keeps the remembered image id in step.
+  function selectImageBrowserIndex(index, filtered = getImageBrowserFilteredImages()) {
+    if (filtered.length === 0) {
+      state.imageBrowser.index = 0;
+      state.imageBrowser.currentImageId = null;
+      return null;
+    }
+    const clamped = Math.max(0, Math.min(Number(index) || 0, filtered.length - 1));
+    state.imageBrowser.index = clamped;
+    state.imageBrowser.currentImageId = Number(filtered[clamped].id) || null;
+    return filtered[clamped];
   }
 
   function parseAiSuggestedCorners(item) {
@@ -4959,16 +4986,21 @@
   function setImageBrowserIndexByImageId(imageId) {
     const filtered = getImageBrowserFilteredImages();
     if (!imageId || filtered.length === 0) {
-      state.imageBrowser.index = 0;
+      selectImageBrowserIndex(0, filtered);
       return false;
     }
     const foundIndex = filtered.findIndex((image) => Number(image.id) === Number(imageId));
     if (foundIndex >= 0) {
-      state.imageBrowser.index = foundIndex;
+      selectImageBrowserIndex(foundIndex, filtered);
       return true;
     }
-    state.imageBrowser.index = 0;
+    selectImageBrowserIndex(0, filtered);
     return false;
+  }
+
+  // Unsaved work in the editor: changed pixels or rotation, or a crop being drawn.
+  function imageBrowserHasDraftState() {
+    return browserHasPendingEdits() || Boolean(state.imageBrowser.cropMode);
   }
 
   function browserHasPendingEdits() {
@@ -5514,9 +5546,8 @@
       await assignImageToJigsaw(imageId, jigsawId);
       closeImageBrowserNameAssignModal();
       showFeedback(`Image #${imageId} assigned to jigsaw #${jigsawId}.`);
-      await Promise.all([loadDiaryEntriesForSelected(), loadImageLibraryImages(), loadJigsawImagesForSelected(), loadJigsaws(), loadAuditEvents()]);
-      setImageBrowserIndexByImageId(imageId);
-      await loadCurrentImageIntoBrowser();
+      await Promise.all([loadDiaryEntriesForSelected(), loadImageLibraryImages({ skipBrowserReload: true }), loadJigsawImagesForSelected(), loadJigsaws(), loadAuditEvents()]);
+      await refreshImageBrowserAfterListChange();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -5825,6 +5856,7 @@
   }
 
   function clearImageBrowserWorkingState() {
+    state.imageBrowser.loadedImageId = null;
     state.imageBrowser.sourceDataUrl = null;
     state.imageBrowser.workingDataUrl = null;
     state.imageBrowser.workingImage = null;
@@ -5900,6 +5932,11 @@
 
   async function loadCurrentImageIntoBrowser() {
     const item = getCurrentImageBrowserItem();
+    // Only the newest load may fill the editor: one that finishes after a later navigation or
+    // refresh started is dropped, so an older image cannot replace a newer one (issue #7).
+    state.imageBrowser.loadSequence += 1;
+    const loadSequence = state.imageBrowser.loadSequence;
+    const isStale = () => loadSequence !== state.imageBrowser.loadSequence;
     clearImageBrowserWorkingState();
 
     if (!item) {
@@ -5907,32 +5944,43 @@
       return;
     }
 
+    let content;
     const cached = getCachedImageBrowserContent(item.id);
     if (cached && cached.dataUrl) {
-      state.imageBrowser.sourceDataUrl = cached.dataUrl;
-      state.imageBrowser.workingDataUrl = cached.dataUrl;
-      state.imageBrowser.workingImage = await loadImageElementFromDataUrl(cached.dataUrl);
-      state.imageBrowser.mimeType = cached.mimeType || String(item.mime_type || "image/png").toLowerCase();
-      state.imageBrowser.filename = cached.filename || item.filename || `image-${item.id}.png`;
+      content = {
+        dataUrl: cached.dataUrl,
+        mimeType: cached.mimeType || String(item.mime_type || "image/png").toLowerCase(),
+        filename: cached.filename || item.filename || `image-${item.id}.png`,
+      };
     } else {
       const response = await fetch(String(item.content_url || ""), { credentials: "same-origin" });
       if (!response.ok) {
+        if (isStale()) {
+          return;
+        }
         throw new Error(`Failed to load image content (HTTP ${response.status}).`);
       }
 
       const blob = await response.blob();
-      const dataUrl = await blobToDataUrl(blob);
-      state.imageBrowser.sourceDataUrl = dataUrl;
-      state.imageBrowser.workingDataUrl = dataUrl;
-      state.imageBrowser.workingImage = await loadImageElementFromDataUrl(dataUrl);
-      state.imageBrowser.mimeType = String(blob.type || item.mime_type || "image/png").toLowerCase();
-      state.imageBrowser.filename = item.filename || `image-${item.id}.png`;
-      setCachedImageBrowserContent(item.id, {
-        dataUrl,
-        mimeType: state.imageBrowser.mimeType,
-        filename: state.imageBrowser.filename,
-      });
+      content = {
+        dataUrl: await blobToDataUrl(blob),
+        mimeType: String(blob.type || item.mime_type || "image/png").toLowerCase(),
+        filename: item.filename || `image-${item.id}.png`,
+      };
+      // Cached even if this load is now stale, so returning to the image is instant.
+      setCachedImageBrowserContent(item.id, content);
     }
+
+    const workingImage = await loadImageElementFromDataUrl(content.dataUrl);
+    if (isStale()) {
+      return;
+    }
+    state.imageBrowser.sourceDataUrl = content.dataUrl;
+    state.imageBrowser.workingDataUrl = content.dataUrl;
+    state.imageBrowser.workingImage = workingImage;
+    state.imageBrowser.mimeType = content.mimeType;
+    state.imageBrowser.filename = content.filename;
+    state.imageBrowser.loadedImageId = Number(item.id) || null;
 
     await redrawImageBrowserCanvas();
 
@@ -6051,8 +6099,9 @@
     }
 
     const total = filtered.length;
+    getCurrentImageBrowserItem();
     const current = state.imageBrowser.index;
-    state.imageBrowser.index = (current + direction + total) % total;
+    selectImageBrowserIndex((current + direction + total) % total, filtered);
 
     try {
       await loadCurrentImageIntoBrowser();
@@ -6086,7 +6135,8 @@
 
       showFeedback(`Image tagged as ${tag}.`);
       renderImageLibraryImages(state.imageLibraryImages);
-      await loadCurrentImageIntoBrowser();
+      // Keeps any rotation or crop in progress; the tagged image stays open even if it moved.
+      await refreshImageBrowserAfterListChange();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -6130,10 +6180,8 @@
       });
 
       showFeedback(`Image assigned to jigsaw from ${neighborLabel} image.`);
-      await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
-
-      setImageBrowserIndexByImageId(item.id);
-      await loadCurrentImageIntoBrowser();
+      await Promise.all([loadImageLibraryImages({ skipBrowserReload: true }), loadJigsawImagesForSelected(), loadAuditEvents()]);
+      await refreshImageBrowserAfterListChange();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -6168,9 +6216,8 @@
       const createdTitle = payload?.data?.jigsaw?.title || "(untitled)";
       showFeedback(`Jigsaw created from image: ${createdTitle}.`);
 
-      await Promise.all([loadJigsaws(), loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents(), loadAiUsageDiagnostics()]);
-      setImageBrowserIndexByImageId(item.id);
-      await loadCurrentImageIntoBrowser();
+      await Promise.all([loadJigsaws(), loadImageLibraryImages({ skipBrowserReload: true }), loadJigsawImagesForSelected(), loadAuditEvents(), loadAiUsageDiagnostics()]);
+      await refreshImageBrowserAfterListChange();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -6200,19 +6247,14 @@
       clearCachedImageBrowserContent(item.id);
       showFeedback("Image deleted.");
 
-      const previousItemId = item.id;
-      await Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]);
+      await Promise.all([loadImageLibraryImages({ skipBrowserReload: true }), loadJigsawImagesForSelected(), loadAuditEvents()]);
 
-      const filtered = getImageBrowserFilteredImages();
-      if (filtered.length === 0) {
+      if (getImageBrowserFilteredImages().length === 0) {
         closeImageBrowser();
         return;
       }
-
-      if (!setImageBrowserIndexByImageId(previousItemId)) {
-        state.imageBrowser.index = Math.min(state.imageBrowser.index, filtered.length - 1);
-      }
-      await loadCurrentImageIntoBrowser();
+      // If the deleted image was open, the image now in its place opens; otherwise nothing moves.
+      await refreshImageBrowserAfterListChange();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -6689,6 +6731,11 @@
 
     try {
       const updated = await reviewImageBrowserAiSuggestions("accept", { applyTag: true });
+      if (Number(state.imageBrowser.loadedImageId) !== Number(item.id)) {
+        // Another image was opened while the request ran: never apply this rotation or crop to it.
+        showFeedback(`AI suggestion accepted for image #${item.id}. Open it again to apply its rotation and crop guide.`);
+        return;
+      }
       const activeItem = updated || getCurrentImageBrowserItem();
       let didApplyRotation = false;
       if (activeItem || item) {
@@ -6807,6 +6854,12 @@
       return;
     }
 
+    // The pixels in the editor must belong to the image being saved.
+    if (Number(state.imageBrowser.loadedImageId) !== savedImageId) {
+      showFeedback("This image is still loading. Try again when it appears.", true);
+      return;
+    }
+
     const shouldOverwrite = window.confirm("Overwrite this image with the current edits? This cannot be undone.");
     if (!shouldOverwrite) {
       return;
@@ -6838,10 +6891,15 @@
     }
 
     state.imageBrowserSavingImageIds[String(savedImageId)] = true;
+    // What was saved, so a later reload never throws away edits made while the save ran.
+    const savedEdits = {
+      workingDataUrl: state.imageBrowser.workingDataUrl,
+      rotationDegrees: state.imageBrowser.rotationDegrees,
+    };
     updateImageBrowserStatus();
 
     try {
-      const payload = await apiRequest(`/api/v1/image-library/images/${item.id}/content`, {
+      const payload = await apiRequest(`/api/v1/image-library/images/${savedImageId}/content`, {
         method: "PUT",
         body: formData,
       });
@@ -6875,10 +6933,17 @@
 
       clearCachedImageBrowserContent(savedImageId);
       showFeedback("Image overwritten successfully.");
+      // Show the stored result only if the saved image is still open and unchanged since Save.
       const activeImageId = Number(getCurrentImageBrowserItem()?.id || 0);
-      if (activeImageId === savedImageId) {
-        setImageBrowserIndexByImageId(savedImageId);
+      const unchangedSinceSave =
+        Number(state.imageBrowser.loadedImageId) === savedImageId &&
+        state.imageBrowser.workingDataUrl === savedEdits.workingDataUrl &&
+        state.imageBrowser.rotationDegrees === savedEdits.rotationDegrees &&
+        !state.imageBrowser.cropMode;
+      if (activeImageId === savedImageId && unchangedSinceSave) {
         await loadCurrentImageIntoBrowser();
+      } else {
+        updateImageBrowserStatus();
       }
 
       if (isStandaloneImageEditorMode()) {
@@ -6921,6 +6986,11 @@
     const jigsawId = Number(item.jigsaw_id || 0);
     if (!jigsawId) {
       showFeedback("Assign this image to a jigsaw before creating a Reference image.", true);
+      return;
+    }
+    // The pixels in the editor must belong to the image being saved.
+    if (Number(state.imageBrowser.loadedImageId) !== sourceImageId) {
+      showFeedback("This image is still loading. Try again when it appears.", true);
       return;
     }
 
@@ -6977,7 +7047,8 @@
           // Background refresh errors are surfaced by individual loaders.
         });
       } else {
-        Promise.all([loadImageLibraryImages(), loadJigsawImagesForSelected(), loadAuditEvents()]).catch(() => {
+        // The new image joins the list; the open image and any edits to it stay as they are.
+        Promise.all([loadImageLibraryImages({ skipBrowserReload: true }), loadJigsawImagesForSelected(), loadAuditEvents()]).catch(() => {
           // Background refresh errors are surfaced by individual loaders.
         });
       }
@@ -7701,6 +7772,23 @@
     }
   }
 
+  // After the image list is refreshed in the background: keep the open image (it is found by id),
+  // and reload its pixels only when nothing would be lost. Unsaved edits or a crop in progress on
+  // the image on screen are never thrown away by a refresh (issue #7).
+  async function refreshImageBrowserAfterListChange({ skipReload = false } = {}) {
+    const item = getCurrentImageBrowserItem();
+    const showingCurrentImage = Boolean(item) && Number(item.id) === Number(state.imageBrowser.loadedImageId);
+    if (showingCurrentImage && (skipReload || imageBrowserHasDraftState())) {
+      updateImageBrowserStatus();
+      return;
+    }
+    if (skipReload && !item) {
+      updateImageBrowserStatus();
+      return;
+    }
+    await loadCurrentImageIntoBrowser();
+  }
+
   async function loadImageLibraryImages(options = {}) {
     const shouldSkipBrowserReload = Boolean(options && options.skipBrowserReload);
 
@@ -7753,8 +7841,8 @@
       pruneImageBrowserContentCache(state.imageLibraryImages);
       renderImageLibraryImages(state.imageLibraryImages);
       await loadJigsawThumbnailImages();
-      if (state.imageBrowser.isOpen && !shouldSkipBrowserReload) {
-        await loadCurrentImageIntoBrowser();
+      if (state.imageBrowser.isOpen) {
+        await refreshImageBrowserAfterListChange({ skipReload: shouldSkipBrowserReload });
       }
     } catch (error) {
       if (error.status === 403) {
@@ -7765,8 +7853,8 @@
         setImageLibraryLoadSummary("You do not have access to image library data.");
         renderImageLibraryImages([]);
         renderJigsaws(state.jigsaws);
-        if (state.imageBrowser.isOpen && !shouldSkipBrowserReload) {
-          await loadCurrentImageIntoBrowser();
+        if (state.imageBrowser.isOpen) {
+          await refreshImageBrowserAfterListChange({ skipReload: shouldSkipBrowserReload });
         }
         return;
       }
@@ -7777,8 +7865,8 @@
       setImageLibraryLoadSummary("Could not load image library data.");
       renderImageLibraryImages([]);
       renderJigsaws(state.jigsaws);
-      if (state.imageBrowser.isOpen && !shouldSkipBrowserReload) {
-        await loadCurrentImageIntoBrowser();
+      if (state.imageBrowser.isOpen) {
+        await refreshImageBrowserAfterListChange({ skipReload: shouldSkipBrowserReload });
       }
       showFeedback(error.message, true);
     }
@@ -8019,9 +8107,8 @@
       await assignImageToJigsaw(resolvedImageId, selectedJigsawId);
       closeImageBrowserSuggestionModal();
       showFeedback(`Completed image #${resolvedImageId} assigned to jigsaw #${selectedJigsawId}.`);
-      await Promise.all([loadDiaryEntriesForSelected(), loadImageLibraryImages(), loadJigsawImagesForSelected(), loadJigsaws(), loadAuditEvents()]);
-      setImageBrowserIndexByImageId(resolvedImageId);
-      await loadCurrentImageIntoBrowser();
+      await Promise.all([loadDiaryEntriesForSelected(), loadImageLibraryImages({ skipBrowserReload: true }), loadJigsawImagesForSelected(), loadJigsaws(), loadAuditEvents()]);
+      await refreshImageBrowserAfterListChange();
     } catch (error) {
       showFeedback(error.message, true);
     }
@@ -10930,7 +11017,9 @@
           state.imageBrowser.filterModes.reference = previousFilters.modes.reference;
           state.imageBrowser.filterModes.completed = previousFilters.modes.completed;
           state.imageBrowser.filterModes.inProgress = previousFilters.modes.inProgress;
-          state.imageBrowser.index = previousIndex;
+          if (!previousItemId || !setImageBrowserIndexByImageId(previousItemId)) {
+            selectImageBrowserIndex(previousIndex);
+          }
           setImageBrowserFilterInputsFromState();
           return;
         }
@@ -10940,7 +11029,7 @@
     if (previousItemId) {
       setImageBrowserIndexByImageId(previousItemId);
     } else {
-      state.imageBrowser.index = 0;
+      selectImageBrowserIndex(0);
     }
 
     if (!state.imageBrowser.isOpen) {
