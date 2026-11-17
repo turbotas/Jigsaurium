@@ -56,7 +56,9 @@ Human PR ───────────────────────�
 - **Dependabot** (`.github/dependabot.yml`) for `github-actions` (grouped weekly PR). Add `docker`
   / `npm` only where the app does not vendor or rebuild them another way. Jigsaurium: npm
   (GOV.UK Frontend) is vendored into `app/static/vendor` by a script, so the refresh workflow
-  handles it; the base image tag is re-pulled and `apt-get upgrade`d on every build.
+  handles it; the base image tag is re-pulled and `apt-get upgrade`d on every build. That workflow
+  installs Node from `.nvmrc` with `actions/setup-node`, so the GOV.UK CSS is compiled with the same
+  Node major version as on developer machines.
 - **Token gotcha:** PRs opened with the built-in `GITHUB_TOKEN` do not trigger CI, and merges it
   performs do not trigger later workflows (e.g. the image build). The refresh workflow therefore
   uses a fine-grained PAT secret (`DEPS_AUTOMATION_TOKEN`: Contents + Pull requests, read/write,

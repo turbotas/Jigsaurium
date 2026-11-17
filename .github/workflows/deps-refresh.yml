@@ -53,6 +53,12 @@ jobs:
             "$RUNNER_TEMP/venv-$profile/bin/python" scripts/update_python_dependencies.py --profile "$profile" --skip-tests
           done
 
+      # Node comes from .nvmrc, so the GOV.UK CSS is compiled with the same Node as locally.
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
       - name: Refresh GOV.UK Frontend (same major version)
         run: |
           npm ci --no-audit --no-fund
