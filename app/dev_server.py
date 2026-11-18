@@ -1,9 +1,33 @@
 from collections.abc import Mapping
+import os
+import sys
 
 from werkzeug import serving
 from werkzeug.serving import WSGIRequestHandler, _log
 
 from app.request_security import resolve_console_log_ip
+
+
+# Set by run.py when it starts the dev server with auto-reload; not a setting to configure.
+DEV_RELOADER_ENV = "JIGSAURIUM_DEV_RELOADER"
+
+
+def is_reloader_watcher_process(argv=None, environ=None):
+    """Whether this is the dev auto-reloader's file-watching process.
+
+    With auto-reload, Werkzeug keeps one process watching the source files and runs the app in a
+    child process that it restarts after each change. Only the child serves requests, and Werkzeug
+    marks it with WERKZEUG_RUN_MAIN=true. The watcher still imports run.py and builds the app, so
+    heavy start-up work there (loading the image model) is wasted.
+    """
+    argv = sys.argv if argv is None else argv
+    environ = os.environ if environ is None else environ
+    if environ.get("WERKZEUG_RUN_MAIN") == "true":
+        return False
+    if environ.get(DEV_RELOADER_ENV) == "1":  # python run.py (run.sh)
+        return True
+    # flask --app run:app run --reload (run.bat, scripts/run_simple.sh)
+    return "run" in argv and "--reload" in argv[argv.index("run") + 1 :]
 
 
 def _extract_flask_config(wsgi_app):
