@@ -1278,18 +1278,64 @@
 
   <section id="audit-section" class="govuk-!-margin-top-8" aria-labelledby="audit-heading">
     <h2 id="audit-heading" class="govuk-heading-l">Activity Log</h2>
-    <p class="govuk-body">Recent administrative and authentication events.</p>
+    <p class="govuk-body">Sign-ins and every recorded change to jigsaws, images, diary entries, loans, users and settings. Administrators see everyone's activity; other accounts see their own.</p>
+
+    <form id="audit-filter-form" class="app-audit-filters" novalidate>
+      <div class="govuk-form-group">
+        <label class="govuk-label govuk-label--s" for="audit-filter-event">Event</label>
+        <select id="audit-filter-event" class="govuk-select">
+          <option value="">All events</option>
+        </select>
+      </div>
+      <div class="govuk-form-group">
+        <label class="govuk-label govuk-label--s" for="audit-filter-actor">Account</label>
+        <select id="audit-filter-actor" class="govuk-select">
+          <option value="">All accounts</option>
+        </select>
+      </div>
+      <div class="govuk-form-group">
+        <label class="govuk-label govuk-label--s" for="audit-filter-entity-type">Record type</label>
+        <select id="audit-filter-entity-type" class="govuk-select">
+          <option value="">Any</option>
+        </select>
+      </div>
+      <div class="govuk-form-group app-audit-filters__search">
+        <label class="govuk-label govuk-label--s" for="audit-filter-q">Search</label>
+        <input id="audit-filter-q" class="govuk-input" type="search" autocomplete="off" spellcheck="false" placeholder="Name, email, record id, IP or detail">
+      </div>
+      <div class="govuk-form-group">
+        <label class="govuk-label govuk-label--s" for="audit-filter-from">From</label>
+        <input id="audit-filter-from" class="govuk-input" type="date">
+      </div>
+      <div class="govuk-form-group">
+        <label class="govuk-label govuk-label--s" for="audit-filter-to">To</label>
+        <input id="audit-filter-to" class="govuk-input" type="date">
+      </div>
+      <div class="govuk-button-group app-audit-filters__actions">
+        <button id="audit-filter-apply" type="submit" class="govuk-button govuk-!-margin-bottom-0" data-module="govuk-button">Filter</button>
+        <button id="audit-filter-clear" type="button" class="govuk-button govuk-button--secondary govuk-!-margin-bottom-0" data-module="govuk-button">Clear filters</button>
+      </div>
+    </form>
+
+    <div id="audit-record-filter" class="govuk-inset-text govuk-!-margin-top-2" hidden>
+      <p class="govuk-body govuk-!-margin-bottom-0">
+        Showing the history of <strong id="audit-record-filter-label"></strong>
+        <button id="audit-record-filter-clear" type="button" class="app-inline-link-button govuk-!-margin-left-2">Show all records</button>
+      </p>
+    </div>
+
     <div id="audit-pagination-top" class="app-pagination" aria-live="polite"></div>
     <div class="table-scroll-wrap">
-      <table class="govuk-table" id="audit-table">
-        <caption class="govuk-table__caption govuk-table__caption--m">Latest activity</caption>
+      <table class="govuk-table app-audit-table" id="audit-table">
+        <caption class="govuk-table__caption govuk-table__caption--m">Activity, newest first</caption>
         <thead class="govuk-table__head">
           <tr class="govuk-table__row">
-            <th class="govuk-table__header" data-sort-list="audit" data-sort-field="id">ID</th>
-            <th class="govuk-table__header" data-sort-list="audit" data-sort-field="action">Action</th>
-            <th class="govuk-table__header" data-sort-list="audit" data-sort-field="entity">Entity</th>
-            <th class="govuk-table__header" data-sort-list="audit" data-sort-field="actor_user_id">Actor</th>
-            <th class="govuk-table__header" data-sort-list="audit" data-sort-field="created_at">Timestamp</th>
+            <th class="govuk-table__header" scope="col">When</th>
+            <th class="govuk-table__header" scope="col">Account</th>
+            <th class="govuk-table__header" scope="col">Event</th>
+            <th class="govuk-table__header" scope="col">Record</th>
+            <th class="govuk-table__header" scope="col">Details</th>
+            <th class="govuk-table__header" scope="col">IP address</th>
           </tr>
         </thead>
         <tbody class="govuk-table__body" id="audit-table-body"></tbody>

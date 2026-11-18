@@ -112,6 +112,9 @@
     databaseBackups: [],
     auditEvents: [],
     auditEventsMeta: null,
+    // Activity-log filters (issue #96); entityType + entityId also drive "history" links.
+    auditFilters: { event: "", actor: "", entityType: "", entityId: "", entityLabel: "", q: "", from: "", to: "" },
+    auditFacets: null,
     jigsawThumbnailImages: [],
     jigsawImages: [],
     imageLibraryImages: [],
@@ -446,6 +449,17 @@
     databaseBackupCreateButton: document.getElementById("database-backup-create"),
     databaseBackupsTableBody: document.getElementById("database-backups-table-body"),
     auditTableBody: document.getElementById("audit-table-body"),
+    auditFilterForm: document.getElementById("audit-filter-form"),
+    auditFilterEvent: document.getElementById("audit-filter-event"),
+    auditFilterActor: document.getElementById("audit-filter-actor"),
+    auditFilterEntityType: document.getElementById("audit-filter-entity-type"),
+    auditFilterQ: document.getElementById("audit-filter-q"),
+    auditFilterFrom: document.getElementById("audit-filter-from"),
+    auditFilterTo: document.getElementById("audit-filter-to"),
+    auditFilterClear: document.getElementById("audit-filter-clear"),
+    auditRecordFilter: document.getElementById("audit-record-filter"),
+    auditRecordFilterLabel: document.getElementById("audit-record-filter-label"),
+    auditRecordFilterClear: document.getElementById("audit-record-filter-clear"),
     aiUsageTodayCost: document.getElementById("ai-usage-today-cost"),
     aiUsageTodayCalls: document.getElementById("ai-usage-today-calls"),
     aiUsageTodaySuccess: document.getElementById("ai-usage-today-success"),
@@ -3244,6 +3258,12 @@
     updateCollectionTabsUi();
     updateAdminTabsUi();
     applyWorkspaceSectionVisibility();
+    if (tabName === "activity-log") {
+      // Show what happened since the page loaded, not a snapshot from sign-in.
+      loadAuditEvents().catch(() => {
+        // Errors are shown by the loader.
+      });
+    }
   }
 
   function handleCollectionTabClick(event) {
@@ -3925,13 +3945,301 @@
     renderPaginationPair(elements.jigsawsPaginationTop, elements.jigsawsPagination, "jigsaws", pageResult);
   }
 
+  // ---- Activity log (issue #96) ----------------------------------------------------------
+
+  const AUDIT_CATEGORY_LABELS = {
+    auth: "Sign-in",
+    user: "Users",
+    jigsaw: "Jigsaws and images",
+    loan: "Loans",
+    security: "Security",
+    system: "System",
+  };
+
+  const AUDIT_ACTION_LABELS = {
+    "auth.login": "Signed in",
+    "auth.logout": "Signed out",
+    "auth.profile_updated": "Profile updated",
+    "user.created": "User created",
+    "user.updated": "User updated",
+    "user.deleted": "User deleted",
+    "user.provisioned_from_stfd": "User added from STFD",
+    "user.synced_from_stfd": "User updated from STFD",
+    "jigsaw.created": "Jigsaw created",
+    "jigsaw.created_from_image": "Jigsaw created from image",
+    "jigsaw.updated": "Jigsaw updated",
+    "jigsaw.status_changed": "Jigsaw status changed",
+    "jigsaw.retired": "Jigsaw retired",
+    "jigsaw.deleted": "Jigsaw deleted",
+    "jigsaw.enriched_from_images": "Jigsaw filled in from images",
+    "jigsaw.bulk_create_queued": "Bulk create started",
+    "jigsaw.image_created": "Image added",
+    "jigsaw.image_bulk_uploaded": "Images uploaded",
+    "jigsaw.image_duplicate_ignored": "Duplicate image skipped",
+    "jigsaw.image_assigned": "Image assigned",
+    "jigsaw.image_unassigned": "Image unassigned",
+    "jigsaw.image_tag_updated": "Image tag changed",
+    "jigsaw.image_content_overwritten": "Image edited",
+    "jigsaw.image_deleted": "Image deleted",
+    "jigsaw.image_ai_suggestions_reviewed": "AI suggestion reviewed",
+    "jigsaw.image_embeddings_backfill_queued": "Image matching rebuild started",
+    "jigsaw.diary_entry_created": "Diary entry added",
+    "jigsaw.diary_entry_created_from_image": "Diary entry added from image",
+    "jigsaw.diary_entry_updated": "Diary entry updated",
+    "jigsaw.diary_entry_deleted": "Diary entry deleted",
+    "loan.created": "Loan started",
+    "loan.returned": "Loan returned",
+    "security.session_terminated": "Session ended",
+    "security.blocked_ip_upserted": "IP address blocked",
+    "security.blocked_ip_removed": "IP address unblocked",
+    "system.database_backup_requested": "Backup requested",
+    "system.database_backup_completed": "Backup completed",
+    "system.database_backup_failed": "Backup failed",
+    "system.database_backup_downloaded": "Backup downloaded",
+    "system.database_backup_deleted": "Backup deleted",
+  };
+
+  const AUDIT_ENTITY_LABELS = {
+    jigsaw: "Jigsaw",
+    jigsaw_image: "Image",
+    jigsaw_image_batch: "Image upload",
+    jigsaw_diary_entry: "Diary entry",
+    loan: "Loan",
+    user: "User",
+    user_session: "Session",
+    blocked_ip: "Blocked IP",
+    database_backup: "Backup",
+    bulk_ai_create_job: "Bulk create job",
+    image_embedding_job: "Image matching job",
+  };
+
+  // Payload keys that are internal bookkeeping rather than something a reader needs.
+  const AUDIT_HIDDEN_DETAIL_KEYS = new Set(["changes", "session_record_id", "auth_subject", "request_id"]);
+
+  const AUDIT_DETAIL_PRIORITY = [
+    "title",
+    "display_name",
+    "email",
+    "filename",
+    "tag",
+    "jigsaw_id",
+    "status",
+    "ip_address",
+    "updated_fields",
+  ];
+
+  function auditDetailPriority(key) {
+    const index = AUDIT_DETAIL_PRIORITY.indexOf(key);
+    return index >= 0 ? index : AUDIT_DETAIL_PRIORITY.length;
+  }
+
+  function humanizeAuditKey(value) {
+    const text = String(value || "").replace(/_/g, " ").trim();
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+  }
+
+  function auditActionLabel(action) {
+    const key = String(action || "");
+    if (AUDIT_ACTION_LABELS[key]) {
+      return AUDIT_ACTION_LABELS[key];
+    }
+    const [, rest = key] = key.split(/\.(.+)/);
+    return humanizeAuditKey(rest) || key || "Event";
+  }
+
+  function auditEntityLabel(entityType) {
+    return AUDIT_ENTITY_LABELS[String(entityType || "")] || humanizeAuditKey(entityType) || "Record";
+  }
+
+  // The colour of an event's tag says what kind of thing happened.
+  function auditActionTagClass(action) {
+    const key = String(action || "");
+    if (key === "auth.login") {
+      return "govuk-tag--blue";
+    }
+    if (key === "auth.logout") {
+      return "govuk-tag--grey";
+    }
+    if (/(deleted|removed|unassigned|failed|terminated|retired)$/.test(key)) {
+      return "govuk-tag--red";
+    }
+    if (/(created|provisioned|uploaded|requested|completed|queued|created_from_image)$/.test(key)) {
+      return "govuk-tag--green";
+    }
+    if (/(ignored|downloaded)$/.test(key)) {
+      return "govuk-tag--grey";
+    }
+    return "govuk-tag--yellow";
+  }
+
+  function formatAuditValue(value) {
+    if (value === null || value === undefined || value === "") {
+      return "(empty)";
+    }
+    if (typeof value === "boolean") {
+      return value ? "yes" : "no";
+    }
+    if (Array.isArray(value)) {
+      return value.length ? value.map((item) => formatAuditValue(item)).join(", ") : "(none)";
+    }
+    if (typeof value === "object") {
+      return JSON.stringify(value);
+    }
+    const text = String(value);
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) {
+      const parsed = new Date(text);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toLocaleString();
+      }
+    }
+    return text.length > 160 ? `${text.slice(0, 157)}...` : text;
+  }
+
+  function formatAuditTimestamp(isoValue) {
+    if (!isoValue) {
+      return "-";
+    }
+    const date = new Date(isoValue);
+    if (Number.isNaN(date.getTime())) {
+      return String(isoValue);
+    }
+    return date.toLocaleString(undefined, {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  function buildAuditChangeLine(field, change) {
+    const line = document.createElement("div");
+    line.className = "app-audit-change";
+    const name = document.createElement("strong");
+    name.textContent = `${humanizeAuditKey(field)}: `;
+    line.appendChild(name);
+    if (change && change.changed === true && !("from" in change)) {
+      line.appendChild(document.createTextNode("changed"));
+      return line;
+    }
+    const before = document.createElement("del");
+    before.className = "app-audit-change__from";
+    before.textContent = formatAuditValue(change?.from);
+    const after = document.createElement("ins");
+    after.className = "app-audit-change__to";
+    after.textContent = formatAuditValue(change?.to);
+    line.appendChild(before);
+    line.appendChild(document.createTextNode(" → "));
+    line.appendChild(after);
+    return line;
+  }
+
+  function buildAuditDetailsCell(event) {
+    const cell = document.createElement("td");
+    cell.className = "govuk-table__cell app-audit-details";
+    const payload = event.payload && typeof event.payload === "object" ? event.payload : null;
+    if (!payload) {
+      cell.textContent = "";
+      return cell;
+    }
+
+    const changes = payload.changes && typeof payload.changes === "object" ? payload.changes : null;
+    const changeFields = changes ? Object.keys(changes) : [];
+    changeFields.forEach((field) => cell.appendChild(buildAuditChangeLine(field, changes[field])));
+
+    const isEmptyValue = (value) =>
+      value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+    Object.keys(payload)
+      .filter((key) => !AUDIT_HIDDEN_DETAIL_KEYS.has(key))
+      // With before/after values, the list of updated fields adds nothing.
+      .filter((key) => !(changes && key === "updated_fields"))
+      .filter((key) => !isEmptyValue(payload[key]))
+      // The fields people look for first, then the rest in the stored order.
+      .sort((left, right) => auditDetailPriority(left) - auditDetailPriority(right))
+      .slice(0, 8)
+      .forEach((key) => {
+        const line = document.createElement("div");
+        const name = document.createElement("strong");
+        name.textContent = `${humanizeAuditKey(key)}: `;
+        line.appendChild(name);
+        line.appendChild(document.createTextNode(formatAuditValue(payload[key])));
+        cell.appendChild(line);
+      });
+    return cell;
+  }
+
+  function buildAuditRecordCell(event) {
+    const cell = document.createElement("td");
+    cell.className = "govuk-table__cell";
+    const entityType = String(event.entity_type || "");
+    const entityId = String(event.entity_id || "");
+    const label = `${auditEntityLabel(entityType)} ${entityId ? `#${entityId}` : ""}`.trim();
+
+    if (entityType === "jigsaw" && Number(entityId) > 0) {
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "app-inline-link-button";
+      link.dataset.jigsawView = String(Number(entityId));
+      const title = state.jigsaws.find((jigsaw) => Number(jigsaw.id) === Number(entityId))?.title;
+      link.textContent = title ? `${label} · ${title}` : label;
+      cell.appendChild(link);
+    } else if (entityType === "jigsaw_image" && Number(entityId) > 0) {
+      const link = document.createElement("a");
+      link.className = "govuk-link";
+      link.href = `/image-editor/${Number(entityId)}`;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = label;
+      cell.appendChild(link);
+    } else {
+      cell.appendChild(document.createTextNode(label || "-"));
+    }
+
+    if (entityType && entityId) {
+      const history = document.createElement("button");
+      history.type = "button";
+      history.className = "app-inline-link-button app-audit-history-link";
+      history.dataset.auditHistoryType = entityType;
+      history.dataset.auditHistoryId = entityId;
+      history.dataset.auditHistoryLabel = label;
+      history.textContent = "history";
+      history.setAttribute("aria-label", `Show the history of ${label}`);
+      cell.appendChild(document.createTextNode(" "));
+      cell.appendChild(history);
+    }
+    return cell;
+  }
+
+  function buildAuditAccountCell(event) {
+    const cell = document.createElement("td");
+    cell.className = "govuk-table__cell";
+    const actor = event.actor;
+    if (!event.actor_user_id) {
+      cell.textContent = "System";
+      return cell;
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "app-inline-link-button";
+    button.dataset.auditActor = String(event.actor_user_id);
+    button.textContent = actor?.display_name || actor?.email || `Account #${event.actor_user_id}`;
+    if (actor?.email) {
+      button.title = `${actor.email} (show only this account)`;
+    }
+    cell.appendChild(button);
+    return cell;
+  }
+
   function renderAuditEvents(events) {
     const tableBody = elements.auditTableBody;
     clearTableBody(tableBody);
+    syncAuditRecordFilterNotice();
 
     if (!Array.isArray(events) || events.length === 0) {
       clearPagination(elements.auditPagination);
-      appendEmptyRow(tableBody, 5, "No audit events found.");
+      clearPagination(elements.auditPaginationTop);
+      appendEmptyRow(tableBody, 6, hasActiveAuditFilters() ? "No activity matches these filters." : "No activity recorded yet.");
       return;
     }
 
@@ -3943,34 +4251,281 @@
       Number.isFinite(Number(apiMeta.total_items)) &&
       Number.isFinite(Number(apiMeta.total_pages));
 
-    const sortedEvents = sortRowsForTable(events, "audit");
+    // The server returns newest first; keep that order.
     const pageResult = hasApiPagination
       ? {
           page: Number(apiMeta.page),
           totalItems: Number(apiMeta.total_items),
           totalPages: Number(apiMeta.total_pages),
           startIndex: Math.max(0, (Number(apiMeta.page) - 1) * Number(apiMeta.page_size)),
-          endIndex: Math.min(Number(apiMeta.total_items), ((Number(apiMeta.page) - 1) * Number(apiMeta.page_size)) + sortedEvents.length),
-          rows: sortedEvents,
+          endIndex: Math.min(Number(apiMeta.total_items), ((Number(apiMeta.page) - 1) * Number(apiMeta.page_size)) + events.length),
+          rows: events,
         }
-      : paginateItems(sortedEvents, "audit");
+      : paginateItems(events, "audit");
 
     pageResult.rows.forEach((event) => {
       const row = document.createElement("tr");
       row.className = "govuk-table__row";
 
-      row.appendChild(buildCell(String(event.id)));
-      row.appendChild(buildCell(String(event.action || "-")));
-      row.appendChild(buildCell(`${event.entity_type || "-"}:${event.entity_id || "-"}`));
-      row.appendChild(buildCell(String(event.actor_user_id || "system")));
+      const whenCell = document.createElement("td");
+      whenCell.className = "govuk-table__cell app-audit-when";
+      whenCell.textContent = formatAuditTimestamp(event.created_at);
+      whenCell.title = `Event #${event.id}`;
+      row.appendChild(whenCell);
 
-      const timestamp = event.created_at ? new Date(event.created_at).toLocaleString() : "-";
-      row.appendChild(buildCell(timestamp));
+      row.appendChild(buildAuditAccountCell(event));
+
+      const eventCell = document.createElement("td");
+      eventCell.className = "govuk-table__cell";
+      const tag = document.createElement("strong");
+      tag.className = `govuk-tag ${auditActionTagClass(event.action)}`;
+      tag.textContent = auditActionLabel(event.action);
+      tag.title = String(event.action || "");
+      eventCell.appendChild(tag);
+      row.appendChild(eventCell);
+
+      row.appendChild(buildAuditRecordCell(event));
+      row.appendChild(buildAuditDetailsCell(event));
+      row.appendChild(buildCell(String(event.client_ip || "-")));
 
       tableBody.appendChild(row);
     });
 
     renderPaginationPair(elements.auditPaginationTop, elements.auditPagination, "audit", pageResult);
+  }
+
+  function hasActiveAuditFilters() {
+    return Object.values(state.auditFilters).some((value) => String(value || "").trim() !== "");
+  }
+
+  function syncAuditRecordFilterNotice() {
+    const { entityType, entityId } = state.auditFilters;
+    const active = Boolean(entityType && entityId);
+    if (elements.auditRecordFilter) {
+      elements.auditRecordFilter.hidden = !active;
+    }
+    if (elements.auditRecordFilterLabel) {
+      elements.auditRecordFilterLabel.textContent = active ? state.auditFilters.entityLabel || `${auditEntityLabel(entityType)} #${entityId}` : "";
+    }
+  }
+
+  function localDateBoundaryToIso(dateValue, endOfDay) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateValue || ""))) {
+      return "";
+    }
+    const date = new Date(`${dateValue}T${endOfDay ? "23:59:59.999" : "00:00:00"}`);
+    return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+  }
+
+  function buildAuditEventsQuery() {
+    const params = new URLSearchParams({
+      page: String(state.pagination.audit),
+      page_size: String(ADMIN_LIST_PAGE_SIZE),
+    });
+    const filters = state.auditFilters;
+    const [eventKind, eventValue] = String(filters.event || "").split(/:(.+)/);
+    if (eventKind === "action" && eventValue) {
+      params.set("action", eventValue);
+    } else if (eventKind === "category" && eventValue) {
+      params.set("category", eventValue);
+    }
+    if (filters.actor) {
+      params.set("actor_user_id", filters.actor);
+    }
+    if (filters.entityType) {
+      params.set("entity_type", filters.entityType);
+    }
+    if (filters.entityId) {
+      params.set("entity_id", filters.entityId);
+    }
+    if (filters.q) {
+      params.set("q", filters.q);
+    }
+    const fromIso = localDateBoundaryToIso(filters.from, false);
+    const toIso = localDateBoundaryToIso(filters.to, true);
+    if (fromIso) {
+      params.set("from", fromIso);
+    }
+    if (toIso) {
+      params.set("to", toIso);
+    }
+    return params.toString();
+  }
+
+  function setSelectOptions(select, options, placeholderLabel) {
+    if (!select) {
+      return;
+    }
+    // Keep what is on screen; a value chosen before its option existed waits in data-pending-value.
+    const current = select.dataset.pendingValue ?? select.value;
+    delete select.dataset.pendingValue;
+    select.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = placeholderLabel;
+    select.appendChild(placeholder);
+    options.forEach((entry) => {
+      if (entry.group) {
+        const group = document.createElement("optgroup");
+        group.label = entry.group;
+        entry.options.forEach((option) => {
+          const element = document.createElement("option");
+          element.value = option.value;
+          element.textContent = option.label;
+          group.appendChild(element);
+        });
+        select.appendChild(group);
+        return;
+      }
+      const element = document.createElement("option");
+      element.value = entry.value;
+      element.textContent = entry.label;
+      select.appendChild(element);
+    });
+    if ([...select.options].some((option) => option.value === current)) {
+      select.value = current;
+    }
+  }
+
+  function renderAuditFilterOptions() {
+    const facets = state.auditFacets || { actions: [], entity_types: [], actors: [], has_system_events: false };
+
+    const byCategory = new Map();
+    (facets.actions || []).forEach((action) => {
+      const category = String(action).split(".")[0];
+      if (!byCategory.has(category)) {
+        byCategory.set(category, []);
+      }
+      byCategory.get(category).push(action);
+    });
+    const eventOptions = [...byCategory.keys()].sort().map((category) => {
+      const categoryLabel = AUDIT_CATEGORY_LABELS[category] || humanizeAuditKey(category);
+      return {
+        group: categoryLabel,
+        options: [
+          { value: `category:${category}`, label: `All ${categoryLabel.toLowerCase()} events` },
+          ...byCategory
+            .get(category)
+            .map((action) => ({ value: `action:${action}`, label: auditActionLabel(action) }))
+            .sort((left, right) => left.label.localeCompare(right.label)),
+        ],
+      };
+    });
+    setSelectOptions(elements.auditFilterEvent, eventOptions, "All events");
+
+    const actorOptions = (facets.actors || []).map((actor) => ({
+      value: String(actor.id),
+      label: actor.display_name ? `${actor.display_name} (${actor.email})` : actor.email,
+    }));
+    if (facets.has_system_events) {
+      actorOptions.push({ value: "system", label: "System" });
+    }
+    setSelectOptions(elements.auditFilterActor, actorOptions, "All accounts");
+
+    const entityOptions = (facets.entity_types || [])
+      .map((entityType) => ({ value: entityType, label: auditEntityLabel(entityType) }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+    setSelectOptions(elements.auditFilterEntityType, entityOptions, "Any");
+  }
+
+  function readAuditFiltersFromForm() {
+    state.auditFilters.event = String(elements.auditFilterEvent?.value || "");
+    state.auditFilters.actor = String(elements.auditFilterActor?.value || "");
+    const entityType = String(elements.auditFilterEntityType?.value || "");
+    if (entityType !== state.auditFilters.entityType) {
+      // Choosing a different record type leaves any single record's history.
+      state.auditFilters.entityId = "";
+      state.auditFilters.entityLabel = "";
+    }
+    state.auditFilters.entityType = entityType;
+    state.auditFilters.q = String(elements.auditFilterQ?.value || "").trim();
+    state.auditFilters.from = String(elements.auditFilterFrom?.value || "");
+    state.auditFilters.to = String(elements.auditFilterTo?.value || "");
+  }
+
+  function setAuditFilterSelectValue(select, value) {
+    if (!select) {
+      return;
+    }
+    select.value = value;
+    if (select.value === value) {
+      delete select.dataset.pendingValue;
+    } else {
+      // The option is not listed yet (the filter facets are still loading): apply it when they arrive.
+      select.dataset.pendingValue = value;
+    }
+  }
+
+  function writeAuditFiltersToForm() {
+    setAuditFilterSelectValue(elements.auditFilterEvent, state.auditFilters.event);
+    setAuditFilterSelectValue(elements.auditFilterActor, state.auditFilters.actor);
+    setAuditFilterSelectValue(elements.auditFilterEntityType, state.auditFilters.entityType);
+    if (elements.auditFilterQ) elements.auditFilterQ.value = state.auditFilters.q;
+    if (elements.auditFilterFrom) elements.auditFilterFrom.value = state.auditFilters.from;
+    if (elements.auditFilterTo) elements.auditFilterTo.value = state.auditFilters.to;
+  }
+
+  async function applyAuditFilters() {
+    state.pagination.audit = 1;
+    await loadAuditEvents();
+  }
+
+  async function handleAuditFilterSubmit(event) {
+    event.preventDefault();
+    readAuditFiltersFromForm();
+    if (state.auditFilters.from && state.auditFilters.to && state.auditFilters.from > state.auditFilters.to) {
+      showFeedback("The From date must be on or before the To date.", true);
+      return;
+    }
+    await applyAuditFilters();
+  }
+
+  async function handleAuditFilterClear() {
+    state.auditFilters = { event: "", actor: "", entityType: "", entityId: "", entityLabel: "", q: "", from: "", to: "" };
+    writeAuditFiltersToForm();
+    await applyAuditFilters();
+  }
+
+  async function handleAuditRecordFilterClear() {
+    state.auditFilters.entityType = "";
+    state.auditFilters.entityId = "";
+    state.auditFilters.entityLabel = "";
+    writeAuditFiltersToForm();
+    await applyAuditFilters();
+  }
+
+  async function handleAuditTableClick(event) {
+    const historyButton = event.target.closest("[data-audit-history-type]");
+    if (historyButton) {
+      event.preventDefault();
+      state.auditFilters.entityType = String(historyButton.dataset.auditHistoryType || "");
+      state.auditFilters.entityId = String(historyButton.dataset.auditHistoryId || "");
+      state.auditFilters.entityLabel = String(historyButton.dataset.auditHistoryLabel || "");
+      writeAuditFiltersToForm();
+      await applyAuditFilters();
+      elements.auditSection?.scrollIntoView({ block: "start" });
+      return;
+    }
+    const actorButton = event.target.closest("[data-audit-actor]");
+    if (actorButton) {
+      event.preventDefault();
+      state.auditFilters.actor = String(actorButton.dataset.auditActor || "");
+      writeAuditFiltersToForm();
+      await applyAuditFilters();
+      return;
+    }
+    await handleTableActions(event);
+  }
+
+  async function loadAuditFacets() {
+    try {
+      const payload = await apiRequest("/api/v1/audit-events/facets");
+      state.auditFacets = payload?.data || null;
+    } catch (_error) {
+      state.auditFacets = null;
+    }
+    // Only the option lists change here: rewriting the form would wipe anything typed since the last search.
+    renderAuditFilterOptions();
   }
 
   function renderBlockedIps(blockedIps) {
@@ -8284,6 +8839,8 @@
     }
   }
 
+  let loadAuditEventsSequence = 0;
+
   async function loadAuditEvents() {
     if (!state.user) {
       state.auditEvents = [];
@@ -8292,14 +8849,24 @@
       return;
     }
 
+    // Only the newest request may fill the table, so quick filter changes cannot show stale rows.
+    loadAuditEventsSequence += 1;
+    const sequence = loadAuditEventsSequence;
     try {
-      const payload = await apiRequest(
-        `/api/v1/audit-events?page=${state.pagination.audit}&page_size=${ADMIN_LIST_PAGE_SIZE}`,
-      );
+      const [payload] = await Promise.all([
+        apiRequest(`/api/v1/audit-events?${buildAuditEventsQuery()}`),
+        loadAuditFacets(),
+      ]);
+      if (sequence !== loadAuditEventsSequence) {
+        return;
+      }
       state.auditEvents = Array.isArray(payload.data) ? payload.data : [];
       state.auditEventsMeta = payload?.meta || null;
       renderAuditEvents(state.auditEvents);
     } catch (error) {
+      if (sequence !== loadAuditEventsSequence) {
+        return;
+      }
       if (error.status === 403) {
         state.auditEvents = [];
         state.auditEventsMeta = null;
@@ -8885,6 +9452,10 @@
       state.databaseBackups = [];
       state.auditEvents = [];
       state.auditEventsMeta = null;
+      // Another account may sign in on this page next: start its activity log unfiltered.
+      state.auditFilters = { event: "", actor: "", entityType: "", entityId: "", entityLabel: "", q: "", from: "", to: "" };
+      state.auditFacets = null;
+      writeAuditFiltersToForm();
       state.jigsawThumbnailImages = [];
       state.jigsawImages = [];
       state.imageLibraryImages = [];
@@ -11299,6 +11870,23 @@
 
     if (elements.auditPagination) {
       elements.auditPagination.addEventListener("click", handlePaginationClick);
+    }
+    if (elements.auditFilterForm) {
+      elements.auditFilterForm.addEventListener("submit", handleAuditFilterSubmit);
+    }
+    [elements.auditFilterEvent, elements.auditFilterActor, elements.auditFilterEntityType].forEach((select) => {
+      select?.addEventListener("change", () => {
+        delete select.dataset.pendingValue;
+      });
+    });
+    if (elements.auditFilterClear) {
+      elements.auditFilterClear.addEventListener("click", handleAuditFilterClear);
+    }
+    if (elements.auditRecordFilterClear) {
+      elements.auditRecordFilterClear.addEventListener("click", handleAuditRecordFilterClear);
+    }
+    if (elements.auditTableBody) {
+      elements.auditTableBody.addEventListener("click", handleAuditTableClick);
     }
     if (elements.auditPaginationTop) {
       elements.auditPaginationTop.addEventListener("click", handlePaginationClick);

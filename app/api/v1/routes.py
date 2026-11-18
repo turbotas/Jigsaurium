@@ -12,6 +12,7 @@ import urllib.request
 import zipfile
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from enum import Enum
 from io import BytesIO
 from pathlib import Path
 from secrets import compare_digest, token_urlsafe
@@ -1266,10 +1267,30 @@ def _serialize_diary_feed_orphan_completed_image(image):
     }
 
 
-def _serialize_audit_event(event):
+def _parse_audit_payload(payload_json):
+    if not payload_json:
+        return None
+    try:
+        parsed = json.loads(payload_json)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _serialize_audit_actor(user):
+    if user is None:
+        return None
+    return {"id": user.id, "display_name": user.display_name, "email": user.email}
+
+
+def _serialize_audit_event(event, actors_by_id=None):
+    actor = (actors_by_id or {}).get(event.actor_user_id) if event.actor_user_id is not None else None
     return {
         "id": event.id,
         "actor_user_id": event.actor_user_id,
+        "actor": _serialize_audit_actor(actor),
+        "client_ip": event.client_ip_resolved or event.remote_addr,
+        "payload": _parse_audit_payload(event.payload_json),
         "action": event.action,
         "entity_type": event.entity_type,
         "entity_id": event.entity_id,
@@ -1408,6 +1429,30 @@ def _serialize_loan(loan):
         "returned_at": loan.returned_at.isoformat() if loan.returned_at else None,
         "status": loan.status.value,
     }
+
+
+def _audit_value(value):
+    """A JSON-safe form of a field value for the audit log's before/after changes."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (list, tuple, set)):
+        return [_audit_value(item) for item in value]
+    return value
+
+
+def _audit_changes(before, after):
+    """`{field: {"from": old, "to": new}}` for each field whose value changed (issue #96)."""
+    changes = {}
+    for field in sorted(set(before) | set(after)):
+        old_value = _audit_value(before.get(field))
+        new_value = _audit_value(after.get(field))
+        if old_value != new_value:
+            changes[field] = {"from": old_value, "to": new_value}
+    return changes
 
 
 def _record_audit_event(action, entity_type, entity_id, payload=None, actor_user_id=None):
@@ -5496,6 +5541,95 @@ def list_roles():
     return _success_response(payload)
 
 
+AUDIT_FILTER_TEXT_LIMITS = {"action": 128, "category": 64, "entity_type": 64, "entity_id": 64, "q": 200}
+# "!" rather than a backslash, which MariaDB and SQLite treat differently in string literals.
+LIKE_ESCAPE = "!"
+
+
+def _escape_like(value):
+    """`value` with LIKE wildcards taken literally (use with escape=LIKE_ESCAPE)."""
+    return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+
+
+def _audit_events_scope():
+    """Administrators see every event; everyone else only their own."""
+    stmt = select(AuditEvent)
+    if "administrator" not in g.current_user_roles:
+        stmt = stmt.where(AuditEvent.actor_user_id == g.current_user.id)
+    return stmt
+
+
+def _apply_audit_event_filters(stmt):
+    """Apply the activity-log filters from the query string (issue #96). Returns (stmt, error)."""
+    issues = []
+    values = {}
+    for field, max_length in AUDIT_FILTER_TEXT_LIMITS.items():
+        raw = str(request.args.get(field) or "").strip()
+        if len(raw) > max_length:
+            issues.append({"field": field, "issue": f"must be {max_length} characters or fewer"})
+        values[field] = raw
+
+    actor_filter = str(request.args.get("actor_user_id") or "").strip().lower()
+    actor_user_id = None
+    if actor_filter and actor_filter != "system":
+        try:
+            actor_user_id = int(actor_filter)
+            if actor_user_id <= 0:
+                raise ValueError
+        except ValueError:
+            issues.append({"field": "actor_user_id", "issue": "must be a positive integer or 'system'"})
+
+    bounds = {}
+    for field in ("from", "to"):
+        raw = str(request.args.get(field) or "").strip()
+        if not raw:
+            continue
+        parsed, error = _parse_optional_iso_datetime(raw, field)
+        if error is not None or parsed is None:
+            issues.append({"field": field, "issue": "must be an ISO 8601 date-time"})
+        else:
+            bounds[field] = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    if issues:
+        return None, _error_response("validation_error", "Invalid request parameters.", 422, issues)
+
+    if values["action"]:
+        stmt = stmt.where(AuditEvent.action == values["action"])
+    if values["category"]:
+        stmt = stmt.where(AuditEvent.action.like(f"{_escape_like(values['category'])}.%", escape=LIKE_ESCAPE))
+    if values["entity_type"]:
+        stmt = stmt.where(AuditEvent.entity_type == values["entity_type"])
+    if values["entity_id"]:
+        stmt = stmt.where(AuditEvent.entity_id == values["entity_id"])
+    if actor_filter == "system":
+        stmt = stmt.where(AuditEvent.actor_user_id.is_(None))
+    elif actor_user_id is not None:
+        stmt = stmt.where(AuditEvent.actor_user_id == actor_user_id)
+    if "from" in bounds:
+        stmt = stmt.where(AuditEvent.created_at >= bounds["from"])
+    if "to" in bounds:
+        stmt = stmt.where(AuditEvent.created_at <= bounds["to"])
+    if values["q"]:
+        pattern = f"%{_escape_like(values['q'].lower())}%"
+        matching_actor_ids = select(User.id).where(
+            or_(
+                func.lower(User.email).like(pattern, escape=LIKE_ESCAPE),
+                func.lower(User.display_name).like(pattern, escape=LIKE_ESCAPE),
+            )
+        )
+        stmt = stmt.where(
+            or_(
+                func.lower(AuditEvent.action).like(pattern, escape=LIKE_ESCAPE),
+                func.lower(AuditEvent.entity_type).like(pattern, escape=LIKE_ESCAPE),
+                func.lower(AuditEvent.entity_id).like(pattern, escape=LIKE_ESCAPE),
+                func.lower(func.coalesce(AuditEvent.payload_json, "")).like(pattern, escape=LIKE_ESCAPE),
+                func.lower(func.coalesce(AuditEvent.client_ip_resolved, "")).like(pattern, escape=LIKE_ESCAPE),
+                AuditEvent.actor_user_id.in_(matching_actor_ids),
+            )
+        )
+    return stmt, None
+
+
 @api_v1_bp.get("/audit-events")
 @require_auth
 def list_audit_events():
@@ -5510,11 +5644,11 @@ def list_audit_events():
     if error is not None:
         return error
 
-    db_session = get_session()
-    events_stmt = select(AuditEvent)
-    if "administrator" not in g.current_user_roles:
-        events_stmt = events_stmt.where(AuditEvent.actor_user_id == g.current_user.id)
+    events_stmt, error = _apply_audit_event_filters(_audit_events_scope())
+    if error is not None:
+        return error
 
+    db_session = get_session()
     total_items = int(db_session.execute(select(func.count()).select_from(events_stmt.subquery())).scalar_one() or 0)
     events = db_session.execute(
         events_stmt
@@ -5522,12 +5656,61 @@ def list_audit_events():
         .offset(pagination["offset"])
         .limit(pagination["page_size"])
     ).scalars().all()
-    payload = [_serialize_audit_event(event) for event in events]
+    actor_ids = {event.actor_user_id for event in events if event.actor_user_id is not None}
+    actors_by_id = (
+        {user.id: user for user in db_session.execute(select(User).where(User.id.in_(actor_ids))).scalars().all()}
+        if actor_ids
+        else {}
+    )
+    payload = [_serialize_audit_event(event, actors_by_id) for event in events]
     return _success_list_response(
         payload,
         page=pagination["page"],
         page_size=pagination["page_size"],
         total_items=total_items,
+    )
+
+
+@api_v1_bp.get("/audit-events/facets")
+@require_auth
+def list_audit_event_facets():
+    """The values the activity-log filters can offer, within what the caller may see."""
+    if not _current_user_has_capability("audit.read"):
+        return _error_response(
+            "forbidden",
+            "You do not have permission to access this resource.",
+            403,
+        )
+
+    db_session = get_session()
+    scoped = _audit_events_scope().subquery()
+    actions = db_session.execute(select(scoped.c.action).distinct().order_by(scoped.c.action)).scalars().all()
+    entity_types = db_session.execute(
+        select(scoped.c.entity_type).distinct().order_by(scoped.c.entity_type)
+    ).scalars().all()
+    actor_ids = db_session.execute(
+        select(scoped.c.actor_user_id).where(scoped.c.actor_user_id.is_not(None)).distinct()
+    ).scalars().all()
+    actors = (
+        db_session.execute(
+            select(User).where(User.id.in_(actor_ids)).order_by(User.display_name, User.email)
+        ).scalars().all()
+        if actor_ids
+        else []
+    )
+    has_system_events = (
+        db_session.execute(
+            select(func.count()).select_from(scoped).where(scoped.c.actor_user_id.is_(None))
+        ).scalar_one()
+        > 0
+    )
+    return _success_response(
+        {
+            "actions": list(actions),
+            "entity_types": list(entity_types),
+            "actors": [_serialize_audit_actor(user) for user in actors],
+            "has_system_events": bool(has_system_events),
+        }
     )
 
 
@@ -6016,6 +6199,13 @@ def update_user(user_id):
     if user is None:
         return _error_response("not_found", "User was not found.", 404)
 
+    user_values_before = {
+        "email": user.email,
+        "display_name": user.display_name,
+        "is_active": user.is_active,
+        "roles": sorted(_get_role_names_for_user_id(user.id)),
+    }
+
     if "email" in payload:
         normalized_email, error = _validate_email(payload.get("email"))
         if error is not None:
@@ -6079,12 +6269,29 @@ def update_user(user_id):
             select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)
         ).scalars().all()
 
+    user_changes = _audit_changes(
+        {field: value for field, value in user_values_before.items() if field in payload},
+        {
+            field: value
+            for field, value in {
+                "email": user.email,
+                "display_name": user.display_name,
+                "is_active": user.is_active,
+                "roles": sorted(updated_roles),
+            }.items()
+            if field in payload
+        },
+    )
+    if "password" in payload:
+        # Only that it changed: password values never go into the audit log.
+        user_changes["password"] = {"changed": True}
     _record_audit_event(
         action="user.updated",
         entity_type="user",
         entity_id=user.id,
         payload={
             "updated_fields": sorted(field for field in payload if field in updatable_fields),
+            "changes": user_changes,
             **({"sessions_terminated": sessions_terminated} if sessions_terminated is not None else {}),
         },
     )
@@ -6636,6 +6843,8 @@ def update_jigsaw(jigsaw_id):
         return _error_response("not_found", "Jigsaw was not found.", 404)
 
     original_status = jigsaw.status
+    audited_fields = sorted(field for field in payload if field in updatable_fields)
+    values_before = {field: getattr(jigsaw, field) for field in audited_fields}
 
     if "title" in payload:
         title = payload.get("title")
@@ -6756,7 +6965,10 @@ def update_jigsaw(jigsaw_id):
         action=action,
         entity_type="jigsaw",
         entity_id=jigsaw.id,
-        payload={"updated_fields": sorted(field for field in payload if field in updatable_fields)},
+        payload={
+            "updated_fields": audited_fields,
+            "changes": _audit_changes(values_before, {field: getattr(jigsaw, field) for field in audited_fields}),
+        },
     )
     db_session.commit()
     return _success_response(_serialize_jigsaw(jigsaw))
@@ -7742,6 +7954,7 @@ def set_image_library_item_tag(image_id):
             db_session.commit()
         return _success_response(_serialize_jigsaw_image(image))
 
+    previous_tag = image.tag
     image.tag = tag
     image.ai_suggestions_pending_review = False
 
@@ -7760,7 +7973,7 @@ def set_image_library_item_tag(image_id):
         action="jigsaw.image_tag_updated",
         entity_type="jigsaw_image",
         entity_id=image.id,
-        payload={"tag": image.tag},
+        payload={"tag": image.tag, "changes": _audit_changes({"tag": previous_tag}, {"tag": image.tag})},
     )
     db_session.commit()
 
