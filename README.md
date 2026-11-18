@@ -227,7 +227,16 @@ For evaluator/quick-start environments, you can populate predictable demo record
 - Check outdated dependencies:
   - Windows: `scripts\check_updates.bat`
   - Linux/macOS: `./scripts/check_updates.sh`
-- Update check scripts report Python packages against the dependency lock (`requirements/known-good-dev.txt`), plus GOV.UK frontend pinned/installed/latest versions. Newer releases on PyPI reach the lock through the weekly Dependency Refresh PR, not through local installs.
+- Update check scripts report:
+  - Python packages against the dependency lock (`requirements/known-good-dev.txt`).
+  - Newer releases on PyPI (`scripts/report_newer_releases.py`), with how each would arrive:
+    - "weekly refresh": a direct requirement whose range allows it.
+    - "weekly refresh, if what needs it allows": an indirect dependency another package can hold back.
+    - "outside … range: needs a manual change": a new major version beyond a cap in `requirements/*.txt`.
+    - "needed on <platform>; not pinned in the lock": needed only on this platform or Python, for example colorama on Windows. The lock is built on Linux, so it never pins these.
+    - "not in the lock (local tool)": something installed by hand that nothing in the lock needs.
+  - GOV.UK frontend pinned/installed/latest versions.
+- Newer releases reach the lock through the weekly Dependency Refresh PR, not through local installs.
 - Keep the dev venv in line with the lock after pulling:
   - `run.bat` / `run.sh` do this automatically in dev, only installing when something differs. Set `STARTUP_VENV_SYNC=0` to report differences without installing.
   - By hand: `.venv\Scripts\python.exe scripts\sync_dev_venv.py --sync` (Windows) or `.venv/bin/python scripts/sync_dev_venv.py --sync` (Linux/macOS). Leave out `--sync` to only report.
