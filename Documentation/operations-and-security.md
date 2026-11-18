@@ -32,6 +32,8 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - Core image runtime depends on Pillow plus `pillow-heif` so HEIF/HEIC uploads can be decoded for metadata extraction and derivative generation.
 - Production/test deployment target is CPU-only; install PyTorch from the CPU wheel index only and do not install CUDA/NVIDIA runtime packages.
 - Use `requirements/known-good-dev.txt` and `requirements/known-good-prod.txt` as constraints files for reproducible installs.
+- The weekly Dependency Refresh keeps the lock files current. A dev checkout's `.venv` follows them through `scripts/sync_dev_venv.py`: in `APP_ENV=dev`, `run.bat` / `run.sh` compare the venv with `known-good-dev.txt` before starting. If anything is missing or at another version, they install the locked versions with the same command as `scripts/setup_venv`, plus Playwright's Chromium build when Playwright changed. Startup continues with a warning if that fails.
+- `STARTUP_VENV_SYNC` (launcher shell variable, dev only, default `1`): set `0` to report differences without installing. Like `STARTUP_UPDATE_CHECK`, the launcher reads it from the shell, not from `.env`.
 - `requirements.txt` points to production dependencies for compatibility.
 
 - `DATABASE_URL`: SQLAlchemy MariaDB connection string.
