@@ -10,6 +10,7 @@
     box_front: "Box front",
     box_side: "Box side",
     box_back: "Box back",
+    in_progress: "In progress",
     completed: "Completed",
     reference: "Reference",
   };
@@ -956,12 +957,22 @@
     setStatus("Starting mobile capture workflow...");
 
     try {
-      if (selectedSeedEntries.length === 0 && completedEntry && entries.length === 1) {
-        setStatus("Uploading completed image to the unassigned image library...");
-        const uploadPayload = await uploadImageLibraryItem(completedEntry.file, slotTagMap.completed, commentText);
-        const createdCount = Number(uploadPayload?.data?.created_count || 0);
-        const skippedCount = Number(uploadPayload?.data?.skipped_count || 0);
-        setStatus(`Completed image stored as unassigned. Added ${createdCount} image(s), skipped ${skippedCount}.`);
+      if (selectedSeedEntries.length === 0) {
+        // Only Progress and/or Completed photos: nothing to build a jigsaw from, so store them
+        // unassigned, each with its own tag, for assigning later.
+        let createdCount = 0;
+        let skippedCount = 0;
+        for (let index = 0; index < entries.length; index += 1) {
+          const entry = entries[index];
+          const tag = slotTagMap[entry.slotKey];
+          const attachComment = commentText && (entry.slotKey === "completed" || (!completedEntry && index === 0));
+          setStatus(`Uploading ${index + 1}/${entries.length}: ${tag} to the unassigned image library...`);
+          const uploadPayload = await uploadImageLibraryItem(entry.file, tag, attachComment ? commentText : "");
+          createdCount += Number(uploadPayload?.data?.created_count || 0);
+          skippedCount += Number(uploadPayload?.data?.skipped_count || 0);
+        }
+        const tagsLabel = entries.map((entry) => slotTagMap[entry.slotKey]).join(" and ");
+        setStatus(`${tagsLabel} stored as unassigned. Added ${createdCount} image(s), skipped ${skippedCount}.`);
         clearForm();
         return;
       }
