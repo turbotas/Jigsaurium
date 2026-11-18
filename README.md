@@ -233,7 +233,8 @@ For evaluator/quick-start environments, you can populate predictable demo record
     - "weekly refresh": a direct requirement whose range allows it.
     - "weekly refresh, if what needs it allows": an indirect dependency another package can hold back.
     - "outside … range: needs a manual change": a new major version beyond a cap in `requirements/*.txt`.
-    - "not in the lock (local tool)": something the app doesn't depend on.
+    - "needed on <platform>; not pinned in the lock": needed only on this platform or Python, for example colorama on Windows. The lock is built on Linux, so it never pins these.
+    - "not in the lock (local tool)": something installed by hand that nothing in the lock needs.
   - GOV.UK frontend pinned/installed/latest versions.
 - Newer releases reach the lock through the weekly Dependency Refresh PR, not through local installs.
 - Keep the dev venv in line with the lock after pulling:

@@ -10,7 +10,11 @@ them in. Notes per package:
   depend on it can hold it back (mpmath, held by sympy for torch, is an example).
 - "outside <file> range ...": a direct requirement capped below the release, usually a new major
   version. It needs a manual change to requirements/*.txt.
-- "not in the lock": a local tool (for example pip-audit) that the app does not depend on.
+- "needed on <platform>; not pinned in the lock": something the app needs only on this machine's
+  platform or Python (colorama, which pytest, tqdm and typer need on Windows). The weekly refresh
+  builds the lock on Linux, so it never pins these, and pip keeps them at whatever it installs.
+- "not in the lock (local tool)": a tool installed by hand (for example pip-audit) that nothing in
+  the lock needs.
 
 Run it with the venv's own Python. It needs network access to PyPI; if pip cannot reach it the
 report says so and exits 0, so launchers carry on.
@@ -27,6 +31,47 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sync_dev_venv import PROFILES, REPO_ROOT, canonical_name, lock_file, read_lock  # noqa: E402
+
+PLATFORM_LABELS = {"win32": "Windows", "darwin": "macOS", "linux": "Linux"}
+
+
+def platform_label() -> str:
+    return PLATFORM_LABELS.get(sys.platform, sys.platform)
+
+
+def needed_here(locked: set[str]) -> set[str]:
+    """Installed packages that the locked ones need on this machine, followed through every level.
+
+    Each requirement's environment marker (for example `sys_platform == "win32"` or
+    `python_version < "3.11"`) is evaluated for this interpreter; optional extras are ignored.
+    """
+    from importlib import metadata
+
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    requirements_by_name: dict[str, list[str]] = {}
+    for distribution in metadata.distributions():
+        name = distribution.metadata["Name"]
+        if name:
+            requirements_by_name[canonical_name(name)] = list(distribution.requires or [])
+
+    needed: set[str] = set()
+    pending = [key for key in locked if key in requirements_by_name]
+    seen = set(pending)
+    while pending:
+        for line in requirements_by_name.get(pending.pop(), []):
+            try:
+                requirement = Requirement(line)
+            except InvalidRequirement:
+                continue
+            if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
+                continue
+            key = canonical_name(requirement.name)
+            needed.add(key)
+            if key not in seen and key in requirements_by_name:
+                seen.add(key)
+                pending.append(key)
+    return needed
 
 REQUIREMENT_FILES = {
     "dev": ("base.txt", "embeddings.txt", "dev.txt"),
@@ -72,7 +117,13 @@ def outdated_packages() -> list[dict] | None:
         return None
 
 
-def note_for(name: str, latest: str, locked: set[str], direct: dict[str, tuple[str, str]]) -> str:
+def note_for(
+    name: str,
+    latest: str,
+    locked: set[str],
+    direct: dict[str, tuple[str, str]],
+    platform_needed: set[str] = frozenset(),
+) -> str:
     key = canonical_name(name)
     if key in direct:
         filename, specifier = direct[key]
@@ -84,12 +135,24 @@ def note_for(name: str, latest: str, locked: set[str], direct: dict[str, tuple[s
     if key in locked:
         # Pulled in by another package, whose own requirements can hold it back.
         return "weekly refresh, if what needs it allows"
+    if key in platform_needed:
+        return f"needed on {platform_label()}; not pinned in the lock"
     return "not in the lock (local tool)"
 
 
-def build_rows(packages: list[dict], locked: set[str], direct: dict[str, tuple[str, str]]) -> list[tuple[str, str, str, str]]:
+def build_rows(
+    packages: list[dict],
+    locked: set[str],
+    direct: dict[str, tuple[str, str]],
+    platform_needed: set[str] = frozenset(),
+) -> list[tuple[str, str, str, str]]:
     rows = [
-        (package["name"], package["version"], package["latest_version"], note_for(package["name"], package["latest_version"], locked, direct))
+        (
+            package["name"],
+            package["version"],
+            package["latest_version"],
+            note_for(package["name"], package["latest_version"], locked, direct, platform_needed),
+        )
         for package in packages
     ]
     # App dependencies first, then local tools; alphabetical within each.
@@ -120,7 +183,8 @@ def main(argv: list[str] | None = None) -> int:
 
     lock = lock_file(args.profile)
     locked = set(read_lock(lock)) if lock.exists() else set()
-    print_rows(build_rows(packages, locked, read_direct_requirements(args.profile)))
+    platform_needed = needed_here(locked) - locked
+    print_rows(build_rows(packages, locked, read_direct_requirements(args.profile), platform_needed))
     return 0
 
 

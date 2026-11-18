@@ -87,3 +87,38 @@ def test_real_requirement_files_parse(report):
     assert direct["flask"][0] == "requirements/base.txt"
     assert direct["playwright"][0] == "requirements/dev.txt"
     assert "torch" in direct
+
+
+def _distribution(name, *requires):
+    return SimpleNamespace(metadata={"Name": name}, requires=list(requires))
+
+
+@pytest.mark.functional
+def test_needed_here_follows_requirements_that_apply_on_this_machine(report, monkeypatch):
+    distributions = [
+        _distribution("pytest", 'termcolour; python_version >= "3"', 'tomli; python_version < "3"', 'requests; extra == "dev"'),
+        _distribution("termcolour", "ansi-codes"),
+        _distribution("ansi-codes"),
+        _distribution("tomli"),
+        _distribution("requests"),
+        _distribution("pip-audit", "requests"),
+    ]
+    monkeypatch.setattr("importlib.metadata.distributions", lambda: distributions)
+
+    assert report.needed_here({"pytest"}) == {"termcolour", "ansi-codes"}
+
+
+@pytest.mark.functional
+def test_platform_only_dependencies_are_not_called_local_tools(report, monkeypatch):
+    monkeypatch.setattr(report.sys, "platform", "win32")
+    packages = [
+        {"name": "pip-audit", "version": "2.10.1", "latest_version": "2.11.0"},
+        {"name": "colorama", "version": "0.4.6", "latest_version": "0.4.7"},
+    ]
+
+    rows = report.build_rows(packages, LOCKED, DIRECT, platform_needed={"colorama"})
+
+    assert rows == [
+        ("colorama", "0.4.6", "0.4.7", "needed on Windows; not pinned in the lock"),
+        ("pip-audit", "2.10.1", "2.11.0", "not in the lock (local tool)"),
+    ]
