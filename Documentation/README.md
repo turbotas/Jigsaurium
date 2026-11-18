@@ -58,6 +58,7 @@ Community/governance files at repository root:
   - direct interpreter test execution (`.venv\\Scripts\\python.exe -m pytest` on Windows, `.venv/bin/python -m pytest` on Linux/macOS)
   - dependency checks (`scripts/check_updates.bat`, `scripts/check_updates.sh`)
   - dev venv sync with the dependency lock (`scripts/sync_dev_venv.py`)
+  - newer PyPI releases and how each would arrive (`scripts/report_newer_releases.py`)
   - embedding model prefetch (`scripts/prefetch_embedding_model.py`)
   - targeted Python dependency updates + known-good lock refresh (`scripts/update_python_dependencies.bat`, `scripts/update_python_dependencies.sh`)
   - GOV.UK asset updates (`scripts/update_govuk_assets.bat`, `scripts/update_govuk_assets.sh`)

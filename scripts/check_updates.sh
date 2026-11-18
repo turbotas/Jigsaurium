@@ -9,12 +9,13 @@ else
   PYTHON_BIN="python"
 fi
 
-# Python packages are compared with the reviewed lock, not with the newest releases on PyPI: the
-# weekly Dependency Refresh brings newer releases into the lock. run.sh passes --no-python because
-# it has already checked (and synced) the venv.
+# First the venv against the reviewed lock (run.sh passes --no-python because it has already
+# checked and synced it), then what is newer than that on PyPI, and how each would arrive.
 if [ "${1:-}" != "--no-python" ]; then
   "$PYTHON_BIN" scripts/sync_dev_venv.py --profile dev || true
+  echo
 fi
+"$PYTHON_BIN" scripts/report_newer_releases.py --profile dev || true
 
 if command -v npm >/dev/null 2>&1; then
   echo

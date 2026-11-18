@@ -13,13 +13,14 @@ if exist ".venv\Scripts\python.exe" (
   set "PYTHON_CMD=python"
 )
 
-rem Python packages are compared with the reviewed lock, not with the newest releases on PyPI: the
-rem weekly Dependency Refresh brings newer releases into the lock. run.bat passes --no-python because
-rem it has already checked (and synced) the venv.
+rem First the venv against the reviewed lock (run.bat passes --no-python because it has already
+rem checked and synced it), then what is newer than that on PyPI, and how each would arrive.
 set "UPDATES_EXIT=0"
 if /I not "%~1"=="--no-python" (
   %PYTHON_CMD% scripts\sync_dev_venv.py --profile dev
+  echo.
 )
+%PYTHON_CMD% scripts\report_newer_releases.py --profile dev
 
 set "HAS_NPM=0"
 where npm >nul 2>&1 && set "HAS_NPM=1"
