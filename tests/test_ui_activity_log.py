@@ -4,6 +4,8 @@ import pytest
 
 from tests.test_ui_admin_panel import playwright_sync_api, ui_server  # noqa: F401
 
+expect = playwright_sync_api.expect
+
 HOSTILE_TITLE = 'Lighthouse <img src=x onerror="window.__auditXss=1">'
 
 
@@ -85,16 +87,17 @@ def test_event_filter_and_search(activity_page):
 
     page.select_option("#audit-filter-event", "action:jigsaw.created")
     page.click("#audit-filter-apply")
+    # Wait for the filtered results themselves: the old table stays on screen until they arrive.
     page.wait_for_function(
         "() => [...document.querySelectorAll('#audit-table-body .govuk-tag')].every(t => t.textContent === 'Jigsaw created')"
     )
-    assert _rows(page).count() == 2
+    expect(_rows(page)).to_have_count(2)
 
     page.click("#audit-filter-clear")
     page.fill("#audit-filter-q", "autumn lake")
     page.click("#audit-filter-apply")
-    page.wait_for_selector("#audit-table-body tr:has-text('Autumn Lake')")
-    assert _rows(page).count() == 1
+    expect(_rows(page)).to_have_count(1)
+    expect(_rows(page).first).to_contain_text("Autumn Lake")
 
 
 @pytest.mark.functional
@@ -106,7 +109,7 @@ def test_history_link_shows_one_records_events(activity_page):
     row.locator("[data-audit-history-type]").click()
     page.wait_for_selector("#audit-record-filter:not([hidden])")
     assert f"Jigsaw #{jigsaw_id}" in page.inner_text("#audit-record-filter-label")
-    page.wait_for_function("() => document.querySelectorAll('#audit-table-body tr').length === 2")
+    expect(_rows(page)).to_have_count(2)
     tags = sorted(t.strip().lower() for t in page.locator("#audit-table-body .govuk-tag").all_inner_texts())
     assert tags == ["jigsaw created", "jigsaw updated"]
 
@@ -122,5 +125,6 @@ def test_clicking_an_account_filters_to_it(activity_page):
 
     _rows(page).first.locator("[data-audit-actor]").click()
     page.wait_for_function("() => document.getElementById('audit-filter-actor').value !== ''")
+    expect(_rows(page).filter(has_not=page.locator("[data-audit-actor]:text-is('Admin User')"))).to_have_count(0)
     names = set(page.locator("#audit-table-body [data-audit-actor]").all_inner_texts())
     assert names == {"Admin User"}
