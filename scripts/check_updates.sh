@@ -9,12 +9,11 @@ else
   PYTHON_BIN="python"
 fi
 
-echo "Python package update status:"
-PIP_OUTDATED_OUTPUT="$($PYTHON_BIN -m pip list --outdated || true)"
-if [ -n "$PIP_OUTDATED_OUTPUT" ]; then
-  echo "$PIP_OUTDATED_OUTPUT"
-else
-  echo "  All Python packages are up to date"
+# Python packages are compared with the reviewed lock, not with the newest releases on PyPI: the
+# weekly Dependency Refresh brings newer releases into the lock. run.sh passes --no-python because
+# it has already checked (and synced) the venv.
+if [ "${1:-}" != "--no-python" ]; then
+  "$PYTHON_BIN" scripts/sync_dev_venv.py --profile dev || true
 fi
 
 if command -v npm >/dev/null 2>&1; then
