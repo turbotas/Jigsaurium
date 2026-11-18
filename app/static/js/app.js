@@ -4356,7 +4356,9 @@
     if (!select) {
       return;
     }
-    const current = select.value;
+    // Keep what is on screen; a value chosen before its option existed waits in data-pending-value.
+    const current = select.dataset.pendingValue ?? select.value;
+    delete select.dataset.pendingValue;
     select.replaceChildren();
     const placeholder = document.createElement("option");
     placeholder.value = "";
@@ -4441,10 +4443,23 @@
     state.auditFilters.to = String(elements.auditFilterTo?.value || "");
   }
 
+  function setAuditFilterSelectValue(select, value) {
+    if (!select) {
+      return;
+    }
+    select.value = value;
+    if (select.value === value) {
+      delete select.dataset.pendingValue;
+    } else {
+      // The option is not listed yet (the filter facets are still loading): apply it when they arrive.
+      select.dataset.pendingValue = value;
+    }
+  }
+
   function writeAuditFiltersToForm() {
-    if (elements.auditFilterEvent) elements.auditFilterEvent.value = state.auditFilters.event;
-    if (elements.auditFilterActor) elements.auditFilterActor.value = state.auditFilters.actor;
-    if (elements.auditFilterEntityType) elements.auditFilterEntityType.value = state.auditFilters.entityType;
+    setAuditFilterSelectValue(elements.auditFilterEvent, state.auditFilters.event);
+    setAuditFilterSelectValue(elements.auditFilterActor, state.auditFilters.actor);
+    setAuditFilterSelectValue(elements.auditFilterEntityType, state.auditFilters.entityType);
     if (elements.auditFilterQ) elements.auditFilterQ.value = state.auditFilters.q;
     if (elements.auditFilterFrom) elements.auditFilterFrom.value = state.auditFilters.from;
     if (elements.auditFilterTo) elements.auditFilterTo.value = state.auditFilters.to;
@@ -4509,8 +4524,8 @@
     } catch (_error) {
       state.auditFacets = null;
     }
+    // Only the option lists change here: rewriting the form would wipe anything typed since the last search.
     renderAuditFilterOptions();
-    writeAuditFiltersToForm();
   }
 
   function renderBlockedIps(blockedIps) {
@@ -11859,6 +11874,11 @@
     if (elements.auditFilterForm) {
       elements.auditFilterForm.addEventListener("submit", handleAuditFilterSubmit);
     }
+    [elements.auditFilterEvent, elements.auditFilterActor, elements.auditFilterEntityType].forEach((select) => {
+      select?.addEventListener("change", () => {
+        delete select.dataset.pendingValue;
+      });
+    });
     if (elements.auditFilterClear) {
       elements.auditFilterClear.addEventListener("click", handleAuditFilterClear);
     }

@@ -128,3 +128,30 @@ def test_clicking_an_account_filters_to_it(activity_page):
     expect(_rows(page).filter(has_not=page.locator("[data-audit-actor]:text-is('Admin User')"))).to_have_count(0)
     names = set(page.locator("#audit-table-body [data-audit-actor]").all_inner_texts())
     assert names == {"Admin User"}
+
+
+@pytest.mark.functional
+@pytest.mark.ui
+def test_filter_options_arriving_late_keep_what_was_typed(activity_page):
+    """The filter option lists reload with each search; they must not wipe a search being typed."""
+    page, _jigsaw_id, _other_id = activity_page
+    held = []
+    page.route("**/api/v1/audit-events/facets", lambda route: held.append(route))
+
+    page.click("#audit-filter-clear")
+    for _ in range(100):
+        if held:
+            break
+        page.wait_for_timeout(50)
+    assert held, "the filter options were not reloaded"
+    page.fill("#audit-filter-q", "autumn lake")
+
+    for route in held:
+        route.continue_()
+    page.unroute("**/api/v1/audit-events/facets")
+    expect(page.locator("#audit-table-body tr")).to_have_count(4)  # The cleared search has finished.
+    assert page.input_value("#audit-filter-q") == "autumn lake"
+
+    page.click("#audit-filter-apply")
+    expect(_rows(page)).to_have_count(1)
+    expect(_rows(page).first).to_contain_text("Autumn Lake")
