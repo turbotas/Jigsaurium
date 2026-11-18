@@ -9,7 +9,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.build_info import apply_git_build_info
 from app.db import get_session, init_db
-from app.dev_server import install_forwarded_aware_werkzeug_logging
+from app.dev_server import install_forwarded_aware_werkzeug_logging, is_reloader_watcher_process
 from app.image_embeddings import warm_embedding_runtime
 from app.request_security import (
     AUTO_BLOCK_SOURCE,
@@ -191,6 +191,10 @@ def _warm_embeddings_on_startup(app):
     if not bool(app.config.get("IMAGE_EMBEDDINGS_ENABLED", False)):
         return
     if not bool(app.config.get("IMAGE_EMBEDDINGS_WARM_ON_STARTUP", True)):
+        return
+    if is_reloader_watcher_process():
+        # The dev auto-reloader's watcher never serves requests; the serving process warms the model.
+        app.logger.info("image_embeddings_startup_warm_skipped_reloader_watcher")
         return
 
     model_name = str(app.config.get("IMAGE_EMBEDDING_MODEL_NAME") or "").strip() or "openai/clip-vit-base-patch32"
