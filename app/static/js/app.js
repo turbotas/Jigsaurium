@@ -124,6 +124,7 @@
     aiUsageDiagnostics: null,
     imageEmbeddingDiagnostics: null,
     aiUsageRecentById: {},
+    backupDownloadUrlsById: {},
     imageBrowserContentCacheByImageId: {},
     imageBrowserSavingImageIds: {},
     diaryEntries: [],
@@ -4609,9 +4610,20 @@
     });
   }
 
+  // Only same-site download paths: never follow a link that would leave the app or run as script.
+  function sameOriginDownloadUrl(value) {
+    try {
+      const url = new URL(String(value || ""), window.location.origin);
+      return url.origin === window.location.origin ? url.pathname + url.search : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
   function renderDatabaseBackups(backups) {
     const tableBody = elements.databaseBackupsTableBody;
     clearTableBody(tableBody);
+    state.backupDownloadUrlsById = {};
 
     if (!Array.isArray(backups) || backups.length === 0) {
       appendEmptyRow(tableBody, 8, "No database backups yet.");
@@ -4635,13 +4647,15 @@
       const statusText = String(entry.status || "").toLowerCase();
       const backupId = Number(entry.id || 0);
 
-      if (statusText === "completed" && typeof entry.download_url === "string" && entry.download_url) {
+      const downloadUrl = statusText === "completed" ? sameOriginDownloadUrl(entry.download_url) : "";
+      if (downloadUrl) {
+        // Keep the link in state, not in the page, so the click never navigates to text read back from the DOM.
+        state.backupDownloadUrlsById[String(backupId)] = downloadUrl;
         const downloadButton = document.createElement("button");
         downloadButton.type = "button";
         downloadButton.className = "govuk-button govuk-button--secondary govuk-!-margin-bottom-0";
         downloadButton.setAttribute("data-module", "govuk-button");
         downloadButton.setAttribute("data-backup-download", String(backupId));
-        downloadButton.setAttribute("data-backup-download-url", String(entry.download_url));
         downloadButton.textContent = "Download";
         actionCell.appendChild(downloadButton);
       }
@@ -10609,7 +10623,7 @@
     const backupDownloadButton = event.target.closest("[data-backup-download]");
     if (backupDownloadButton) {
       event.preventDefault();
-      const downloadUrl = String(backupDownloadButton.getAttribute("data-backup-download-url") || "").trim();
+      const downloadUrl = state.backupDownloadUrlsById[String(backupDownloadButton.getAttribute("data-backup-download") || "")];
       if (!downloadUrl) {
         showFeedback("Download link is unavailable for this backup.", true);
         return;

@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: "0 3 * * 0"
 
+permissions:
+  contents: read
+
 jobs:
   embedding-tests:
     name: Embedding Runtime Tests
