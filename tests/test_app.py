@@ -4,6 +4,7 @@ import re
 import app as app_module
 
 from app import create_app
+from app.dev_server import DEV_RELOADER_ENV, is_reloader_watcher_process
 
 
 @pytest.mark.functional
@@ -437,3 +438,68 @@ def test_static_assets_disable_cache_in_test_env(client):
     assert response.status_code == 200
     assert "no-store" in response.headers.get("Cache-Control", "")
     assert response.headers.get("Pragma") == "no-cache"
+
+
+FLASK_RELOAD_ARGV = ["flask", "--app", "run:app", "run", "--host", "0.0.0.0", "--reload", "--no-debugger"]
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    ("argv", "environ", "expected"),
+    [
+        (FLASK_RELOAD_ARGV, {}, True),
+        (FLASK_RELOAD_ARGV, {"WERKZEUG_RUN_MAIN": "true"}, False),
+        (["run.py"], {DEV_RELOADER_ENV: "1"}, True),
+        (["run.py"], {DEV_RELOADER_ENV: "1", "WERKZEUG_RUN_MAIN": "true"}, False),
+        (["flask", "--app", "run:app", "run", "--host", "0.0.0.0"], {}, False),
+        (["gunicorn", "--config", "gunicorn.conf.py", "run:app"], {}, False),
+        (["pytest", "--reload"], {}, False),
+    ],
+    ids=[
+        "flask-watcher",
+        "flask-serving-child",
+        "run-py-watcher",
+        "run-py-serving-child",
+        "flask-no-reload",
+        "gunicorn",
+        "reload-not-after-run",
+    ],
+)
+def test_is_reloader_watcher_process(argv, environ, expected):
+    assert is_reloader_watcher_process(argv=argv, environ=environ) is expected
+
+
+def _warm_counting_config():
+    class DevConfig:
+        APP_ENV = "dev"
+        SECRET_KEY = "dev-secret-key"
+        TESTING = True
+        IMAGE_EMBEDDINGS_ENABLED = True
+        IMAGE_EMBEDDINGS_WARM_ON_STARTUP = True
+        IMAGE_EMBEDDING_MODEL_LOCAL_PATH = ".hf-models/clip-vit-base-patch32"
+
+    return DevConfig
+
+
+@pytest.mark.functional
+@pytest.mark.parametrize(
+    ("argv", "environ", "expected_loads"),
+    [
+        (FLASK_RELOAD_ARGV, {}, 0),
+        (FLASK_RELOAD_ARGV, {"WERKZEUG_RUN_MAIN": "true"}, 1),
+        (["gunicorn", "run:app"], {}, 1),
+    ],
+    ids=["reloader-watcher-skips", "serving-child-loads", "no-reloader-loads"],
+)
+def test_startup_warm_runs_only_in_the_serving_process(monkeypatch, argv, environ, expected_loads):
+    loads = []
+    monkeypatch.setattr(app_module, "warm_embedding_runtime", lambda **kwargs: loads.append(kwargs) or {})
+    monkeypatch.setattr("sys.argv", argv)
+    monkeypatch.delenv("WERKZEUG_RUN_MAIN", raising=False)
+    monkeypatch.delenv(DEV_RELOADER_ENV, raising=False)
+    for name, value in environ.items():
+        monkeypatch.setenv(name, value)
+
+    create_app(_warm_counting_config())
+
+    assert len(loads) == expected_loads

@@ -32,6 +32,8 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - Core image runtime depends on Pillow plus `pillow-heif` so HEIF/HEIC uploads can be decoded for metadata extraction and derivative generation.
 - Production/test deployment target is CPU-only; install PyTorch from the CPU wheel index only and do not install CUDA/NVIDIA runtime packages.
 - Use `requirements/known-good-dev.txt` and `requirements/known-good-prod.txt` as constraints files for reproducible installs.
+- The weekly Dependency Refresh keeps the lock files current. A dev checkout's `.venv` follows them through `scripts/sync_dev_venv.py`: in `APP_ENV=dev`, `run.bat` / `run.sh` compare the venv with `known-good-dev.txt` before starting. If anything is missing or at another version, they install the locked versions with the same command as `scripts/setup_venv`, plus Playwright's Chromium build when Playwright changed. Startup continues with a warning if that fails.
+- `STARTUP_VENV_SYNC` (launcher shell variable, dev only, default `1`): set `0` to report differences without installing. Like `STARTUP_UPDATE_CHECK`, the launcher reads it from the shell, not from `.env`.
 - `requirements.txt` points to production dependencies for compatibility.
 
 - `DATABASE_URL`: SQLAlchemy MariaDB connection string.
@@ -80,6 +82,7 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `IMAGE_EMBEDDING_MODEL_LOCAL_PATH`: optional local filesystem path for vendored model artifacts; when set, runtime loads from disk path instead of Hub repo id.
 - `IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY`: when `1`, forbid network fetches while loading embeddings (`local_files_only=True`).
 - `IMAGE_EMBEDDINGS_WARM_ON_STARTUP`: when `1`, force model load during app startup so first request does not absorb model-load latency.
+  With dev auto-reload (`run.bat`, `run.sh`), only the process that serves requests loads the model. The reloader's file-watching process skips it and logs `image_embeddings_startup_warm_skipped_reloader_watcher`. `run.py` marks that process with `JIGSAURIUM_DEV_RELOADER=1`; this is internal, not a setting to configure.
 - `IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR`: when `1`, fail app startup if embedding warm-load fails.
 - `IMAGE_EMBEDDINGS_INLINE`: optional boolean for embedding generation mode (`false` = background threads, `true` = inline).
 - `IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK`: optional boolean to allow deterministic non-CLIP fallback embeddings in test-only environments.

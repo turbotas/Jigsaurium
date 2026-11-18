@@ -13,18 +13,13 @@ if exist ".venv\Scripts\python.exe" (
   set "PYTHON_CMD=python"
 )
 
-echo Python package update status:
-set "PIP_OUTDATED_FILE=%TEMP%\jigsaurium_pip_outdated_%RANDOM%_%RANDOM%.txt"
-%PYTHON_CMD% -m pip list --outdated > "%PIP_OUTDATED_FILE%"
-set "UPDATES_EXIT=%ERRORLEVEL%"
-
-for %%A in ("%PIP_OUTDATED_FILE%") do set "PIP_OUTDATED_SIZE=%%~zA"
-if "!PIP_OUTDATED_SIZE!"=="0" (
-  echo   All Python packages are up to date
-) else (
-  type "%PIP_OUTDATED_FILE%"
+rem Python packages are compared with the reviewed lock, not with the newest releases on PyPI: the
+rem weekly Dependency Refresh brings newer releases into the lock. run.bat passes --no-python because
+rem it has already checked (and synced) the venv.
+set "UPDATES_EXIT=0"
+if /I not "%~1"=="--no-python" (
+  %PYTHON_CMD% scripts\sync_dev_venv.py --profile dev
 )
-del "%PIP_OUTDATED_FILE%" >nul 2>&1
 
 set "HAS_NPM=0"
 where npm >nul 2>&1 && set "HAS_NPM=1"

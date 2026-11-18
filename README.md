@@ -78,6 +78,7 @@ If needed on Linux/macOS, make helper scripts executable: `chmod +x scripts/*.sh
    - Startup scripts now warn when the configured database appears behind the latest Alembic head.
     - In `APP_ENV=dev`, startup scripts also run dependency freshness checks (Python packages + GOV.UK frontend npm status).
     - Set `STARTUP_UPDATE_CHECK=0` to skip startup dependency checks.
+    - In `APP_ENV=dev`, startup scripts also bring `.venv` in line with `requirements/known-good-dev.txt` when it differs (`STARTUP_VENV_SYNC=0` to only report).
 
 ### Simple Mode quick start (recommended first run)
 
@@ -226,7 +227,10 @@ For evaluator/quick-start environments, you can populate predictable demo record
 - Check outdated dependencies:
   - Windows: `scripts\check_updates.bat`
   - Linux/macOS: `./scripts/check_updates.sh`
-- Update check scripts report both Python package updates and GOV.UK frontend pinned/installed/latest versions.
+- Update check scripts report Python packages against the dependency lock (`requirements/known-good-dev.txt`), plus GOV.UK frontend pinned/installed/latest versions. Newer releases on PyPI reach the lock through the weekly Dependency Refresh PR, not through local installs.
+- Keep the dev venv in line with the lock after pulling:
+  - `run.bat` / `run.sh` do this automatically in dev, only installing when something differs. Set `STARTUP_VENV_SYNC=0` to report differences without installing.
+  - By hand: `.venv\Scripts\python.exe scripts\sync_dev_venv.py --sync` (Windows) or `.venv/bin/python scripts/sync_dev_venv.py --sync` (Linux/macOS). Leave out `--sync` to only report.
 - Targeted Python dependency updates with known-good lock refresh:
   - Full profile promotion (recommended):
     - Windows: `scripts\update_python_dependencies.bat`
