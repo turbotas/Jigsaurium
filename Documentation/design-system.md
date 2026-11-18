@@ -18,6 +18,7 @@ Use GOV.UK Design System components and interaction patterns by default.
 - Preserve keyboard accessibility and visible focus states.
 - Use consistent GOV.UK spacing and typography scales.
 - Use accessible error summaries and field-level error messaging.
+- Error messages say what happened and whether to retry, in plain language. API errors (JSON) are shown as the API words them; anything else (a proxy error page, a dropped connection, a timeout) uses the shared wording in `app/static/js/http-errors.js`, and raw responses are never shown to the user (they are logged to the browser console).
 
 ## Upstream Update Workflow
 

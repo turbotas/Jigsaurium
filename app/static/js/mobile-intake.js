@@ -4,6 +4,8 @@
     return;
   }
 
+  const httpErrors = window.JigsauriumHttpErrors;
+
   const slotTagMap = {
     box_front: "Box front",
     box_side: "Box side",
@@ -675,7 +677,7 @@
     });
     const payload = await parseJsonSafe(response);
     if (!response.ok) {
-      const message = payload?.error?.message || "Sign in failed.";
+      const message = payload?.error?.message || (response.status >= 500 ? httpErrors.messageForStatus(response.status) : "Sign in failed.");
       throw new Error(message);
     }
 
@@ -721,6 +723,15 @@
     return state.csrfToken;
   }
 
+  // A failed fetch (no answer at all) surfaces as the browser's own TypeError text, such as
+  // "Failed to fetch"; say what that means instead.
+  function userFacingErrorMessage(error, fallback) {
+    if (error instanceof TypeError) {
+      return httpErrors.networkFailureMessage();
+    }
+    return error?.message || fallback;
+  }
+
   async function apiRequest(path, options = {}) {
     const headers = new Headers(options.headers || {});
     headers.set("Accept", "application/json");
@@ -734,21 +745,41 @@
       headers.set("X-CSRF-Token", csrfToken);
     }
 
-    const response = await fetch(path, {
-      credentials: "same-origin",
-      ...options,
-      method,
-      headers,
-    });
-    const payload = await parseJsonSafe(response);
+    let response;
+    try {
+      response = await fetch(path, {
+        credentials: "same-origin",
+        ...options,
+        method,
+        headers,
+      });
+    } catch (error) {
+      const failure = new Error(httpErrors.networkFailureMessage());
+      failure.status = 0;
+      failure.cause = error;
+      throw failure;
+    }
+    const responseText = await response.text();
+    let payload = {};
+    try {
+      payload = responseText ? JSON.parse(responseText) : {};
+    } catch (_error) {
+      payload = {};
+    }
 
     if (!response.ok) {
       const details = Array.isArray(payload?.error?.details) ? payload.error.details : [];
       const detailsText = details
         .map((entry) => `${entry?.field || "payload"}: ${entry?.issue || "is invalid"}`)
         .join("; ");
-      const message = payload?.error?.message || `Request failed (${response.status}).`;
-      throw new Error(detailsText ? `${message} ${detailsText}` : message);
+      if (!payload?.error?.message) {
+        // Not an API error (for example the proxy's HTML page for a 504): never show that markup.
+        httpErrors.logRawFailure(path, response.status, responseText);
+      }
+      const message = payload?.error?.message || httpErrors.messageForStatus(response.status);
+      const failure = new Error(detailsText ? `${message} ${detailsText}` : message);
+      failure.status = response.status;
+      throw failure;
     }
     return payload;
   }
@@ -994,7 +1025,7 @@
       setStatus(`Mobile capture complete. Created jigsaw #${jigsawId}${enrichSuffix}.${warningSuffix}${enrichSkippedSuffix}`);
       clearForm();
     } catch (error) {
-      setStatus(error.message || "Mobile capture workflow failed.", true);
+      setStatus(userFacingErrorMessage(error, "Mobile capture workflow failed."), true);
     } finally {
       setSubmitting(false);
     }
@@ -1028,7 +1059,7 @@
       });
       const payload = await parseJsonSafe(response);
       if (!response.ok) {
-        const message = payload?.error?.message || "Sign in failed.";
+        const message = payload?.error?.message || (response.status >= 500 ? httpErrors.messageForStatus(response.status) : "Sign in failed.");
         throw new Error(message);
       }
 
@@ -1041,7 +1072,7 @@
         loginPasswordInput.value = "";
       }
     } catch (error) {
-      setStatus(error.message || "Sign in failed.", true);
+      setStatus(userFacingErrorMessage(error, "Sign in failed."), true);
     }
   }
 
@@ -1110,7 +1141,7 @@
     .catch((error) => {
       syncAuthUi(null);
       if (error?.message) {
-        setStatus(error.message, true);
+        setStatus(userFacingErrorMessage(error, "Something went wrong."), true);
       }
     });
 })();

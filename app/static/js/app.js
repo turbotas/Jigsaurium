@@ -590,6 +590,8 @@
     elements.imageLibraryLoadSummary.textContent = String(message || "");
   }
 
+  const httpErrors = window.JigsauriumHttpErrors;
+
   async function apiRequest(path, options = {}) {
     const { timeoutMs: timeoutMsOption, ...fetchOptions } = options || {};
     const headers = new Headers(options.headers || {});
@@ -638,10 +640,17 @@
         signal: abortController.signal,
       });
     } catch (error) {
-      if (error?.name === "AbortError") {
-        throw new Error(`Request timed out after ${timeoutSeconds}s.`);
-      }
-      throw error;
+      // No HTTP answer at all: a timeout, or the network or server is unreachable.
+      const failure = new Error(
+        error?.name === "AbortError" && !parentSignal?.aborted
+          ? httpErrors.timeoutMessage(timeoutSeconds)
+          : error?.name === "AbortError"
+            ? "The request was cancelled."
+            : httpErrors.networkFailureMessage()
+      );
+      failure.status = 0;
+      failure.cause = error;
+      throw failure;
     } finally {
       if (timeoutHandle !== null) {
         clearTimeout(timeoutHandle);
@@ -668,8 +677,11 @@
         })
         .join("; ");
       const baseMessage = payload?.error?.message || "Request failed.";
-      const fallbackSnippet = responseText ? responseText.replace(/\s+/g, " ").trim().slice(0, 180) : "";
-      const fallbackMessage = fallbackSnippet ? `HTTP ${response.status}: ${fallbackSnippet}` : `HTTP ${response.status}`;
+      if (!payload?.error?.message) {
+        // Not an API error (for example the proxy's HTML page for a 504): never show that markup.
+        httpErrors.logRawFailure(path, response.status, responseText);
+      }
+      const fallbackMessage = httpErrors.messageForStatus(response.status);
       const message = detailMessage ? `${baseMessage} ${detailMessage}` : payload?.error?.message ? baseMessage : fallbackMessage;
       if (payload?.error?.code === "step_up_required") {
         const role = typeof details[0]?.issue === "string" ? details[0].issue : "";
