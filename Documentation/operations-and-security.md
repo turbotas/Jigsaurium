@@ -80,6 +80,7 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `IMAGE_EMBEDDING_MODEL_LOCAL_PATH`: optional local filesystem path for vendored model artifacts; when set, runtime loads from disk path instead of Hub repo id.
 - `IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY`: when `1`, forbid network fetches while loading embeddings (`local_files_only=True`).
 - `IMAGE_EMBEDDINGS_WARM_ON_STARTUP`: when `1`, force model load during app startup so first request does not absorb model-load latency.
+  With dev auto-reload (`run.bat`, `run.sh`), only the process that serves requests loads the model. The reloader's file-watching process skips it and logs `image_embeddings_startup_warm_skipped_reloader_watcher`. `run.py` marks that process with `JIGSAURIUM_DEV_RELOADER=1`; this is internal, not a setting to configure.
 - `IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR`: when `1`, fail app startup if embedding warm-load fails.
 - `IMAGE_EMBEDDINGS_INLINE`: optional boolean for embedding generation mode (`false` = background threads, `true` = inline).
 - `IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK`: optional boolean to allow deterministic non-CLIP fallback embeddings in test-only environments.
