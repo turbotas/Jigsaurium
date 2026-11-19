@@ -426,6 +426,14 @@
 - Consequences: covered by browser tests that slow the save and image endpoints (`tests/test_ui_image_browser_saves.py`). If the open image is deleted or filtered out, the image now in its place opens.
 
 
+## 2026-11-19 - SBOM of the Prod Image on Each Prod Promotion (Issue #107)
+
+- Decision: after every promotion to `prod`, scan the promoted digest with Syft and attach a CycloneDX SBOM and a Markdown report to that version's GitHub Release. Add what no package manager installed (GOV.UK Frontend, Lexend, the CLIP model, Jigsaurium itself) from `scripts/sbom_extra_components.json`.
+- Why: the build already attaches a BuildKit SBOM to each image, but it sits inside the private GHCR package where security and legal reviewers cannot easily see it, and it misses the vendored files and the model. Prod is what reviewers care about, so the record is made when an image reaches prod, not for every build.
+- Decision: the SBOM job runs after the pointer moves and cannot fail the promotion. It is metadata, not a gate.
+- Decision: CycloneDX only (no SPDX) plus a readable report; no signing, since the images are not signed. Unknown licences are reported, not failed on.
+- Consequences: a release that never reached prod has no SBOM attached. `build-image.yml` grants its promote jobs `contents: write` because the called workflow's SBOM job uploads release files. The extra components list is kept by hand and checked by tests against `package.json`, the `Dockerfile` and `THIRD_PARTY_NOTICES.md`.
+
 ## 2026-11-19 - Keep Only Recently Deployed Images in GHCR (Issue #109)
 
 - Decision: a weekly workflow deletes container images except those of the last 5 successful `prod` and last 5 successful `test` deployments, the current pointer targets, and anything pushed in the last 3 hours.

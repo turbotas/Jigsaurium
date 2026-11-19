@@ -57,6 +57,7 @@ Used to build or test Jigsaurium; none of these end up in the app or the image.
 | pytest | Tests | MIT |
 | python-dotenv | Local configuration | BSD-3-Clause |
 | playwright | Browser tests | Apache-2.0 |
+| Syft (run by `anchore/sbom-action` in CI) | Scans the prod image for its SBOM | Apache-2.0 |
 
 ## Services called but not shipped
 

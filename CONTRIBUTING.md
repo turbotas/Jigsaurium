@@ -19,7 +19,7 @@ This project uses documented specs and guardrails. Please read these first:
 - Keep behavior aligned with existing specs.
 - If behavior must change, update docs in the same change.
 - Do not edit vendored GOV.UK source directly.
-- Adding or replacing a dependency, font, image, model or other third-party file: update the licence index in `THIRD_PARTY_NOTICES.md` in the same change, and commit any licence text the component requires next to the shipped files (as with `app/static/fonts/lexend/OFL.txt` and `app/static/vendor/govuk/LICENSE.txt`).
+- Adding or replacing a dependency, font, image, model or other third-party file: update the licence index in `THIRD_PARTY_NOTICES.md` in the same change, and commit any licence text the component requires next to the shipped files (as with `app/static/fonts/lexend/OFL.txt` and `app/static/vendor/govuk/LICENSE.txt`). If no package manager installs it into the image (vendored files, fonts, models), also list it in `scripts/sbom_extra_components.json` so the prod SBOM includes it.
 - Enforce authorization in backend APIs, not UI only.
 - Add/update tests for behavior changes.
 

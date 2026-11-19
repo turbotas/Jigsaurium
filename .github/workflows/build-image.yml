@@ -142,6 +142,10 @@ jobs:
   promote-test:
     name: Promote to test
     needs: build
+    # The called workflow's prod-only SBOM job attaches files to the release.
+    permissions:
+      contents: write
+      packages: write
     uses: ./.github/workflows/promote-pointer-tag.yml
     with:
       source_ref: ${{ needs.build.outputs.digest }}
@@ -150,6 +154,10 @@ jobs:
   promote-prod:
     name: Promote to prod (needs approval)
     needs: [build, promote-test]
+    # The called workflow's prod-only SBOM job attaches files to the release.
+    permissions:
+      contents: write
+      packages: write
     uses: ./.github/workflows/promote-pointer-tag.yml
     with:
       source_ref: ${{ needs.build.outputs.digest }}

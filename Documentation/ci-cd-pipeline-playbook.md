@@ -31,7 +31,9 @@ between projects.
 | `vX.Y.Z` | No | release tag | Named release |
 | `test`, `prod` (`dev` optional) | Yes | promote workflow | Desired state per environment |
 
-Every build also records its `sha256:` digest, an SBOM and build provenance attestation.
+Every build also records its `sha256:` digest, an SBOM and build provenance attestation (unsigned,
+stored with the image in GHCR). Each promotion to `prod` also attaches a readable SBOM report and a
+CycloneDX SBOM to that version's GitHub Release (issue #107).
 
 ## 4. Pipeline flow
 
@@ -108,6 +110,9 @@ Human PR ───────────────────────�
   The `prod` Environment must exist with its reviewer **before** `build-image.yml` is merged, or
   the first build would promote prod without asking.
 - Rollback = promote an earlier `vX.Y.Z` to `prod`. Same path, same approval.
+- Jigsaurium: after every `prod` promotion (rollbacks included) a separate `sbom` job scans the
+  promoted digest and attaches the SBOM files to that version's Release. It runs after the pointer
+  moves and cannot fail the promotion; see `operations-and-security.md`.
 - Jigsaurium: old images are deleted weekly (`prune-images.yml`), so only the images of the last 5
   prod and last 5 test deployments can be rolled back to; see `operations-and-security.md`.
 
@@ -224,7 +229,8 @@ per-app inputs below are all that need editing.
 5. **Image size / build time.** The image bakes in torch and the CLIP model; builds need layer
    caching. Consider a separate cached base layer for the model.
 6. **Supply chain.** Scan + SBOM + provenance included; signature verification on the NAS is
-   optional but recommended.
+   optional but recommended. Jigsaurium does not sign images yet, so the SBOM is not signed either;
+   if images are signed later, sign the SBOM at the same time.
 
 ## 8. Rollout order
 
