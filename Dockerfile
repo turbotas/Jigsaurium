@@ -4,7 +4,6 @@ FROM python:3.12-slim
 # that it does not invalidate the cached OS and Python layers on every build.
 ARG IMAGE_EMBEDDING_MODEL_NAME=openai/clip-vit-base-patch32
 ARG IMAGE_EMBEDDING_MODEL_REVISION=3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268
-ARG HF_TOKEN=
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -40,9 +39,12 @@ COPY . .
 
 RUN chmod +x ./scripts/docker_entrypoint.sh
 
-RUN python - <<'PY'
+# An optional Hugging Face token comes in as a BuildKit secret, never a build argument, so it stays
+# out of the image and its build history: docker build --secret id=hf_token,env=HF_TOKEN .
+RUN --mount=type=secret,id=hf_token python - <<'PY'
 import os
 import shutil
+from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
@@ -60,7 +62,8 @@ else:
         "revision": os.environ["IMAGE_EMBEDDING_MODEL_REVISION"],
         "local_dir": target,
     }
-    token = str(os.environ.get("HF_TOKEN", "") or "").strip()
+    secret = Path("/run/secrets/hf_token")
+    token = secret.read_text(encoding="utf-8").strip() if secret.is_file() else ""
     if token:
         kwargs["token"] = token
     snapshot_download(**kwargs)

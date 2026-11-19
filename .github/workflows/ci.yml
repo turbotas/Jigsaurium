@@ -29,9 +29,9 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: requirements/dev.txt
 
+      # No pip cache: installs use --no-cache-dir, so setup-python's cache would only warn that
+      # there was nothing to save (issue #108).
       - name: Install dependencies
         run: python -m pip install --no-cache-dir -r requirements/dev.txt -c requirements/known-good-dev.txt
 
@@ -60,9 +60,9 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: requirements/dev.txt
 
+      # No pip cache: installs use --no-cache-dir, so setup-python's cache would only warn that
+      # there was nothing to save (issue #108).
       - name: Install dependencies
         run: python -m pip install --no-cache-dir -r requirements/dev.txt -c requirements/known-good-dev.txt
 

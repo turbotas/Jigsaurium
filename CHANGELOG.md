@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The image build takes an optional Hugging Face token as a BuildKit secret (`--secret id=hf_token`) instead of the `HF_TOKEN` build argument, and CI no longer sets up an unused pip cache; both removed build warnings (issue #108).
 - Jigsaurium now uses the Lexend typeface instead of GOV.UK's GDS Transport (issue #85).
 
 ## [v0.1.0] - 2026-11-06
