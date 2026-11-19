@@ -111,6 +111,8 @@ Workflows expected for release operations:
 
 This avoids rebuilding during promotion and avoids local GHCR auth drift.
 
+Promoting to `prod` also attaches an SBOM report and a CycloneDX SBOM of that image to the version's GitHub Release, after the pointer has moved (see `operations-and-security.md`, "Software Bill of Materials").
+
 ## Recommended Promotion Sequence
 
 1. Push `master` to remote.

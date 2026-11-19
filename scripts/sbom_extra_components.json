@@ -1,0 +1,28 @@
+{
+  "_comment": "Components in the image that SBOM scanners cannot find, because no package manager installed them. scripts/sbom_report.py adds them (and Jigsaurium itself) to the scanned SBOM. Keep in line with THIRD_PARTY_NOTICES.md; tests/test_sbom_report.py checks the versions against package.json and the Dockerfile.",
+  "components": [
+    {
+      "type": "library",
+      "name": "govuk-frontend",
+      "version": "6.6.0",
+      "description": "GOV.UK Frontend JavaScript, and CSS compiled from its Sass, in /app/app/static/vendor/govuk/",
+      "purl": "pkg:npm/govuk-frontend@6.6.0",
+      "licenses": [{"license": {"id": "MIT"}}]
+    },
+    {
+      "type": "file",
+      "name": "Lexend typeface",
+      "version": "5.3.0",
+      "description": "Font files from @fontsource/lexend, in /app/app/static/fonts/lexend/",
+      "purl": "pkg:npm/%40fontsource/lexend@5.3.0",
+      "licenses": [{"license": {"id": "OFL-1.1"}}]
+    },
+    {
+      "type": "machine-learning-model",
+      "name": "openai/clip-vit-base-patch32",
+      "version": "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
+      "description": "CLIP image-embedding model weights, in /opt/models/clip-vit-base-patch32. The Hugging Face model page declares no licence; OpenAI's CLIP code repository is MIT.",
+      "purl": "pkg:huggingface/openai/clip-vit-base-patch32@3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
+    }
+  ]
+}

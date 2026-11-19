@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Initialized changelog for public release process tracking.
+- Each promotion to prod attaches an SBOM report and a CycloneDX SBOM of the prod image to its GitHub Release (issue #107).
 
 ### Changed
 

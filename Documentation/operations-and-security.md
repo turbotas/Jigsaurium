@@ -113,6 +113,7 @@ Host enforcement policy:
   - Windows: `.venv\Scripts\python.exe scripts\prefetch_embedding_model.py`
   - Linux/macOS: `.venv/bin/python scripts/prefetch_embedding_model.py`
 - Optional: pass `--token` or set `HF_TOKEN` for higher download limits.
+- The image build accepts `HF_TOKEN` as a build argument, but CI never passes one. Build arguments can show in the image's build history, so if a token is ever needed for the image build, pass it as a BuildKit secret (`--secret`) instead.
 - With `IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY=1`, startup and embedding requests fail fast if that local path is missing or incomplete.
 - Development exception: when `APP_ENV=dev`, startup warm-load logs a warning and continues if the configured local model path is missing, even when startup fail-fast is enabled. This prevents local boot failures after env-file changes; embedding endpoints remain unavailable until the model is prefetched or embeddings are disabled.
 
@@ -226,6 +227,19 @@ location / {
 - The declared type is not trusted: uploaded bytes (including zip entries) must decode as one of those formats, and the stored MIME type is the detected one.
 - Unauthenticated callers only receive re-encoded thumbnail/preview derivatives. When a derivative could not be generated, guests get `404` rather than the original upload bytes.
 - One-off after upgrading from a version before v0.2.11: images uploaded while Pillow was unavailable (Pillow 13 import bug) stored the original bytes as their thumbnail/preview, so guests received original photos including EXIF data. Run `scripts/regenerate_image_derivatives.py` inside the app container, or from the repo with the venv Python for an environment started with `run.bat`/`run.sh` (it reads the repo's `.env`). Use `--dry-run` first to see the count. It re-encodes those derivatives, bumps `content_version` so cached copies are not reused, records one `system.image_derivatives_regenerated` audit event, and is safe to re-run.
+
+## Software Bill of Materials (SBOM)
+
+Every promotion to `prod` records what the prod image contains (issue #107).
+
+- When: the `sbom` job in `promote-pointer-tag.yml`, after the `prod` pointer has moved. It is a record, not a gate: it cannot block or fail the promotion, and a failure shows as a warning on the run. Rollbacks get one the same way. Images that only reach `test` get none.
+- What: Syft (CycloneDX JSON) scans the promoted digest and finds the Debian and Python packages. `scripts/sbom_report.py` adds what no package manager installed, listed in `scripts/sbom_extra_components.json` (GOV.UK Frontend, the Lexend font, the CLIP model), plus Jigsaurium itself. The list is read from the image's own commit, so a rollback lists what that image holds.
+- Where: both files are attached to the GitHub Release for the image's version (`org.opencontainers.image.version` label), replacing any earlier copies, and kept as an artifact of the run:
+  - `jigsaurium-vX.Y.Z-sbom.md`: the report for people (a Markdown file: the release offers it as a download, and the run summary shows its top part formatted): the digest, a count by type, a licence summary, components the scanner found no licence for (some Python packages state theirs only as a PyPI classifier, which Syft does not read), and every component with its version and licence.
+  - `jigsaurium-vX.Y.Z-sbom.cdx.json`: the CycloneDX SBOM for tools, for example `trivy sbom jigsaurium-vX.Y.Z-sbom.cdx.json` to list known vulnerabilities in it.
+- Scope: the Jigsaurium image only, not the database, reverse proxy or host.
+- Licences are as each package declares them. Unknown licences are reported, never failed on. `THIRD_PARTY_NOTICES.md` stays the reviewed licence index; `tests/test_sbom_report.py` checks the extra components against `package.json`, the `Dockerfile` and that index.
+- Not signed, because the images are not signed either.
 
 ## Release Checks (manual now, automated later)
 
