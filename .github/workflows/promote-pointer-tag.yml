@@ -42,6 +42,9 @@ jobs:
     name: Promote to ${{ inputs.target_pointer }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.target_pointer }}
+    outputs:
+      digest: ${{ steps.promoted.outputs.digest }}
+      image_name: ${{ steps.refs.outputs.image_name }}
 
     steps:
       - name: Set up Docker Buildx
@@ -93,10 +96,112 @@ jobs:
         run: docker buildx imagetools create --tag "${IMAGE_NAME}:${TARGET}" "${SOURCE_IMAGE}"
 
       - name: Show promoted digest
+        id: promoted
         env:
           IMAGE_NAME: ${{ steps.refs.outputs.image_name }}
           TARGET: ${{ inputs.target_pointer }}
         run: |
           DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:${TARGET}" --format '{{json .Manifest}}' | jq -r .digest)"
           echo "Promoted ${TARGET} -> ${DIGEST}"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "**${TARGET}** -> \`${IMAGE_NAME}@${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # After prod has moved: record what the prod image contains (issue #107). The SBOM is a record,
+  # not a gate, so this job runs after the pointer moves and a failure here only shows a warning;
+  # prod has already been promoted. Rollbacks get an SBOM the same way.
+  sbom:
+    name: SBOM for prod
+    needs: promote
+    if: inputs.target_pointer == 'prod'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write # attach the files to the GitHub Release
+      packages: read
+
+    steps:
+      - name: Check out the report script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The build labels each image with its version and commit. Use that commit's list of extra
+      # components when it has one, so a rollback to an older release lists what that image holds.
+      - name: Read the image's version and commit
+        id: image
+        env:
+          IMAGE_NAME: ${{ needs.promote.outputs.image_name }}
+          DIGEST: ${{ needs.promote.outputs.digest }}
+        run: |
+          labels="$(docker buildx imagetools inspect "${IMAGE_NAME}@${DIGEST}" --format '{{json .Image}}' \
+            | jq -c 'if has("config") then .config.Labels else ([to_entries[] | select(.key | startswith("linux/"))][0].value.config.Labels) end')"
+          VERSION="$(jq -r '.["org.opencontainers.image.version"] // empty' <<<"$labels")"
+          REVISION="$(jq -r '.["org.opencontainers.image.revision"] // empty' <<<"$labels")"
+          if [ -z "$VERSION" ]; then
+            VERSION="unversioned-${DIGEST#sha256:}"; VERSION="${VERSION:0:25}"
+            echo "::warning::The image has no version label; the SBOM is kept as a workflow artifact only."
+          fi
+          if [ -n "$REVISION" ] && git cat-file -e "${REVISION}:scripts/sbom_extra_components.json" 2>/dev/null; then
+            git show "${REVISION}:scripts/sbom_extra_components.json" > "$RUNNER_TEMP/extra-components.json"
+          else
+            cp scripts/sbom_extra_components.json "$RUNNER_TEMP/extra-components.json"
+            echo "::warning::Commit ${REVISION:-unknown} has no scripts/sbom_extra_components.json; used the current list."
+          fi
+          echo "Version: ${VERSION}, commit: ${REVISION:-unknown}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Scan the prod image with Syft
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ needs.promote.outputs.image_name }}@${{ needs.promote.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          syft-version: v1.56.0
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/scan.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Complete the SBOM and write the report
+        env:
+          IMAGE_NAME: ${{ needs.promote.outputs.image_name }}
+          DIGEST: ${{ needs.promote.outputs.digest }}
+          VERSION: ${{ steps.image.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p sbom-out
+          python3 scripts/sbom_report.py \
+            --sbom "$RUNNER_TEMP/scan.cdx.json" \
+            --extra "$RUNNER_TEMP/extra-components.json" \
+            --image "$IMAGE_NAME" --digest "$DIGEST" --version "$VERSION" --repository "$REPOSITORY" \
+            --out-sbom "sbom-out/jigsaurium-${VERSION}-sbom.cdx.json" \
+            --out-report "sbom-out/jigsaurium-${VERSION}-sbom.md"
+          sed '/^## All components/,$d' "sbom-out/jigsaurium-${VERSION}-sbom.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the files with this run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-${{ steps.image.outputs.version }}
+          path: sbom-out/
+
+      - name: Attach the files to the GitHub Release
+        env:
+          VERSION: ${{ steps.image.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" sbom-out/* --clobber
+            echo "Attached the SBOM to release ${VERSION}."
+          else
+            echo "::warning::No GitHub Release named ${VERSION}; the SBOM is kept as this run's artifact only."
+          fi
