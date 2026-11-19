@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Initialized changelog for public release process tracking.
+- Old container images are deleted weekly, keeping the last 5 that reached prod and the last 5 that reached test (issue #109).
 
 ### Changed
 

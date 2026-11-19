@@ -425,3 +425,10 @@
 - Decision: background refreshes reload the editor only when nothing would be lost (no unsaved edits or crop in progress on the image on screen); finished actions no longer jump back to the image they started on. Each image load is numbered and a load that finishes after a newer one is dropped. Saves are refused unless the pixels in the editor belong to the image being saved, and an accepted AI suggestion's rotation and crop guide are applied only to the image they were suggested for.
 - Consequences: covered by browser tests that slow the save and image endpoints (`tests/test_ui_image_browser_saves.py`). If the open image is deleted or filtered out, the image now in its place opens.
 
+
+## 2026-11-19 - Keep Only Recently Deployed Images in GHCR (Issue #109)
+
+- Decision: a weekly workflow deletes container images except those of the last 5 successful `prod` and last 5 successful `test` deployments, the current pointer targets, and anything pushed in the last 3 hours.
+- Why: every build was kept (120 package versions for 34 images, several GB each), though only 10 of 37 builds were approved for prod. Keeping what was recently live in either environment leaves a rollback window without keeping images nobody ran.
+- Decision: use GitHub's own deployment records (made by the promote job's environments) rather than a new record. A deployment counts if any of its statuses is success, because GitHub marks older ones inactive once a newer one succeeds.
+- Consequences: a manual promotion is recorded against the workflow's commit, not the image's; its image is kept while a pointer points at it. Releases and tags stay, so some releases describe images that no longer exist. The workflow refuses to delete when the records or pointers look wrong, and deleted versions can be restored for 30 days.

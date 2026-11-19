@@ -227,6 +227,23 @@ location / {
 - Unauthenticated callers only receive re-encoded thumbnail/preview derivatives. When a derivative could not be generated, guests get `404` rather than the original upload bytes.
 - One-off after upgrading from a version before v0.2.11: images uploaded while Pillow was unavailable (Pillow 13 import bug) stored the original bytes as their thumbnail/preview, so guests received original photos including EXIF data. Run `scripts/regenerate_image_derivatives.py` inside the app container, or from the repo with the venv Python for an environment started with `run.bat`/`run.sh` (it reads the repo's `.env`). Use `--dry-run` first to see the count. It re-encodes those derivatives, bumps `content_version` so cached copies are not reused, records one `system.image_derivatives_regenerated` audit event, and is safe to re-run.
 
+## Old Image Clean-Up
+
+GHCR would otherwise keep every image ever built. `prune-images.yml` runs `scripts/prune_images.py` every Monday and deletes the rest of the package versions, keeping (issue #109):
+
+- the images of the last 5 successful `prod` deployments and the last 5 successful `test` deployments, counted once where they overlap (5 to 10 images). These come from the deployment records GitHub makes each time the promote job runs in an environment; a prod run that was never approved does not count. Each record's commit maps to the image's `sha-<12>` tag.
+- whatever the `test` and `prod` pointer tags point at now;
+- anything pushed in the last 3 hours, so a build not yet promoted is never deleted;
+- the untagged parts of each kept image (its platform image and attestation manifests). Deleting "everything untagged" would break kept images.
+
+It refuses to delete anything if either pointer tag or either environment's successful deployments are missing.
+
+- A run started by hand (Actions, Prune Old Images, Run workflow) is a dry run by default: its summary lists what would be kept and why, and what would be deleted. Untick `dry_run` to delete.
+- Known limit: a promotion started by hand (such as a rollback) records the workflow's commit, not the image's, so it may be credited to the wrong image. Its image is still kept while a pointer points at it.
+- Git tags and GitHub Releases (with their SBOMs) are not touched, but a version whose image is deleted can no longer be promoted or rolled back to.
+- A deleted version can be restored within 30 days from the package's settings on GitHub.
+- Setup: to delete versions, the workflow's `GITHUB_TOKEN` needs this repository to have the Admin role in the package's settings (Package settings, Manage Actions access).
+
 ## Release Checks (manual now, automated later)
 
 - Run functional tests (`pytest -m functional`).

@@ -108,6 +108,8 @@ Human PR ───────────────────────�
   The `prod` Environment must exist with its reviewer **before** `build-image.yml` is merged, or
   the first build would promote prod without asking.
 - Rollback = promote an earlier `vX.Y.Z` to `prod`. Same path, same approval.
+- Jigsaurium: old images are deleted weekly (`prune-images.yml`), so only the images of the last 5
+  prod and last 5 test deployments can be rolled back to; see `operations-and-security.md`.
 
 ## 5. TrueNAS deployment mechanism
 
