@@ -113,6 +113,8 @@ Human PR ───────────────────────�
 - Jigsaurium: after every `prod` promotion (rollbacks included) a separate `sbom` job scans the
   promoted digest and attaches the SBOM files to that version's Release. It runs after the pointer
   moves and cannot fail the promotion; see `operations-and-security.md`.
+- Jigsaurium: old images are deleted weekly (`prune-images.yml`), so only the images of the last 5
+  prod and last 5 test deployments can be rolled back to; see `operations-and-security.md`.
 
 ## 5. TrueNAS deployment mechanism
 

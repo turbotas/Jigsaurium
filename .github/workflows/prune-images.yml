@@ -1,0 +1,55 @@
+name: Prune Old Images
+
+# Deletes old images from GHCR, keeping the last 5 that reached prod and the last 5 that reached
+# test (from GitHub's deployment records), whatever the test and prod pointers point at, and
+# anything pushed in the last 3 hours. Rules and safeguards: scripts/prune_images.py (issue #109).
+# A run started by hand is a dry run unless "dry_run" is unticked.
+on:
+  schedule:
+    - cron: "17 4 * * 1" # Mondays 04:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only list what would be deleted"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  deployments: read
+  packages: write
+
+concurrency:
+  group: prune-images
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune old images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prune
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          # Scheduled runs delete; a manual run deletes only when dry_run is unticked.
+          DELETE: ${{ github.event_name == 'schedule' || inputs.dry_run == false }}
+        run: |
+          args=(--repo "$REPOSITORY" --package jigsaurium --keep 5 --grace-hours 3)
+          if [ "$DELETE" = "true" ]; then args+=(--delete); fi
+          python3 scripts/prune_images.py "${args[@]}"

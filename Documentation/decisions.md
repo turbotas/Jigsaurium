@@ -433,3 +433,10 @@
 - Decision: the SBOM job runs after the pointer moves and cannot fail the promotion. It is metadata, not a gate.
 - Decision: CycloneDX only (no SPDX) plus a readable report; no signing, since the images are not signed. Unknown licences are reported, not failed on.
 - Consequences: a release that never reached prod has no SBOM attached. `build-image.yml` grants its promote jobs `contents: write` because the called workflow's SBOM job uploads release files. The extra components list is kept by hand and checked by tests against `package.json`, the `Dockerfile` and `THIRD_PARTY_NOTICES.md`.
+
+## 2026-11-19 - Keep Only Recently Deployed Images in GHCR (Issue #109)
+
+- Decision: a weekly workflow deletes container images except those of the last 5 successful `prod` and last 5 successful `test` deployments, the current pointer targets, and anything pushed in the last 3 hours.
+- Why: every build was kept (120 package versions for 34 images, several GB each), though only 10 of 37 builds were approved for prod. Keeping what was recently live in either environment leaves a rollback window without keeping images nobody ran.
+- Decision: use GitHub's own deployment records (made by the promote job's environments) rather than a new record. A deployment counts if any of its statuses is success, because GitHub marks older ones inactive once a newer one succeeds.
+- Consequences: a manual promotion is recorded against the workflow's commit, not the image's; its image is kept while a pointer points at it. Releases and tags stay, so some releases describe images that no longer exist. The workflow refuses to delete when the records or pointers look wrong, and deleted versions can be restored for 30 days.

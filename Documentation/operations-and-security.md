@@ -241,6 +241,23 @@ Every promotion to `prod` records what the prod image contains (issue #107).
 - Licences are as each package declares them. Unknown licences are reported, never failed on. `THIRD_PARTY_NOTICES.md` stays the reviewed licence index; `tests/test_sbom_report.py` checks the extra components against `package.json`, the `Dockerfile` and that index.
 - Not signed, because the images are not signed either.
 
+## Old Image Clean-Up
+
+GHCR would otherwise keep every image ever built. `prune-images.yml` runs `scripts/prune_images.py` every Monday and deletes the rest of the package versions, keeping (issue #109):
+
+- the images of the last 5 successful `prod` deployments and the last 5 successful `test` deployments, counted once where they overlap (5 to 10 images). These come from the deployment records GitHub makes each time the promote job runs in an environment; a prod run that was never approved does not count. Each record's commit maps to the image's `sha-<12>` tag.
+- whatever the `test` and `prod` pointer tags point at now;
+- anything pushed in the last 3 hours, so a build not yet promoted is never deleted;
+- the untagged parts of each kept image (its platform image and attestation manifests). Deleting "everything untagged" would break kept images.
+
+It refuses to delete anything if either pointer tag or either environment's successful deployments are missing.
+
+- A run started by hand (Actions, Prune Old Images, Run workflow) is a dry run by default: its summary lists what would be kept and why, and what would be deleted. Untick `dry_run` to delete.
+- Known limit: a promotion started by hand (such as a rollback) records the workflow's commit, not the image's, so it may be credited to the wrong image. Its image is still kept while a pointer points at it.
+- Git tags and GitHub Releases (with their SBOMs) are not touched, but a version whose image is deleted can no longer be promoted or rolled back to.
+- A deleted version can be restored within 30 days from the package's settings on GitHub.
+- Setup: to delete versions, the workflow's `GITHUB_TOKEN` needs this repository to have the Admin role in the package's settings (Package settings, Manage Actions access).
+
 ## Release Checks (manual now, automated later)
 
 - Run functional tests (`pytest -m functional`).
