@@ -50,6 +50,7 @@ jobs:
           # Scheduled runs delete; a manual run deletes only when dry_run is unticked.
           DELETE: ${{ github.event_name == 'schedule' || inputs.dry_run == false }}
         run: |
-          args=(--repo "$REPOSITORY" --package jigsaurium --keep 5 --grace-hours 3)
+          package="$(echo "${REPOSITORY#*/}" | tr '[:upper:]' '[:lower:]')" # the repository name in lower case
+          args=(--repo "$REPOSITORY" --package "$package" --keep 5 --grace-hours 3)
           if [ "$DELETE" = "true" ]; then args+=(--delete); fi
           python3 scripts/prune_images.py "${args[@]}"

@@ -198,14 +198,30 @@ Two reusable pieces, both plain files:
    `.github/workflows/*.yml` is a ~15-line caller that passes inputs.
 2. **Deploy agent + docs** in the same repo.
 
-Until the kit repo exists, copy this playbook plus the `deploy/` and `.github/` folders; the
-per-app inputs below are all that need editing.
+Until the kit repo exists, **Jigsaurium is the reference copy** and the workflow files are shared
+by copying:
+
+- Every app's `.github/workflows/*.yml` is **identical** to Jigsaurium's. Never edit a workflow in
+  another app only. A CI problem found in another app is fixed here in Jigsaurium first, then the
+  workflow files are copied to every app unchanged (`diff -r` of the two `.github/workflows`
+  folders must show nothing).
+- Everything that differs between apps lives in `.github/app-ci/`:
+  - `settings.env`: Python version, test requirements and lock, lock profiles, port, health path,
+    Host header, image contents checks, run-as UID, image recognition on/off, prod promotion
+    (`approval` or `manual`), dependency PR auto-merge on/off. Each setting is described in the file.
+  - `test.env`: extra environment for the pytest jobs.
+  - `smoke.env`: environment for the container in the image smoke test.
+- The image and GHCR package name is the repository name in lower case, so no workflow names the app.
+- `scripts/ci_refresh_frontend.sh` (optional) is the app's own weekly front-end refresh, called by
+  `deps-refresh.yml`. Jigsaurium's updates GOV.UK Frontend within its major version.
+- Apps without image recognition set `CI_IMAGE_RECOGNITION=false`; Embedding Runtime Tests then
+  skip their steps.
 
 ### 6.1 Per-app adoption checklist
 
-- [ ] Set image name and registry owner.
-- [ ] Provide test command(s), UI/e2e command(s), health endpoint path.
-- [ ] Provide `scripts/refresh-deps.sh` (or accept Dependabot-only).
+- [ ] Copy `.github/workflows/` from Jigsaurium unchanged; write `.github/app-ci/` for the app.
+- [ ] Provide test command(s), UI/e2e command(s), health endpoint path (in `settings.env`).
+- [ ] Provide `scripts/update_python_dependencies.py` and, if needed, `scripts/ci_refresh_frontend.sh`.
 - [ ] Add `deploy/<env>/compose.yml.tmpl` and `agent.conf` for test and prod.
 - [ ] Enable branch protection with required checks; create `production` Environment with reviewer.
 - [ ] Enable auto-merge on the repo; add `dependabot.yml`.

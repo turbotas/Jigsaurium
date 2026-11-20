@@ -25,15 +25,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Load app settings
+        run: grep -hEv '^[[:space:]]*(#|$)' .github/app-ci/settings.env .github/app-ci/test.env >> "$GITHUB_ENV"
+
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: ${{ env.CI_PYTHON_VERSION }}
           cache: "pip"
-          cache-dependency-path: requirements/dev.txt
+          cache-dependency-path: ${{ env.CI_TEST_LOCK }}
 
       - name: Install dependencies
-        run: python -m pip install --no-cache-dir -r requirements/dev.txt -c requirements/known-good-dev.txt
+        run: python -m pip install --no-cache-dir -r "$CI_TEST_REQUIREMENTS" -c "$CI_TEST_LOCK"
 
       - name: Guard against GPU dependency installs
         run: |
@@ -56,15 +59,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Load app settings
+        run: grep -hEv '^[[:space:]]*(#|$)' .github/app-ci/settings.env .github/app-ci/test.env >> "$GITHUB_ENV"
+
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: ${{ env.CI_PYTHON_VERSION }}
           cache: "pip"
-          cache-dependency-path: requirements/dev.txt
+          cache-dependency-path: ${{ env.CI_TEST_LOCK }}
 
       - name: Install dependencies
-        run: python -m pip install --no-cache-dir -r requirements/dev.txt -c requirements/known-good-dev.txt
+        run: python -m pip install --no-cache-dir -r "$CI_TEST_REQUIREMENTS" -c "$CI_TEST_LOCK"
 
       - name: Guard against GPU dependency installs
         run: |
@@ -85,13 +91,14 @@ jobs:
     name: Image Build, Smoke Test and Scan
     runs-on: ubuntu-latest
 
-    # Throwaway database so the container can run its migrations and start for real.
+    # Throwaway database so the container can run its migrations and start for real. MariaDB runs
+    # with its own defaults on purpose, so a brand-new database must build cleanly without flags.
     services:
       mariadb:
         image: mariadb:11
         env:
-          MARIADB_DATABASE: jigsaurium
-          MARIADB_USER: jigsaurium
+          MARIADB_DATABASE: app
+          MARIADB_USER: app
           MARIADB_PASSWORD: ci-smoke-password
           MARIADB_RANDOM_ROOT_PASSWORD: "1"
         ports:
@@ -105,6 +112,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Load app settings
+        run: grep -hEv '^[[:space:]]*(#|$)' .github/app-ci/settings.env >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -120,7 +130,7 @@ jobs:
           file: ./Dockerfile
           push: false
           load: true
-          tags: jigsaurium:ci
+          tags: app:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -128,58 +138,66 @@ jobs:
             APP_VERSION=ci
             APP_BUILD_SHA=${{ github.sha }}
 
+      # APP_ENV and SECRET_KEY are common to every app; the rest comes from .github/app-ci/smoke.env.
       - name: Start container
         run: |
-          docker run -d --name jigsaurium-ci --network host \
+          docker run -d --name app-ci --network host \
             -e APP_ENV=test \
             -e SECRET_KEY="ci-$(openssl rand -hex 24)" \
-            -e DATABASE_URL=mysql+pymysql://jigsaurium:ci-smoke-password@127.0.0.1:3306/jigsaurium \
-            -e AUTO_MIGRATE=1 \
-            -e SESSION_IDLE_TIMEOUT_MINUTES=120 \
-            -e CANONICAL_HOST=www.example.test \
-            -e CANONICAL_HOST_ENFORCEMENT=strict \
-            -e IMAGE_EMBEDDINGS_ENABLED=1 \
-            jigsaurium:ci
+            --env-file .github/app-ci/smoke.env \
+            app:ci
 
       - name: Wait for health endpoint
         run: |
           for i in $(seq 60); do
-            if curl -fsS http://127.0.0.1:5000/api/v1/health; then echo; echo "Healthy after ~$((i * 5))s"; exit 0; fi
-            if [ "$(docker inspect -f '{{.State.Running}}' jigsaurium-ci)" != "true" ]; then echo "Container exited"; break; fi
+            if curl -fsS "http://127.0.0.1:${CI_APP_PORT}${CI_HEALTH_PATH}"; then echo; echo "Healthy after ~$((i * 5))s"; exit 0; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' app-ci)" != "true" ]; then echo "Container exited"; break; fi
             sleep 5
           done
-          echo "Container did not become healthy"; docker logs jigsaurium-ci; exit 1
+          echo "Container did not become healthy"; docker logs app-ci; exit 1
 
       - name: Check the image serves pages and holds only runtime files
         run: |
-          code="$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: www.example.test' http://127.0.0.1:5000/)"
+          host_header=()
+          if [ -n "$CI_HOME_HOST" ]; then host_header=(-H "Host: ${CI_HOME_HOST}"); fi
+          code="$(curl -s -o /dev/null -w '%{http_code}' "${host_header[@]}" "http://127.0.0.1:${CI_APP_PORT}/")"
           echo "Home page: HTTP ${code}"
           [ "$code" = "200" ] || { echo "Home page did not load"; exit 1; }
-          docker exec jigsaurium-ci sh -c '
+          docker exec \
+            -e MUST_NOT_CONTAIN="$CI_IMAGE_MUST_NOT_CONTAIN" \
+            -e MUST_CONTAIN="$CI_IMAGE_MUST_CONTAIN" \
+            -e RUN_AS_UID="$CI_IMAGE_RUN_AS_UID" \
+            app-ci sh -c '
             status=0
-            for path in .git .github .env tests Documentation ijfw .ijfw deploy environments node_modules instance README.md run.bat; do
-              if [ -e "/app/$path" ]; then echo "Should not be in the image: $path"; status=1; fi
+            for path in $MUST_NOT_CONTAIN; do
+              case "$path" in /*) p="$path" ;; *) p="/app/$path" ;; esac
+              if [ -e "$p" ]; then echo "Should not be in the image: $path"; status=1; fi
             done
-            for path in app/templates/home.html app/static/js/app.js migrations alembic.ini scripts/docker_entrypoint.sh scripts/regenerate_image_derivatives.py; do
-              if [ ! -e "/app/$path" ]; then echo "Missing from the image: $path"; status=1; fi
+            for path in $MUST_CONTAIN; do
+              case "$path" in /*) p="$path" ;; *) p="/app/$path" ;; esac
+              if [ ! -e "$p" ]; then echo "Missing from the image: $path"; status=1; fi
             done
+            if command -v pip >/dev/null 2>&1; then echo "pip should not be in the image"; status=1; fi
+            if [ -n "$RUN_AS_UID" ] && [ "$(id -u)" != "$RUN_AS_UID" ]; then
+              echo "App should run as UID ${RUN_AS_UID}, not $(id -u)"; status=1
+            fi
             exit $status
           '
 
       - name: Show container logs
         if: always()
-        run: docker logs jigsaurium-ci 2>&1 | tail -n 100 || true
+        run: docker logs app-ci 2>&1 | tail -n 100 || true
 
       - name: Stop container
         if: always()
-        run: docker rm -f jigsaurium-ci || true
+        run: docker rm -f app-ci || true
 
       # Scan for HIGH/CRITICAL vulnerabilities that have a fix available. The JSON report is turned
       # into a short list that includes where each package sits in the image, then the job fails.
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: jigsaurium:ci
+          image-ref: app:ci
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "0"
