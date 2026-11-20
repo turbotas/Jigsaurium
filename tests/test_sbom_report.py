@@ -59,7 +59,7 @@ def test_complete_sbom_adds_jigsaurium_and_the_extra_components(sbom_report):
 
     purls = [component.get("purl") for component in sbom["components"]]
     assert "pkg:github/owner/jigsaurium@v1.2.3" in purls
-    assert "pkg:npm/govuk-frontend@6.6.0" in purls
+    assert _extra(sbom_report, "pkg:npm/govuk-frontend@")["purl"] in purls
     assert any(purl and purl.startswith("pkg:huggingface/openai/clip-vit-base-patch32@") for purl in purls)
     added = [component for component in sbom["components"] if component.get("purl") == "pkg:github/owner/jigsaurium@v1.2.3"]
     assert added[0]["licenses"] == [{"license": {"id": "AGPL-3.0-only"}}]
@@ -69,10 +69,11 @@ def test_complete_sbom_adds_jigsaurium_and_the_extra_components(sbom_report):
 @pytest.mark.functional
 def test_complete_sbom_does_not_duplicate_what_the_scan_found(sbom_report):
     scanned = _scanned_sbom()
-    scanned["components"].append({"type": "library", "name": "govuk-frontend", "version": "6.6.0", "purl": "pkg:npm/govuk-frontend@6.6.0"})
+    govuk = _extra(sbom_report, "pkg:npm/govuk-frontend@")
+    scanned["components"].append({"type": "library", "name": "govuk-frontend", "version": govuk["version"], "purl": govuk["purl"]})
     sbom = sbom_report.complete_sbom(scanned, _extras(sbom_report), sbom_report.app_component("v1", "o/r"))
 
-    assert [c.get("purl") for c in sbom["components"]].count("pkg:npm/govuk-frontend@6.6.0") == 1
+    assert [c.get("purl") for c in sbom["components"]].count(govuk["purl"]) == 1
 
 
 @pytest.mark.functional

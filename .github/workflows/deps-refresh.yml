@@ -1,9 +1,12 @@
 name: Dependency Refresh
 
-# Weekly: refresh the Python lock files (scripts/update_python_dependencies.py) and GOV.UK Frontend
-# (within its current major version), then open or update one PR and queue it to auto-merge once
-# the required CI checks pass. Direct requirements are capped below their next major in
-# requirements/*.txt, so this only brings in patch/minor updates of those.
+# Weekly: refresh the Python lock files (scripts/update_python_dependencies.py, one run per
+# profile in CI_LOCK_PROFILES) and the app's vendored front-end files (scripts/ci_refresh_frontend.sh,
+# when the app has one), then open or update one PR that merges itself once CI passes
+# (CI_DEPS_AUTO_MERGE: `required-checks` queues GitHub auto-merge, `after-ci` labels it for
+# merge-after-ci.yml, `off` leaves it for a human). Settings: .github/app-ci/settings.env.
+# Direct requirements are capped below their next major, so this only brings in patch/minor
+# updates of those.
 #
 # Needs repository secret DEPS_AUTOMATION_TOKEN: a fine-grained personal access token for this
 # repository with "Contents: Read and write" and "Pull requests: Read and write". A PR opened with
@@ -37,36 +40,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Load app settings
+        run: grep -hEv '^[[:space:]]*(#|$)' .github/app-ci/settings.env >> "$GITHUB_ENV"
+
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: ${{ env.CI_PYTHON_VERSION }}
 
       # Each profile is resolved in its own clean virtualenv because the script writes its lock
       # file from `pip freeze`. Tests are not run here; the PR's CI runs the full suite and the
       # image smoke test before anything can merge.
       - name: Refresh Python lock files
         run: |
-          for profile in prod dev; do
+          for profile in $CI_LOCK_PROFILES; do
             python -m venv "$RUNNER_TEMP/venv-$profile"
             "$RUNNER_TEMP/venv-$profile/bin/python" -m pip install --quiet --upgrade pip
             "$RUNNER_TEMP/venv-$profile/bin/python" scripts/update_python_dependencies.py --profile "$profile" --skip-tests
           done
 
-      # Node comes from .nvmrc, so the GOV.UK CSS is compiled with the same Node as locally.
+      # Node comes from .nvmrc, so front-end files are built with the same Node as locally.
       - name: Set up Node
+        if: hashFiles('.nvmrc') != ''
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
-      - name: Refresh GOV.UK Frontend (same major version)
-        run: |
-          npm ci --no-audit --no-fund
-          major="$(node -p "require('./package.json').devDependencies['govuk-frontend'].split('.')[0]")"
-          target="$(npm view "govuk-frontend@^${major}" version --json \
-            | python -c 'import json, sys; v = json.load(sys.stdin); print(v[-1] if isinstance(v, list) else v)')"
-          echo "GOV.UK Frontend target: ${target}"
-          python scripts/vendor_govuk_assets.py --update "$target"
+      # What "refresh" means is the app's own business: the script updates files, reports to the
+      # job summary, or both.
+      - name: Refresh vendored front-end files
+        if: hashFiles('scripts/ci_refresh_frontend.sh') != ''
+        run: sh scripts/ci_refresh_frontend.sh
 
       - name: Open or update the refresh PR
         id: pr
@@ -77,17 +81,19 @@ jobs:
           delete-branch: true
           commit-message: "Weekly dependency refresh"
           title: "Weekly dependency refresh"
-          labels: dependencies
+          # The merge-after-ci label tells merge-after-ci.yml it may merge this PR once CI passes.
+          labels: ${{ env.CI_DEPS_AUTO_MERGE == 'after-ci' && 'dependencies,merge-after-ci' || 'dependencies' }}
           body: |
             Automated weekly refresh:
-            - Python lock files regenerated with `scripts/update_python_dependencies.py` (prod and dev).
-            - GOV.UK Frontend updated within its current major version and re-vendored.
+            - Python lock files regenerated with `scripts/update_python_dependencies.py` (profiles: ${{ env.CI_LOCK_PROFILES }}).
+            - Vendored front-end files refreshed by `scripts/ci_refresh_frontend.sh` within their current major version; a new major version is only reported in the workflow run's summary.
 
-            This PR merges automatically once the required CI checks pass. If a check fails it
-            stays open for a human to look at.
+            Merge: `CI_DEPS_AUTO_MERGE=${{ env.CI_DEPS_AUTO_MERGE }}`. With `required-checks` or
+            `after-ci` this PR merges itself once CI passes; with `off`, merge it by hand. If a check
+            fails it stays open for a human to look at.
 
       - name: Queue auto-merge
-        if: steps.pr.outputs.pull-request-number != ''
+        if: steps.pr.outputs.pull-request-number != '' && env.CI_DEPS_AUTO_MERGE == 'required-checks'
         run: gh pr merge --auto --squash "${{ steps.pr.outputs.pull-request-number }}"
         env:
           GH_TOKEN: ${{ secrets.DEPS_AUTOMATION_TOKEN }}

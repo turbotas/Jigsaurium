@@ -17,15 +17,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # CI_IMAGE_RECOGNITION in .github/app-ci/settings.env: apps without image recognition skip the rest.
+      - name: Load app settings
+        run: |
+          grep -hEv '^[[:space:]]*(#|$)' .github/app-ci/settings.env .github/app-ci/test.env >> "$GITHUB_ENV"
+          if ! grep -qx 'CI_IMAGE_RECOGNITION=true' .github/app-ci/settings.env; then
+            echo "This app has no image recognition (CI_IMAGE_RECOGNITION); nothing to test." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Set up Python
+        if: env.CI_IMAGE_RECOGNITION == 'true'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: ${{ env.CI_PYTHON_VERSION }}
 
       - name: Install core test dependencies
-        run: python -m pip install --no-cache-dir -r requirements/dev.txt -c requirements/known-good-dev.txt
+        if: env.CI_IMAGE_RECOGNITION == 'true'
+        run: python -m pip install --no-cache-dir -r "$CI_TEST_REQUIREMENTS" -c "$CI_TEST_LOCK"
 
       - name: Guard against GPU dependency installs
+        if: env.CI_IMAGE_RECOGNITION == 'true'
         run: |
           python -c "import subprocess, sys; lines = subprocess.check_output([sys.executable, '-m', 'pip', 'freeze'], text=True).splitlines(); names = [line.split('==', 1)[0].strip().lower() for line in lines if '==' in line]; blocked = sorted({name for name in names if name.startswith('nvidia-') or name.startswith('cuda-')});
           if blocked:
@@ -35,4 +46,5 @@ jobs:
           print('GPU dependency guard passed: no nvidia-* or cuda-* pip packages found.')"
 
       - name: Run embedding pytest suite
+        if: env.CI_IMAGE_RECOGNITION == 'true'
         run: python -m pytest -m embedding

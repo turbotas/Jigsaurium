@@ -3,12 +3,14 @@ name: Promote Pointer Tag
 # Points a pointer tag (dev | test | prod) at an existing image. Nothing is rebuilt.
 # Runs in the GitHub Environment named after the pointer, so the "prod" environment's required
 # reviewer must approve before prod moves. Used manually (e.g. rollback: source_ref=v0.1.1,
-# target_pointer=prod) and by build-image.yml after every successful master build.
+# target_pointer=prod; or ship what test runs now: source_ref=test, target_pointer=prod) and by
+# build-image.yml after every successful master build. The image name is the repository name in
+# lower case.
 on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: "Source image tag or digest (for example v1.2.3 or sha256:...)"
+        description: "Source image tag or digest (for example test, v1.2.3 or sha256:...)"
         required: true
         type: string
       target_pointer:
@@ -64,8 +66,7 @@ jobs:
           TARGET: ${{ inputs.target_pointer }}
         run: |
           case "$TARGET" in dev|test|prod) ;; *) echo "::error::Unknown pointer '$TARGET'"; exit 1 ;; esac
-          OWNER_LOWER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
-          IMAGE_NAME="ghcr.io/${OWNER_LOWER}/jigsaurium"
+          IMAGE_NAME="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
 
           if [[ "$SOURCE_REF" == sha256:* ]]; then
             SOURCE_IMAGE="${IMAGE_NAME}@${SOURCE_REF}"
@@ -180,13 +181,14 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           mkdir -p sbom-out
+          APP_NAME="$(echo "${REPOSITORY#*/}" | tr '[:upper:]' '[:lower:]')"
           python3 scripts/sbom_report.py \
             --sbom "$RUNNER_TEMP/scan.cdx.json" \
             --extra "$RUNNER_TEMP/extra-components.json" \
             --image "$IMAGE_NAME" --digest "$DIGEST" --version "$VERSION" --repository "$REPOSITORY" \
-            --out-sbom "sbom-out/jigsaurium-${VERSION}-sbom.cdx.json" \
-            --out-report "sbom-out/jigsaurium-${VERSION}-sbom.md"
-          sed '/^## All components/,$d' "sbom-out/jigsaurium-${VERSION}-sbom.md" >> "$GITHUB_STEP_SUMMARY"
+            --out-sbom "sbom-out/${APP_NAME}-${VERSION}-sbom.cdx.json" \
+            --out-report "sbom-out/${APP_NAME}-${VERSION}-sbom.md"
+          sed '/^## All components/,$d' "sbom-out/${APP_NAME}-${VERSION}-sbom.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the files with this run
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

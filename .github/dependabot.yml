@@ -1,6 +1,7 @@
-# Dependabot keeps the GitHub Actions used by the workflows up to date.
-# Python packages and GOV.UK Frontend are refreshed by .github/workflows/deps-refresh.yml instead,
-# because they use this repo's own lock-file and asset-vendoring scripts.
+# Dependabot keeps the GitHub Actions used by the workflows and the Dockerfile's base image up to date.
+# Python packages and vendored front-end files are refreshed by .github/workflows/deps-refresh.yml
+# instead, because they use this repo's own lock-file and asset-vendoring scripts. OS packages in
+# the image are upgraded on every build, and CI rebuilds weekly (see ci.yml).
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -14,4 +15,18 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    labels: [dependencies]
+
+  # Base image patch releases (for example python 3.14.6 -> 3.14.7). A new Python minor version
+  # changes CI_PYTHON_VERSION and the lock files too, so it is taken by hand.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: sunday
+      time: "05:30"
+      timezone: Etc/UTC
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     labels: [dependencies]
