@@ -57,7 +57,7 @@ And for AI/embeddings-enabled production:
 - `IMAGE_EMBEDDINGS_WARM_ON_STARTUP=1`
 - `IMAGE_EMBEDDINGS_STARTUP_FAIL_ON_ERROR=1`
 
-`HF_TOKEN` is only needed at image build time if model download requires authenticated Hugging Face access.
+`HF_TOKEN` is not needed by the running app. Only the image build uses one, as the BuildKit secret `hf_token`, and only if the model download needs authenticated Hugging Face access.
 
 ## Notes
 

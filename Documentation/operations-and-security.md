@@ -88,7 +88,7 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `IMAGE_EMBEDDINGS_INLINE`: optional boolean for embedding generation mode (`false` = background threads, `true` = inline).
 - `IMAGE_EMBEDDINGS_ALLOW_TEST_FALLBACK`: optional boolean to allow deterministic non-CLIP fallback embeddings in test-only environments.
 - `IMAGE_EMBEDDING_REFERENCE_TAG_PREFIXES`: comma-separated tag prefixes that count as visual-match references (default `box,reference`).
-- `HF_TOKEN`: optional Hugging Face access token for authenticated build-time downloads (runtime should not require this when vendored local model mode is enabled).
+- `HF_TOKEN`: optional Hugging Face access token, read only by `scripts/prefetch_embedding_model.py`. The running app never needs it. For the image build, pass it as a BuildKit secret instead (see Embedding Model Provisioning).
 - `DB_BACKUP_STORAGE_PATH`: optional absolute/relative directory for in-app SQL backups (defaults to Flask `instance/backups`).
 - `DB_BACKUP_COMPRESSION`: backup file compression mode (`gzip` default, `bzip2`, or `none`).
 - `DB_BACKUP_BLOB_CHUNK_BYTES`: blob chunk size used when exporting large binary fields as MySQL-compatible SQL variable assembly (default `32768`).
@@ -113,7 +113,7 @@ Host enforcement policy:
   - Windows: `.venv\Scripts\python.exe scripts\prefetch_embedding_model.py`
   - Linux/macOS: `.venv/bin/python scripts/prefetch_embedding_model.py`
 - Optional: pass `--token` or set `HF_TOKEN` for higher download limits.
-- The image build accepts `HF_TOKEN` as a build argument, but CI never passes one. Build arguments can show in the image's build history, so if a token is ever needed for the image build, pass it as a BuildKit secret (`--secret`) instead.
+- The image build downloads the model itself when `.hf-models/` has no copy. If that download needs a token, pass it as a BuildKit secret, never a build argument (build arguments show in the image's build history): `docker build --secret id=hf_token,env=HF_TOKEN .` CI passes none (issue #108).
 - With `IMAGE_EMBEDDINGS_LOCAL_FILES_ONLY=1`, startup and embedding requests fail fast if that local path is missing or incomplete.
 - Development exception: when `APP_ENV=dev`, startup warm-load logs a warning and continues if the configured local model path is missing, even when startup fail-fast is enabled. This prevents local boot failures after env-file changes; embedding endpoints remain unavailable until the model is prefetched or embeddings are disabled.
 

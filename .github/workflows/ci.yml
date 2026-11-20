@@ -37,9 +37,9 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.CI_PYTHON_VERSION }}
-          cache: "pip"
-          cache-dependency-path: ${{ env.CI_TEST_LOCK }}
 
+      # No pip cache: installs use --no-cache-dir, so setup-python's cache would only warn that
+      # there was nothing to save (issue #108).
       - name: Install dependencies
         run: python -m pip install --no-cache-dir -r "$CI_TEST_REQUIREMENTS" -c "$CI_TEST_LOCK"
 
@@ -71,9 +71,9 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.CI_PYTHON_VERSION }}
-          cache: "pip"
-          cache-dependency-path: ${{ env.CI_TEST_LOCK }}
 
+      # No pip cache: installs use --no-cache-dir, so setup-python's cache would only warn that
+      # there was nothing to save (issue #108).
       - name: Install dependencies
         run: python -m pip install --no-cache-dir -r "$CI_TEST_REQUIREMENTS" -c "$CI_TEST_LOCK"
 
