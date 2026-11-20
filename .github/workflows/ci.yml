@@ -2,11 +2,16 @@ name: CI
 
 # PRs run once (pull_request); pushes run only on the default branch, so a PR branch is not
 # tested twice. A newer push to the same PR/branch cancels the older run.
+# Thursdays the default branch also runs on a schedule. When that passes, Build and Promote builds
+# a fresh image anyway (new patch version), so OS package and base-image fixes reach test every
+# week even when nothing in the repository changed.
 on:
   pull_request:
   push:
     branches:
       - master
+  schedule:
+    - cron: "0 5 * * 4" # Thursdays 05:00 UTC
   workflow_dispatch:
 
 concurrency:

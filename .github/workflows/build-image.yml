@@ -21,7 +21,8 @@ jobs:
   build:
     name: Build and publish image
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    # push: a merge to master. schedule: CI's weekly run, a rebuild for OS and base-image fixes.
+    if: github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'schedule')
     concurrency:
       group: build-image
       cancel-in-progress: false
@@ -57,14 +58,16 @@ jobs:
 
       # Version: if this commit already has a vX.Y.Z tag (pushed by hand, e.g. to start a new minor
       # or major), use it. Otherwise take the highest vX.Y.Z[-pre] tag and bump the patch; a
-      # pre-release (v0.2.0-rc1) is finalised instead (v0.2.0).
+      # pre-release (v0.2.0-rc1) is finalised instead (v0.2.0). A weekly rebuild always gets a new
+      # patch version, so a published version tag never changes to point at a different image.
       - name: Resolve version and image metadata
         id: meta
         env:
           SHA: ${{ github.event.workflow_run.head_sha }}
+          TRIGGER: ${{ github.event.workflow_run.event }}
         run: |
           EXACT="$(git tag --points-at "$SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
-          if [ -n "$EXACT" ]; then
+          if [ -n "$EXACT" ] && [ "$TRIGGER" != "schedule" ]; then
             VERSION="$EXACT"; NEW_TAG=false
           else
             VERSION="$(git tag -l 'v*' | python3 -c '

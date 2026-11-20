@@ -1,8 +1,12 @@
 name: Dependabot Auto-merge
 
-# Queues patch/minor Dependabot PRs to merge once the required CI checks pass.
-# Major updates are left for a human. These PRs only touch workflow action versions, so the
-# built-in token is enough (a merge made with it does not trigger an image build, by design).
+# Patch/minor Dependabot PRs merge themselves once CI passes; major updates are left for a human.
+# How depends on CI_DEPS_AUTO_MERGE in .github/app-ci/settings.env:
+#   required-checks  queue GitHub auto-merge (needs branch protection with required checks). A
+#                    merge made with the built-in token does not trigger an image build.
+#   after-ci         add the merge-after-ci label; merge-after-ci.yml merges once CI passes, with
+#                    DEPS_AUTOMATION_TOKEN, so an updated base image is built and goes to test.
+#   off              leave the PR for a human.
 on: pull_request
 
 permissions:
@@ -14,6 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Load app settings
+        run: grep -hEv '^[[:space:]]*(#|$)' .github/app-ci/settings.env >> "$GITHUB_ENV"
+
       - name: Read Dependabot metadata
         id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
@@ -21,8 +31,15 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable auto-merge for patch/minor updates
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        if: env.CI_DEPS_AUTO_MERGE == 'required-checks' && (steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor')
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Label patch/minor updates for merge after CI
+        if: env.CI_DEPS_AUTO_MERGE == 'after-ci' && (steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor')
+        run: gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=merge-after-ci" --silent
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,10 +2,11 @@ name: Dependency Refresh
 
 # Weekly: refresh the Python lock files (scripts/update_python_dependencies.py, one run per
 # profile in CI_LOCK_PROFILES) and the app's vendored front-end files (scripts/ci_refresh_frontend.sh,
-# when the app has one), then open or update one PR. When CI_DEPS_AUTO_MERGE is true the PR is
-# queued to auto-merge once the required CI checks pass; otherwise merge it by hand once CI is
-# green. Settings: .github/app-ci/settings.env. Direct requirements are capped below their next
-# major, so this only brings in patch/minor updates of those.
+# when the app has one), then open or update one PR that merges itself once CI passes
+# (CI_DEPS_AUTO_MERGE: `required-checks` queues GitHub auto-merge, `after-ci` labels it for
+# merge-after-ci.yml, `off` leaves it for a human). Settings: .github/app-ci/settings.env.
+# Direct requirements are capped below their next major, so this only brings in patch/minor
+# updates of those.
 #
 # Needs repository secret DEPS_AUTOMATION_TOKEN: a fine-grained personal access token for this
 # repository with "Contents: Read and write" and "Pull requests: Read and write". A PR opened with
@@ -80,18 +81,19 @@ jobs:
           delete-branch: true
           commit-message: "Weekly dependency refresh"
           title: "Weekly dependency refresh"
-          labels: dependencies
+          # The merge-after-ci label tells merge-after-ci.yml it may merge this PR once CI passes.
+          labels: ${{ env.CI_DEPS_AUTO_MERGE == 'after-ci' && 'dependencies,merge-after-ci' || 'dependencies' }}
           body: |
             Automated weekly refresh:
             - Python lock files regenerated with `scripts/update_python_dependencies.py` (profiles: ${{ env.CI_LOCK_PROFILES }}).
-            - Vendored front-end files refreshed by `scripts/ci_refresh_frontend.sh`, if the app has one; anything it only reports is in the workflow run's summary.
+            - Vendored front-end files refreshed by `scripts/ci_refresh_frontend.sh` within their current major version; a new major version is only reported in the workflow run's summary.
 
-            With CI_DEPS_AUTO_MERGE=true this PR merges automatically once the required CI checks
-            pass; otherwise merge it by hand once CI is green. If a check fails it stays open for a
-            human to look at.
+            Merge: `CI_DEPS_AUTO_MERGE=${{ env.CI_DEPS_AUTO_MERGE }}`. With `required-checks` or
+            `after-ci` this PR merges itself once CI passes; with `off`, merge it by hand. If a check
+            fails it stays open for a human to look at.
 
       - name: Queue auto-merge
-        if: steps.pr.outputs.pull-request-number != '' && env.CI_DEPS_AUTO_MERGE == 'true'
+        if: steps.pr.outputs.pull-request-number != '' && env.CI_DEPS_AUTO_MERGE == 'required-checks'
         run: gh pr merge --auto --squash "${{ steps.pr.outputs.pull-request-number }}"
         env:
           GH_TOKEN: ${{ secrets.DEPS_AUTOMATION_TOKEN }}

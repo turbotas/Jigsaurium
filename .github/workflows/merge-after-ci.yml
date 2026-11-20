@@ -1,0 +1,70 @@
+name: Merge After CI
+
+# Hands-off merging for repositories that cannot have required status checks (for example a
+# private repository on a plan without branch protection), so GitHub auto-merge is unavailable.
+# Used when CI_DEPS_AUTO_MERGE=after-ci in .github/app-ci/settings.env; otherwise every run exits
+# at once.
+#
+# When CI passes on a PR, merge it only if all of these hold:
+# - it carries the merge-after-ci label (added by deps-refresh.yml and, for patch/minor updates,
+#   by dependabot-auto-merge.yml),
+# - it is the weekly dependency PR (branch deps/weekly-refresh) or was opened by Dependabot,
+# - it comes from this repository, not a fork,
+# - its head is still the commit CI just tested (a newer push waits for its own CI run).
+# The merge uses DEPS_AUTOMATION_TOKEN, so the push to master runs CI and Build and Promote.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: merge-after-ci
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+
+    steps:
+      # The default branch, never the PR's code: the settings and this workflow come from master.
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Load app settings
+        run: grep -hEv '^[[:space:]]*(#|$)' .github/app-ci/settings.env >> "$GITHUB_ENV"
+
+      - name: Merge the PR CI just passed
+        if: env.CI_DEPS_AUTO_MERGE == 'after-ci'
+        env:
+          GH_TOKEN: ${{ secrets.DEPS_AUTOMATION_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Repository secret DEPS_AUTOMATION_TOKEN is not set (see deps-refresh.yml)."
+            exit 1
+          fi
+          prs="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" --jq '.[] | select(.state == "open") | .number')"
+          if [ -z "$prs" ]; then echo "No open PR has ${HEAD_SHA} as its head."; exit 0; fi
+          for pr in $prs; do
+            info="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}")"
+            eligible="$(jq -r --arg repo "$GITHUB_REPOSITORY" --arg sha "$HEAD_SHA" '
+              (.labels | map(.name) | index("merge-after-ci")) != null
+              and (.head.ref == "deps/weekly-refresh" or .user.login == "dependabot[bot]")
+              and .head.repo.full_name == $repo
+              and .head.sha == $sha
+              and .state == "open"' <<<"$info")"
+            title="$(jq -r .title <<<"$info")"
+            if [ "$eligible" != "true" ]; then
+              echo "PR #${pr} (${title}) is not eligible for merge after CI; left alone."
+              continue
+            fi
+            # sha= makes GitHub refuse the merge if the head moved since CI ran.
+            gh api -X PUT "repos/${GITHUB_REPOSITORY}/pulls/${pr}/merge" \
+              -f merge_method=squash -f sha="$HEAD_SHA" --jq .message
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/$(jq -r .head.ref <<<"$info")" || true
+            echo "Merged PR #${pr} (${title}) after CI passed on ${HEAD_SHA}." | tee -a "$GITHUB_STEP_SUMMARY"
+          done
