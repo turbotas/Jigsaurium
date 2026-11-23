@@ -440,3 +440,10 @@
 - Why: every build was kept (120 package versions for 34 images, several GB each), though only 10 of 37 builds were approved for prod. Keeping what was recently live in either environment leaves a rollback window without keeping images nobody ran.
 - Decision: use GitHub's own deployment records (made by the promote job's environments) rather than a new record. A deployment counts if any of its statuses is success, because GitHub marks older ones inactive once a newer one succeeds.
 - Consequences: a manual promotion is recorded against the workflow's commit, not the image's; its image is kept while a pointer points at it. Releases and tags stay, so some releases describe images that no longer exist. The workflow refuses to delete when the records or pointers look wrong, and deleted versions can be restored for 30 days.
+
+## 2026-11-23 - Streamed Database Backups with a Heartbeat
+
+- Decision: in-app backups stream rows through a server-side cursor, write SQL line by line through the compressor into a `.tmp` file, and hash while writing. Downloads are sent from disk with `send_file`.
+- Why: the old job loaded every table with `.all()`, joined the whole dump into one string, encoded it and compressed it, holding several copies of a database whose compressed backup is already ~400 MB in dev. A dev backup stayed `running` for days, most likely because the process was restarted or killed mid-backup.
+- Decision: backups still run on a thread in the web process, but record `heartbeat_at` at least every 10 seconds. Any `queued`/`running` backup without a heartbeat for `DB_BACKUP_STALE_AFTER_SECONDS` is marked `failed` ("Interrupted") when backups are listed, created or deleted. A heartbeat beats a fixed timeout because large backups can run for a long time.
+- Consequences: a restart still loses the in-flight backup, but the row recovers on its own and can be deleted. The failure path rolls the session back before recording the failure, so a database error no longer leaves the row stuck.

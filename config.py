@@ -128,3 +128,7 @@ class Config:
         os.getenv("DB_BACKUP_MAX_STATEMENT_BYTES"),
         env_name="DB_BACKUP_MAX_STATEMENT_BYTES",
     ) or (4 * 1024 * 1024)
+    DB_BACKUP_STALE_AFTER_SECONDS = _parse_optional_int(
+        os.getenv("DB_BACKUP_STALE_AFTER_SECONDS"),
+        env_name="DB_BACKUP_STALE_AFTER_SECONDS",
+    ) or 300

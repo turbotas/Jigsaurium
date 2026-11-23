@@ -18,7 +18,7 @@ from pathlib import Path
 from secrets import compare_digest, token_urlsafe
 from functools import wraps
 
-from flask import Blueprint, current_app, g, redirect, request, session, url_for
+from flask import Blueprint, current_app, g, redirect, request, send_file, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -34,11 +34,10 @@ from app.database_backups import (
     BACKUP_COMPRESSION_NONE,
     DEFAULT_BACKUP_APP_NAME,
     build_backup_filename,
-    build_mysql_compatible_backup_sql,
-    compress_backup_payload,
     normalize_environment_label,
     normalize_backup_compression,
     resolve_backup_root_path,
+    write_mysql_compatible_backup,
 )
 from app.image_embeddings import (
     build_model_key,
@@ -201,6 +200,9 @@ DATABASE_BACKUP_STATUS_RUNNING = "running"
 DATABASE_BACKUP_STATUS_COMPLETED = "completed"
 DATABASE_BACKUP_STATUS_FAILED = "failed"
 DATABASE_BACKUP_FORMAT_MYSQL_SQL = "mysql_sql"
+DATABASE_BACKUP_ACTIVE_STATUSES = (DATABASE_BACKUP_STATUS_QUEUED, DATABASE_BACKUP_STATUS_RUNNING)
+# How often a running backup job records a heartbeat while it writes.
+DATABASE_BACKUP_HEARTBEAT_INTERVAL_SECONDS = 10
 
 ROLE_CAPABILITIES = {
     "borrower": {
@@ -3354,6 +3356,9 @@ def _serialize_database_backup(database_backup):
         "error_message": database_backup.error_message,
         "created_at": _normalize_utc_datetime(database_backup.created_at).isoformat() if database_backup.created_at else None,
         "started_at": _normalize_utc_datetime(database_backup.started_at).isoformat() if database_backup.started_at else None,
+        "heartbeat_at": _normalize_utc_datetime(database_backup.heartbeat_at).isoformat()
+        if database_backup.heartbeat_at
+        else None,
         "completed_at": _normalize_utc_datetime(database_backup.completed_at).isoformat()
         if database_backup.completed_at
         else None,
@@ -3412,105 +3417,215 @@ def _build_unique_backup_filename(*, backup_root, generated_at, app_env, app_ver
     return candidate_filename
 
 
+def _record_database_backup_outcome_audit(db_session, backup_record, *, action, payload):
+    db_session.add(
+        AuditEvent(
+            actor_user_id=backup_record.initiated_by_user_id,
+            action=action,
+            entity_type="database_backup",
+            entity_id=str(backup_record.id),
+            request_id=None,
+            remote_addr=None,
+            client_ip_resolved=None,
+            forwarded_chain=None,
+            scheme=None,
+            host=None,
+            payload_json=json.dumps(payload, sort_keys=True),
+        )
+    )
+
+
+def _remove_file_quietly(path):
+    try:
+        if path is not None and path.exists() and path.is_file():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _database_backup_temp_path(backup_path):
+    return backup_path.with_suffix(backup_path.suffix + ".tmp")
+
+
 def _execute_database_backup_job(app, backup_id):
     with app.app_context():
         db_session = get_session()
-        backup_record = db_session.get(DatabaseBackup, int(backup_id))
-        if backup_record is None:
-            db_session.remove()
-            return
-
-        started_at = datetime.now(timezone.utc)
-        backup_record.status = DATABASE_BACKUP_STATUS_RUNNING
-        backup_record.started_at = started_at
-        backup_record.completed_at = None
-        backup_record.file_size_bytes = None
-        backup_record.file_sha256 = None
-        backup_record.error_message = None
-        db_session.commit()
-
+        temp_path = None
         try:
-            backup_path = _resolve_database_backup_file_path(backup_record)
-            backup_root = _resolve_database_backup_root_path()
-            backup_root.mkdir(parents=True, exist_ok=True)
-            backup_compression = _resolve_database_backup_compression()
+            backup_record = db_session.get(DatabaseBackup, int(backup_id))
+            if backup_record is None:
+                return
 
-            backup_sql = build_mysql_compatible_backup_sql(
-                engine=db_session.get_bind(),
-                app_name=DEFAULT_BACKUP_APP_NAME,
-                app_env=backup_record.app_environment,
-                app_version=backup_record.app_version,
-                generated_at=started_at,
-                blob_chunk_bytes=int(current_app.config.get("DB_BACKUP_BLOB_CHUNK_BYTES", 32 * 1024) or 32 * 1024),
-                max_statement_bytes=int(
-                    current_app.config.get("DB_BACKUP_MAX_STATEMENT_BYTES", 4 * 1024 * 1024) or (4 * 1024 * 1024)
-                ),
-            )
-            encoded_sql = backup_sql.encode("utf-8")
-            backup_bytes = compress_backup_payload(encoded_sql, compression=backup_compression)
-            sql_sha = hashlib.sha256(backup_bytes).hexdigest()
-
-            temp_path = backup_path.with_suffix(backup_path.suffix + ".tmp")
-            with temp_path.open("wb") as backup_stream:
-                backup_stream.write(backup_bytes)
-            temp_path.replace(backup_path)
-
-            backup_record.status = DATABASE_BACKUP_STATUS_COMPLETED
-            backup_record.completed_at = datetime.now(timezone.utc)
-            backup_record.file_size_bytes = int(len(backup_bytes))
-            backup_record.file_sha256 = sql_sha
+            started_at = datetime.now(timezone.utc)
+            backup_record.status = DATABASE_BACKUP_STATUS_RUNNING
+            backup_record.started_at = started_at
+            backup_record.heartbeat_at = started_at
+            backup_record.completed_at = None
+            backup_record.file_size_bytes = None
+            backup_record.file_sha256 = None
             backup_record.error_message = None
-            db_session.add(
-                AuditEvent(
-                    actor_user_id=backup_record.initiated_by_user_id,
+            db_session.commit()
+
+            try:
+                backup_path = _resolve_database_backup_file_path(backup_record)
+                backup_root = _resolve_database_backup_root_path()
+                backup_root.mkdir(parents=True, exist_ok=True)
+                temp_path = _database_backup_temp_path(backup_path)
+                app_environment = backup_record.app_environment
+                app_version = backup_record.app_version
+
+                last_heartbeat = time.monotonic()
+
+                def record_heartbeat():
+                    # Runs on the job's own session; the dump streams on a separate connection.
+                    nonlocal last_heartbeat
+                    now_monotonic = time.monotonic()
+                    if now_monotonic - last_heartbeat < DATABASE_BACKUP_HEARTBEAT_INTERVAL_SECONDS:
+                        return
+                    last_heartbeat = now_monotonic
+                    db_session.execute(
+                        sa_update(DatabaseBackup)
+                        .where(DatabaseBackup.id == int(backup_id))
+                        .values(heartbeat_at=datetime.now(timezone.utc))
+                    )
+                    db_session.commit()
+
+                write_result = write_mysql_compatible_backup(
+                    output_path=temp_path,
+                    engine=db_session.get_bind(),
+                    app_name=DEFAULT_BACKUP_APP_NAME,
+                    app_env=app_environment,
+                    app_version=app_version,
+                    generated_at=started_at,
+                    blob_chunk_bytes=int(current_app.config.get("DB_BACKUP_BLOB_CHUNK_BYTES", 32 * 1024) or 32 * 1024),
+                    max_statement_bytes=int(
+                        current_app.config.get("DB_BACKUP_MAX_STATEMENT_BYTES", 4 * 1024 * 1024) or (4 * 1024 * 1024)
+                    ),
+                    compression=_resolve_database_backup_compression(),
+                    on_progress=record_heartbeat,
+                )
+
+                db_session.expire_all()
+                backup_record = db_session.get(DatabaseBackup, int(backup_id))
+                if backup_record is None or backup_record.status != DATABASE_BACKUP_STATUS_RUNNING:
+                    # Row removed, or already marked interrupted: do not publish the file.
+                    _remove_file_quietly(temp_path)
+                    temp_path = None
+                    db_session.rollback()
+                    return
+
+                temp_path.replace(backup_path)
+                temp_path = None
+                finished_at = datetime.now(timezone.utc)
+                backup_record.status = DATABASE_BACKUP_STATUS_COMPLETED
+                backup_record.completed_at = finished_at
+                backup_record.heartbeat_at = finished_at
+                backup_record.file_size_bytes = int(write_result.file_size_bytes)
+                backup_record.file_sha256 = write_result.file_sha256
+                backup_record.error_message = None
+                _record_database_backup_outcome_audit(
+                    db_session,
+                    backup_record,
                     action="system.database_backup_completed",
-                    entity_type="database_backup",
-                    entity_id=str(backup_record.id),
-                    request_id=None,
-                    remote_addr=None,
-                    client_ip_resolved=None,
-                    forwarded_chain=None,
-                    scheme=None,
-                    host=None,
-                    payload_json=json.dumps(
-                        {
-                            "filename": backup_record.filename,
-                            "file_size_bytes": backup_record.file_size_bytes,
-                            "file_sha256": backup_record.file_sha256,
-                        },
-                        sort_keys=True,
-                    ),
+                    payload={
+                        "filename": backup_record.filename,
+                        "file_size_bytes": backup_record.file_size_bytes,
+                        "file_sha256": backup_record.file_sha256,
+                    },
                 )
-            )
-            db_session.commit()
-        except Exception as error:
-            backup_record.status = DATABASE_BACKUP_STATUS_FAILED
-            backup_record.completed_at = datetime.now(timezone.utc)
-            backup_record.error_message = str(error)[:2000]
-            db_session.add(
-                AuditEvent(
-                    actor_user_id=backup_record.initiated_by_user_id,
+                db_session.commit()
+            except Exception as error:
+                app.logger.exception("database_backup_job_failed", extra={"backup_id": int(backup_id)})
+                _remove_file_quietly(temp_path)
+                temp_path = None
+                # The session may be mid-transaction or poisoned by a database error; reset it
+                # before recording the failure, or the failure commit itself raises.
+                db_session.rollback()
+                backup_record = db_session.get(DatabaseBackup, int(backup_id))
+                if backup_record is None:
+                    return
+                backup_record.status = DATABASE_BACKUP_STATUS_FAILED
+                backup_record.completed_at = datetime.now(timezone.utc)
+                backup_record.error_message = (str(error) or error.__class__.__name__)[:2000]
+                _record_database_backup_outcome_audit(
+                    db_session,
+                    backup_record,
                     action="system.database_backup_failed",
-                    entity_type="database_backup",
-                    entity_id=str(backup_record.id),
-                    request_id=None,
-                    remote_addr=None,
-                    client_ip_resolved=None,
-                    forwarded_chain=None,
-                    scheme=None,
-                    host=None,
-                    payload_json=json.dumps(
-                        {
-                            "filename": backup_record.filename,
-                            "error_message": backup_record.error_message,
-                        },
-                        sort_keys=True,
-                    ),
+                    payload={
+                        "filename": backup_record.filename,
+                        "error_message": backup_record.error_message,
+                    },
                 )
-            )
-            db_session.commit()
+                db_session.commit()
+        except Exception:
+            # Last resort: the row stays queued/running and is later marked interrupted by
+            # _fail_stale_database_backups once its heartbeat goes stale.
+            app.logger.exception("database_backup_job_unhandled_exception", extra={"backup_id": int(backup_id)})
+            _remove_file_quietly(temp_path)
+            try:
+                db_session.rollback()
+            except Exception:
+                pass
         finally:
             db_session.remove()
+
+
+def _resolve_database_backup_stale_after_seconds():
+    try:
+        configured = int(current_app.config.get("DB_BACKUP_STALE_AFTER_SECONDS", 300) or 300)
+    except (TypeError, ValueError):
+        configured = 300
+    return max(60, configured)
+
+
+def _fail_stale_database_backups(db_session):
+    """Mark queued/running backups whose worker has stopped reporting as failed.
+
+    Backup jobs run on a thread inside the web process. If that process is restarted or
+    killed mid-backup, nothing else would ever finish the row, so a backup with no
+    heartbeat for DB_BACKUP_STALE_AFTER_SECONDS is treated as interrupted.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=_resolve_database_backup_stale_after_seconds())
+    active_backups = (
+        db_session.execute(select(DatabaseBackup).where(DatabaseBackup.status.in_(DATABASE_BACKUP_ACTIVE_STATUSES)))
+        .scalars()
+        .all()
+    )
+    interrupted = []
+    for backup_record in active_backups:
+        last_seen = _normalize_utc_datetime(
+            backup_record.heartbeat_at or backup_record.started_at or backup_record.created_at
+        )
+        if last_seen is not None and last_seen > cutoff:
+            continue
+        previous_status = str(backup_record.status or "")
+        backup_record.status = DATABASE_BACKUP_STATUS_FAILED
+        backup_record.completed_at = now
+        backup_record.error_message = (
+            "Interrupted: the backup stopped reporting progress (the app was probably restarted "
+            "or ran out of memory). Delete this entry and create a new backup."
+        )
+        _record_audit_event(
+            action="system.database_backup_interrupted",
+            entity_type="database_backup",
+            entity_id=backup_record.id,
+            payload={
+                "filename": backup_record.filename,
+                "previous_status": previous_status,
+                "last_heartbeat_at": last_seen.isoformat() if last_seen else None,
+            },
+        )
+        interrupted.append(backup_record)
+
+    if interrupted:
+        db_session.commit()
+        for backup_record in interrupted:
+            try:
+                _remove_file_quietly(_database_backup_temp_path(_resolve_database_backup_file_path(backup_record)))
+            except RuntimeError:
+                pass
+    return interrupted
 
 
 def _start_database_backup_job(backup_id):
@@ -5893,6 +6008,7 @@ def terminate_user_session(user_session_id):
 @require_role("administrator")
 def list_database_backups():
     db_session = get_session()
+    _fail_stale_database_backups(db_session)
     backups = db_session.execute(select(DatabaseBackup).order_by(DatabaseBackup.id.desc())).scalars().all()
     return _success_response([_serialize_database_backup(entry) for entry in backups])
 
@@ -5901,6 +6017,7 @@ def list_database_backups():
 @require_role("administrator")
 def create_database_backup():
     db_session = get_session()
+    _fail_stale_database_backups(db_session)
     now = datetime.now(timezone.utc)
     backup_root = _resolve_database_backup_root_path()
     backup_root.mkdir(parents=True, exist_ok=True)
@@ -5965,21 +6082,27 @@ def download_database_backup(backup_id):
     if not backup_path.exists() or not backup_path.is_file():
         return _error_response("not_found", "Backup file is missing from storage.", 404)
 
-    backup_content = backup_path.read_bytes()
+    file_size_bytes = backup_path.stat().st_size
     _record_audit_event(
         action="system.database_backup_downloaded",
         entity_type="database_backup",
         entity_id=backup_record.id,
         payload={
             "filename": backup_record.filename,
-            "file_size_bytes": len(backup_content),
+            "file_size_bytes": file_size_bytes,
         },
     )
     db_session.commit()
 
-    response = current_app.response_class(backup_content, mimetype=_resolve_database_backup_mime_type(backup_record.filename))
+    # Stream from disk; backups can be hundreds of MB.
+    response = send_file(
+        backup_path,
+        mimetype=_resolve_database_backup_mime_type(backup_record.filename),
+        conditional=False,
+        etag=False,
+        max_age=0,
+    )
     response.headers["Content-Disposition"] = _content_disposition("attachment", backup_record.filename, fallback="backup.sql")
-    response.headers["Content-Length"] = str(len(backup_content))
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -5988,6 +6111,7 @@ def download_database_backup(backup_id):
 @require_role("administrator")
 def delete_database_backup(backup_id):
     db_session = get_session()
+    _fail_stale_database_backups(db_session)
     backup_record = db_session.get(DatabaseBackup, backup_id)
     if backup_record is None:
         return _error_response("not_found", "Database backup entry was not found.", 404)
@@ -6004,7 +6128,7 @@ def delete_database_backup(backup_id):
         path_error = str(error)
 
     if backup_path is not None:
-        temp_path = backup_path.with_suffix(backup_path.suffix + ".tmp")
+        temp_path = _database_backup_temp_path(backup_path)
         if temp_path.exists() and temp_path.is_file():
             temp_path.unlink()
         if backup_path.exists() and backup_path.is_file():

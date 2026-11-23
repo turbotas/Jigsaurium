@@ -170,6 +170,13 @@
 - New loans set `due_at` to four weeks (28 days) after `checked_out_at`.
 - Returning a loan sets `returned_at` and transitions status to `returned`.
 
+## Database Backup State Transitions
+
+- `queued` -> `running` -> `completed` | `failed`.
+- A `queued` or `running` backup with no heartbeat (or, if none, start/creation time) for `DB_BACKUP_STALE_AFTER_SECONDS` (default 300) is moved to `failed` with an "Interrupted" message and a `system.database_backup_interrupted` audit event. This is checked whenever backups are listed, created or deleted. A running job records a heartbeat at least every 10 seconds while writing.
+- A job whose row was marked interrupted or deleted does not publish its file.
+- `queued` and `running` backups cannot be deleted; `completed` and `failed` ones can.
+
 ## Audit Rules
 
 - Record audit events for create/update/delete and state transition actions.

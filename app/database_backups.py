@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import bz2
+from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 import gzip
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -17,6 +19,8 @@ from app.db import Base
 
 DEFAULT_BLOB_CHUNK_BYTES = 32 * 1024
 DEFAULT_MAX_STATEMENT_BYTES = 4 * 1024 * 1024
+# Rows fetched per round trip while streaming table data; kept small because image rows can be several MB.
+BACKUP_ROW_FETCH_BATCH_SIZE = 16
 DEFAULT_BACKUP_APP_NAME = "jigsaurium"
 BACKUP_COMPRESSION_NONE = "none"
 BACKUP_COMPRESSION_GZIP = "gzip"
@@ -89,7 +93,7 @@ def _backup_file_extension(compression: str) -> str:
 def build_backup_filename(*, app_name: str, app_env: str, app_version: str, generated_at: datetime, compression: str) -> str:
     safe_name = _normalize_filename_token(app_name, fallback=DEFAULT_BACKUP_APP_NAME)
     safe_env = normalize_environment_label(app_env)
-    safe_version = _normalize_filename_token(app_version, fallback="0.0.0")
+    safe_version = _normalize_filename_token(re.sub(r"^[vV](?=\d)", "", str(app_version or "").strip()), fallback="0.0.0")
     timestamp = generated_at.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{safe_name}-{safe_env}-v{safe_version}-{timestamp}{_backup_file_extension(compression)}"
 
@@ -226,7 +230,35 @@ def _iter_ordered_tables(engine):
     return [reflected_table_by_name[name] for name in ordered_names]
 
 
-def build_mysql_compatible_backup_sql(
+class _HashingCountingWriter:
+    """Pass-through writer that hashes and counts the bytes reaching the file."""
+
+    def __init__(self, raw_stream):
+        self._raw_stream = raw_stream
+        self._sha256 = hashlib.sha256()
+        self.bytes_written = 0
+
+    def write(self, data) -> int:
+        view = memoryview(data)
+        self._raw_stream.write(view)
+        self._sha256.update(view)
+        self.bytes_written += view.nbytes
+        return view.nbytes
+
+    def flush(self) -> None:
+        self._raw_stream.flush()
+
+    def hexdigest(self) -> str:
+        return self._sha256.hexdigest()
+
+
+@dataclass(frozen=True)
+class BackupWriteResult:
+    file_size_bytes: int
+    file_sha256: str
+
+
+def iter_mysql_compatible_backup_sql_lines(
     *,
     engine,
     app_name: str,
@@ -235,7 +267,12 @@ def build_mysql_compatible_backup_sql(
     generated_at: datetime,
     blob_chunk_bytes: int,
     max_statement_bytes: int,
-) -> str:
+):
+    """Yield the backup SQL one line at a time without holding table data in memory.
+
+    Rows are read through a server-side (unbuffered) cursor in small batches, so peak
+    memory is bounded by the largest single row rather than the size of the database.
+    """
     backup_name = build_backup_filename(
         app_name=app_name,
         app_env=app_env,
@@ -243,17 +280,15 @@ def build_mysql_compatible_backup_sql(
         generated_at=generated_at,
         compression=BACKUP_COMPRESSION_NONE,
     )
-    export_lines = [
-        f"-- {app_name} database backup",
-        f"-- environment: {normalize_environment_label(app_env)}",
-        f"-- version: {app_version}",
-        f"-- generated_at_utc: {generated_at.astimezone(timezone.utc).isoformat()}",
-        f"-- filename: {backup_name}",
-        "",
-        "SET NAMES utf8mb4;",
-        "SET FOREIGN_KEY_CHECKS=0;",
-        "",
-    ]
+    yield f"-- {app_name} database backup"
+    yield f"-- environment: {normalize_environment_label(app_env)}"
+    yield f"-- version: {app_version}"
+    yield f"-- generated_at_utc: {generated_at.astimezone(timezone.utc).isoformat()}"
+    yield f"-- filename: {backup_name}"
+    yield ""
+    yield "SET NAMES utf8mb4;"
+    yield "SET FOREIGN_KEY_CHECKS=0;"
+    yield ""
 
     tables = _iter_ordered_tables(engine)
     with engine.connect() as connection:
@@ -261,41 +296,85 @@ def build_mysql_compatible_backup_sql(
             create_sql = str(CreateTable(table).compile(dialect=mysql.dialect()))
             if not create_sql.rstrip().endswith(";"):
                 create_sql = f"{create_sql};"
-            export_lines.append(f"DROP TABLE IF EXISTS `{table.name}`;")
-            export_lines.append(create_sql)
-            export_lines.append("")
+            yield f"DROP TABLE IF EXISTS `{table.name}`;"
+            yield create_sql
+            yield ""
 
+        streaming_connection = connection.execution_options(
+            stream_results=True,
+            yield_per=BACKUP_ROW_FETCH_BATCH_SIZE,
+        )
         for table in tables:
-            export_lines.append(f"-- data for `{table.name}`")
+            yield f"-- data for `{table.name}`"
             order_columns = list(table.primary_key.columns)
             statement = select(table)
             if order_columns:
                 statement = statement.order_by(*order_columns)
-            rows = connection.execute(statement).mappings().all()
-            if not rows:
-                export_lines.append("")
-                continue
-            for row_index, row_mapping in enumerate(rows, start=1):
-                export_lines.extend(
-                    _build_insert_statements_for_row(
+            result = streaming_connection.execute(statement)
+            try:
+                for row_index, row_mapping in enumerate(result.mappings(), start=1):
+                    yield from _build_insert_statements_for_row(
                         table,
                         row_mapping,
                         row_number=row_index,
                         blob_chunk_bytes=blob_chunk_bytes,
                         max_statement_bytes=max_statement_bytes,
                     )
-                )
-            export_lines.append("")
+            finally:
+                result.close()
+            yield ""
 
-    export_lines.append("SET FOREIGN_KEY_CHECKS=1;")
-    export_lines.append("")
-    return "\n".join(export_lines)
+    yield "SET FOREIGN_KEY_CHECKS=1;"
 
 
-def compress_backup_payload(sql_bytes: bytes, *, compression: str) -> bytes:
+def _open_compressed_writer(sink, compression: str):
     resolved_compression = normalize_backup_compression(compression)
     if resolved_compression == BACKUP_COMPRESSION_NONE:
-        return sql_bytes
+        return None
     if resolved_compression == BACKUP_COMPRESSION_BZIP2:
-        return bz2.compress(sql_bytes)
-    return gzip.compress(sql_bytes)
+        return bz2.BZ2File(sink, mode="wb")
+    return gzip.GzipFile(filename="", mode="wb", fileobj=sink)
+
+
+def write_mysql_compatible_backup(
+    *,
+    output_path: Path,
+    engine,
+    app_name: str,
+    app_env: str,
+    app_version: str,
+    generated_at: datetime,
+    blob_chunk_bytes: int,
+    max_statement_bytes: int,
+    compression: str,
+    on_progress=None,
+) -> BackupWriteResult:
+    """Stream a MySQL-compatible SQL backup to ``output_path``, compressing on the fly.
+
+    ``on_progress`` (optional) is called after each statement is written; callers use it
+    to record a heartbeat. Returns the size and SHA-256 of the bytes written to disk.
+    """
+    lines = iter_mysql_compatible_backup_sql_lines(
+        engine=engine,
+        app_name=app_name,
+        app_env=app_env,
+        app_version=app_version,
+        generated_at=generated_at,
+        blob_chunk_bytes=blob_chunk_bytes,
+        max_statement_bytes=max_statement_bytes,
+    )
+    with Path(output_path).open("wb") as raw_stream:
+        sink = _HashingCountingWriter(raw_stream)
+        compressed_writer = _open_compressed_writer(sink, compression)
+        target = compressed_writer if compressed_writer is not None else sink
+        try:
+            for line in lines:
+                target.write(f"{line}\n".encode("utf-8"))
+                if on_progress is not None:
+                    on_progress()
+        finally:
+            lines.close()
+            if compressed_writer is not None:
+                compressed_writer.close()
+        sink.flush()
+    return BackupWriteResult(file_size_bytes=sink.bytes_written, file_sha256=sink.hexdigest())

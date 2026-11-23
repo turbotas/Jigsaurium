@@ -93,6 +93,7 @@ See `Documentation/simple-mode.md` for the full feature-flag matrix and UI behav
 - `DB_BACKUP_COMPRESSION`: backup file compression mode (`gzip` default, `bzip2`, or `none`).
 - `DB_BACKUP_BLOB_CHUNK_BYTES`: blob chunk size used when exporting large binary fields as MySQL-compatible SQL variable assembly (default `32768`).
 - `DB_BACKUP_MAX_STATEMENT_BYTES`: guardrail maximum SQL statement size for generated backup output (default `4194304`).
+- `DB_BACKUP_STALE_AFTER_SECONDS`: seconds without a heartbeat before a `queued`/`running` backup is marked `failed` as interrupted, e.g. after the app restarted mid-backup (default `300`, minimum `60`).
 
 ## Canonical Hosts
 

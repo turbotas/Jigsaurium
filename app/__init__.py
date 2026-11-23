@@ -326,6 +326,7 @@ def create_app(config_class="config.Config"):
     app.config.setdefault("DB_BACKUP_COMPRESSION", "gzip")
     app.config.setdefault("DB_BACKUP_BLOB_CHUNK_BYTES", 32 * 1024)
     app.config.setdefault("DB_BACKUP_MAX_STATEMENT_BYTES", 4 * 1024 * 1024)
+    app.config.setdefault("DB_BACKUP_STALE_AFTER_SECONDS", 300)
 
     _validate_runtime_config_on_startup(app)
 
