@@ -26,6 +26,7 @@ class DatabaseBackup(Base):
     app_environment: Mapped[str] = mapped_column(String(32), nullable=False)
     app_version: Mapped[str] = mapped_column(String(64), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     file_size_bytes: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     file_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)

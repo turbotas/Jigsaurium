@@ -70,7 +70,7 @@
 - `user_sessions`
   - server-side app session registry (session identifier, user, origin IP, auth provider, activity/termination timestamps)
 - `database_backups`
-  - admin-triggered backup job/history rows (filename, format, status, environment/version tags, storage path, file checksum/size, timestamps)
+  - admin-triggered backup job/history rows (filename, format, status, environment/version tags, storage path, file checksum/size, timestamps including the running job's `heartbeat_at`)
 
 ## Data and Migration Rules
 

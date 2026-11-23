@@ -1,11 +1,15 @@
+import bz2
+from datetime import datetime, timedelta, timezone
 import gzip
+import hashlib
 from pathlib import Path
 import time
 
 import pytest
 
+from app.database_backups import build_backup_filename, write_mysql_compatible_backup
 from app.db import get_session
-from app.models import Jigsaw, JigsawImage, Role, User, UserRole
+from app.models import AuditEvent, DatabaseBackup, Jigsaw, JigsawImage, Role, User, UserRole
 from tests.image_fixtures import png_bytes
 
 
@@ -211,3 +215,200 @@ def test_admin_can_delete_completed_database_backup(app, seeded_backup_identity_
     listed = list_response.get_json()["data"]
     assert all(int(entry["id"]) != int(created["id"]) for entry in listed)
     assert not backup_path.exists()
+
+
+def _insert_backup_row(app, *, status, filename, backup_root, created_at, started_at=None, heartbeat_at=None):
+    with app.app_context():
+        db_session = get_session()
+        backup_root.mkdir(parents=True, exist_ok=True)
+        record = DatabaseBackup(
+            filename=filename,
+            storage_path=str((backup_root / filename).resolve()),
+            file_format="mysql_sql",
+            status=status,
+            app_environment="test",
+            app_version="1.0.0",
+            created_at=created_at,
+            started_at=started_at,
+            heartbeat_at=heartbeat_at,
+        )
+        db_session.add(record)
+        db_session.commit()
+        record_id = int(record.id)
+    db_session.remove()
+    return record_id
+
+
+@pytest.mark.functional
+def test_stale_backups_are_marked_interrupted_and_can_be_deleted(app, seeded_backup_identity_data, tmp_path):
+    backup_root = tmp_path / "database_backups_stale"
+    app.config["DB_BACKUP_STORAGE_PATH"] = str(backup_root)
+    app.config["DB_BACKUP_STALE_AFTER_SECONDS"] = 300
+    now = datetime.now(timezone.utc)
+    stale_running_id = _insert_backup_row(
+        app,
+        status="running",
+        filename="stale-running.sql.gz",
+        backup_root=backup_root,
+        created_at=now - timedelta(days=5),
+        started_at=now - timedelta(days=5),
+        heartbeat_at=now - timedelta(minutes=10),
+    )
+    stale_queued_id = _insert_backup_row(
+        app,
+        status="queued",
+        filename="stale-queued.sql.gz",
+        backup_root=backup_root,
+        created_at=now - timedelta(hours=1),
+    )
+    fresh_running_id = _insert_backup_row(
+        app,
+        status="running",
+        filename="fresh-running.sql.gz",
+        backup_root=backup_root,
+        created_at=now - timedelta(hours=2),
+        started_at=now - timedelta(hours=2),
+        heartbeat_at=now - timedelta(seconds=20),
+    )
+    leftover_temp = backup_root / "stale-running.sql.gz.tmp"
+    leftover_temp.write_bytes(b"partial")
+
+    client = app.test_client()
+    login = _login(
+        client,
+        email=seeded_backup_identity_data["admin_email"],
+        password=seeded_backup_identity_data["admin_password"],
+    )
+
+    list_response = client.get("/api/v1/system/database-backups")
+    assert list_response.status_code == 200
+    by_id = {int(entry["id"]): entry for entry in list_response.get_json()["data"]}
+    assert by_id[stale_running_id]["status"] == "failed"
+    assert by_id[stale_running_id]["error_message"].startswith("Interrupted")
+    assert by_id[stale_running_id]["completed_at"] is not None
+    assert by_id[stale_queued_id]["status"] == "failed"
+    assert by_id[fresh_running_id]["status"] == "running"
+    assert by_id[fresh_running_id]["heartbeat_at"] is not None
+    assert not leftover_temp.exists()
+
+    with app.app_context():
+        interrupted_events = (
+            get_session().query(AuditEvent).filter_by(action="system.database_backup_interrupted").all()
+        )
+        assert {int(event.entity_id) for event in interrupted_events} == {stale_running_id, stale_queued_id}
+        get_session().remove()
+
+    delete_stale = client.delete(
+        f"/api/v1/system/database-backups/{stale_running_id}",
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+    assert delete_stale.status_code == 200
+
+    delete_fresh = client.delete(
+        f"/api/v1/system/database-backups/{fresh_running_id}",
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    )
+    assert delete_fresh.status_code == 409
+
+
+@pytest.mark.functional
+def test_backup_failure_after_database_error_is_recorded_and_temp_file_removed(
+    app, seeded_backup_identity_data, tmp_path, monkeypatch
+):
+    import app.api.v1.routes as routes_module
+
+    backup_root = tmp_path / "database_backups_failure"
+    app.config["DB_BACKUP_STORAGE_PATH"] = str(backup_root)
+    app.config["DB_BACKUP_COMPRESSION"] = "gzip"
+
+    def failing_writer(*, output_path, **_kwargs):
+        Path(output_path).write_bytes(b"partial")
+        # Poison the job's session the way a database error mid-job would: a failed flush
+        # leaves it needing a rollback before anything else can be committed.
+        db_session = get_session()
+        existing = db_session.query(DatabaseBackup).first()
+        db_session.add(
+            DatabaseBackup(
+                filename=existing.filename,
+                storage_path=existing.storage_path,
+                file_format="mysql_sql",
+                status="queued",
+                app_environment="test",
+                app_version="1.0.0",
+            )
+        )
+        db_session.flush()
+
+    monkeypatch.setattr(routes_module, "write_mysql_compatible_backup", failing_writer)
+
+    client = app.test_client()
+    login = _login(
+        client,
+        email=seeded_backup_identity_data["admin_email"],
+        password=seeded_backup_identity_data["admin_password"],
+    )
+    create_response = client.post(
+        "/api/v1/system/database-backups",
+        headers={"X-CSRF-Token": login["csrf_token"]},
+        json={},
+    )
+    assert create_response.status_code == 202
+    created = create_response.get_json()["data"]
+
+    finished = _wait_for_backup_completion(client, created["id"])
+    assert finished["status"] == "failed"
+    assert finished["error_message"]
+    assert finished["download_url"] is None
+    assert list(backup_root.glob("*.tmp")) == []
+    assert list(backup_root.glob("*.sql.gz")) == []
+
+
+@pytest.mark.parametrize("compression", ["gzip", "bzip2", "none"])
+def test_streaming_backup_writer_reports_size_and_hash_of_written_file(app, seeded_backup_identity_data, tmp_path, compression):
+    output_path = tmp_path / f"backup-{compression}.out"
+    progress_calls = []
+    with app.app_context():
+        result = write_mysql_compatible_backup(
+            output_path=output_path,
+            engine=get_session().get_bind(),
+            app_name="jigsaurium",
+            app_env="test",
+            app_version="1.0.0",
+            generated_at=datetime(2026, 11, 23, 10, 0, tzinfo=timezone.utc),
+            blob_chunk_bytes=64,
+            max_statement_bytes=512 * 1024,
+            compression=compression,
+            on_progress=lambda: progress_calls.append(1),
+        )
+        get_session().remove()
+
+    raw = output_path.read_bytes()
+    assert result.file_size_bytes == len(raw)
+    assert result.file_sha256 == hashlib.sha256(raw).hexdigest()
+    if compression == "gzip":
+        sql_text = gzip.decompress(raw).decode("utf-8")
+    elif compression == "bzip2":
+        sql_text = bz2.decompress(raw).decode("utf-8")
+    else:
+        sql_text = raw.decode("utf-8")
+    assert sql_text.startswith("-- jigsaurium database backup\n")
+    assert sql_text.endswith("SET FOREIGN_KEY_CHECKS=1;\n")
+    assert "INSERT INTO `jigsaw_images`" in sql_text
+    assert "SET @blob_jigsaw_images_1_0 = UNHEX(" in sql_text
+    # One progress call per statement written (CREATE TABLE statements span several lines).
+    assert 0 < len(progress_calls) <= sql_text.count("\n")
+
+
+def test_backup_filename_does_not_double_the_version_prefix():
+    generated_at = datetime(2026, 11, 18, 9, 3, 2, tzinfo=timezone.utc)
+    filename = build_backup_filename(
+        app_name="jigsaurium",
+        app_env="dev",
+        app_version="v0.2.30-2-g414577f",
+        generated_at=generated_at,
+        compression="gzip",
+    )
+    assert filename.startswith("jigsaurium-dev-v0.2.30-2-g414577f-")
+    assert build_backup_filename(
+        app_name="jigsaurium", app_env="dev", app_version="1.2.3", generated_at=generated_at, compression="gzip"
+    ).startswith("jigsaurium-dev-v1.2.3-")
